@@ -136,6 +136,21 @@
   #mktBanner{margin-top:10px;font-size:12px;font-weight:600;background:var(--glass-row);border:1px solid var(--glass-bd-soft);border-radius:10px;padding:8px 12px;box-shadow:inset 0 1px 0 rgba(255,255,255,.08);}
   .mkthot{color:var(--gold);}.mktcold{color:#7fb3c9;}
   .seclab{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint);margin:14px 0 8px;}
+  .tabs{display:flex;gap:8px;margin-top:12px;}
+  .tabbtn{flex:1;font-family:"Chakra Petch";font-weight:700;font-size:12px;letter-spacing:.14em;padding:9px 0;border-radius:10px;cursor:pointer;
+    border:1px solid var(--glass-bd-soft);background:var(--glass-row);color:var(--muted);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.07);transition:color .12s,border-color .12s,box-shadow .12s;}
+  .tabbtn:hover{color:var(--ink);border-color:var(--glass-bd);}
+  .tabbtn.sel{color:var(--teal);border-color:rgba(57,215,196,.55);box-shadow:inset 0 0 0 1px rgba(57,215,196,.3),0 0 12px rgba(57,215,196,.15);}
+  .tabpane{margin-top:4px;}
+  #worldRow{display:flex;gap:12px;justify-content:center;margin:2px 0 8px;}
+  .wthumb{display:flex;flex-direction:column;align-items:center;gap:4px;opacity:.5;transition:opacity .45s,transform .45s;}
+  .wthumb canvas{width:62px;height:62px;border-radius:12px;border:1px solid var(--glass-bd);image-rendering:pixelated;display:block;}
+  .wthumb span{font-size:9px;letter-spacing:.06em;color:var(--muted);}
+  .wthumb.sel{opacity:1;transform:translateY(-3px);}
+  .wthumb.sel canvas{border-color:var(--teal);box-shadow:0 0 16px rgba(57,215,196,.4);}
+  .wthumb.cur canvas{border-color:var(--gold);}
+  #worldCap{font-size:11px;color:var(--teal);letter-spacing:.08em;margin-bottom:14px;min-height:15px;}
   .fishrow{display:flex;align-items:center;gap:12px;background:var(--glass-row);border:1px solid var(--glass-bd-soft);border-radius:12px;padding:10px 13px;margin-bottom:7px;
     box-shadow:inset 0 1px 0 rgba(255,255,255,.07);transition:border-color .12s,background .12s;}
   .fishrow:hover{border-color:var(--glass-bd);background:rgba(255,255,255,.08);}
@@ -216,6 +231,7 @@
 <div id="hotbar">
   <div class="slot" title="Fishing Rod"><span class="sic" data-pix="rod" data-pix-size="26"></span><span class="sb" id="hbRod">Lv1</span></div>
   <div class="slot" title="Pickaxe"><span class="sic" data-pix="pick" data-pix-size="26"></span><span class="sb" id="hbPick">Lv1</span></div>
+  <div class="slot" title="Axe"><span class="sic" data-pix="axe" data-pix-size="26"></span><span class="sb" id="hbAxe">Lv1</span></div>
   <div class="slot" title="Fish Bucket"><span class="sic" data-pix="bucket" data-pix-size="26"></span><span class="sb" id="hbBucket">0/12</span></div>
   <div class="slot" title="Ore Pouch"><span class="sic" data-pix="gem" data-pix-size="26"></span><span class="sb" id="hbPouch">0</span></div>
   <div class="invkey"><b>I</b> inventory</div>
@@ -241,15 +257,27 @@
 <div class="overlay" id="inv">
   <div class="card">
     <div class="card-head"><div><div class="sub" style="color:var(--teal)">Your gear &amp; goods</div><h2>INVENTORY</h2></div><button class="x" id="invX" type="button">CLOSE · ESC</button></div>
-    <div class="seclab">Tools</div>
-    <div id="invTools"></div>
-    <div class="seclab">Fish</div>
-    <div id="invFish"></div>
-    <div id="invDex"></div>
-    <div class="seclab">Ores</div>
-    <div id="invOres"></div>
-    <div class="seclab">Stats</div>
-    <div id="invStats"></div>
+    <div class="tabs">
+      <button class="tabbtn sel" data-tab="bag" type="button">BAG</button>
+      <button class="tabbtn" data-tab="dex" type="button">FISHDEX</button>
+      <button class="tabbtn" data-tab="stats" type="button">STATS</button>
+    </div>
+    <div class="tabpane" id="tab-bag">
+      <div class="seclab">Tools</div>
+      <div id="invTools"></div>
+      <div class="seclab">Fish</div>
+      <div id="invFish"></div>
+      <div class="seclab">Ores</div>
+      <div id="invOres"></div>
+    </div>
+    <div class="tabpane" id="tab-dex" style="display:none">
+      <div id="invDex"></div>
+    </div>
+    <div class="tabpane" id="tab-stats" style="display:none">
+      <div id="invStats"></div>
+      <div class="seclab">Achievements · <span id="achCount"></span></div>
+      <div id="invAch"></div>
+    </div>
   </div>
 </div>
 
@@ -275,6 +303,8 @@
     <div class="eye">a voxel fishing · mining · gambling adventure</div>
     <h1 class="font-d">REEL FORTUNE 3D</h1>
     <p class="tag">Fish the shores, mine the quarry, chop the woods — sell it all at the market's rotating <b>HOT</b> prices, craft better gear, dig up treasure, and unlock <b>4 themed islands</b> at the Harbor. Then risk your best catch on the roulette wheel.<br><b>Double your fish or lose it.</b></p>
+    <div id="worldRow"></div>
+    <div id="worldCap"></div>
     <div class="controls">
       <div class="c"><b>WASD</b> — walk</div>
       <div class="c"><b>E</b> — fish · mine · interact</div>

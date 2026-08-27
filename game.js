@@ -591,19 +591,37 @@ const bTop=new THREE.Mesh(new THREE.BoxGeometry(0.28,0.2,0.28),new THREE.MeshLam
 const bBot=new THREE.Mesh(new THREE.BoxGeometry(0.28,0.16,0.28),new THREE.MeshLambertMaterial({color:0xf2f2f2}));
 bobber.add(bTop,bBot); bobber.visible=false; scene.add(bobber);
 // tools held in the right hand (parented to the arm so they swing with it)
+// chunky voxel props — big enough to read clearly from the iso camera
 const armR=player.userData.armR;
-const rodMesh=new THREE.Mesh(new THREE.BoxGeometry(0.07,1.1,0.07),new THREE.MeshLambertMaterial({map:TEX.bark}));
-rodMesh.position.set(0,-0.55,0.28); rodMesh.rotation.x=-0.6; rodMesh.castShadow=true; rodMesh.visible=false; armR.add(rodMesh);
+const rodMesh=new THREE.Group();
+{ const h2=new THREE.Mesh(new THREE.BoxGeometry(0.11,1.5,0.11),new THREE.MeshLambertMaterial({map:TEX.bark}));
+  const grip=new THREE.Mesh(new THREE.BoxGeometry(0.15,0.28,0.15),new THREE.MeshLambertMaterial({color:0xd8483f}));
+  grip.position.y=-0.55;
+  const reel=new THREE.Mesh(new THREE.BoxGeometry(0.16,0.16,0.1),new THREE.MeshLambertMaterial({color:0xffd24f}));
+  reel.position.set(0,-0.32,0.12);
+  rodMesh.add(h2,grip,reel); rodMesh.position.set(0,-0.5,0.34); rodMesh.rotation.x=-0.7;
+  rodMesh.traverse(m=>{m.castShadow=true;}); rodMesh.visible=false; armR.add(rodMesh); }
 const pickMesh=new THREE.Group();
-{ const h2=new THREE.Mesh(new THREE.BoxGeometry(0.06,0.7,0.06),new THREE.MeshLambertMaterial({map:TEX.bark}));
-  const hd=new THREE.Mesh(new THREE.BoxGeometry(0.4,0.1,0.1),new THREE.MeshLambertMaterial({color:0x9aa1a8}));
-  hd.position.y=0.32; pickMesh.add(h2,hd); pickMesh.position.set(0,-0.5,0.14); pickMesh.rotation.x=-0.5;
-  pickMesh.visible=false; armR.add(pickMesh); }
+{ const h2=new THREE.Mesh(new THREE.BoxGeometry(0.12,1.15,0.12),new THREE.MeshLambertMaterial({map:TEX.bark}));
+  const hd=new THREE.Mesh(new THREE.BoxGeometry(0.85,0.16,0.16),new THREE.MeshLambertMaterial({color:0xb8c2cc}));
+  hd.position.y=0.5;
+  const tipL=new THREE.Mesh(new THREE.BoxGeometry(0.18,0.14,0.14),new THREE.MeshLambertMaterial({color:0x8a949e}));
+  tipL.position.set(-0.5,0.44,0);
+  const tipR=tipL.clone(); tipR.position.x=0.5;
+  const bind=new THREE.Mesh(new THREE.BoxGeometry(0.16,0.2,0.16),new THREE.MeshLambertMaterial({color:0x6d4a28}));
+  bind.position.y=0.42;
+  pickMesh.add(h2,hd,tipL,tipR,bind); pickMesh.position.set(0,-0.42,0.3); pickMesh.rotation.x=-0.65;
+  pickMesh.traverse(m=>{m.castShadow=true;}); pickMesh.visible=false; armR.add(pickMesh); }
 const axeMesh=new THREE.Group();
-{ const h2=new THREE.Mesh(new THREE.BoxGeometry(0.06,0.65,0.06),new THREE.MeshLambertMaterial({map:TEX.bark}));
-  const bl=new THREE.Mesh(new THREE.BoxGeometry(0.2,0.24,0.06),new THREE.MeshLambertMaterial({color:0xb8bfc7}));
-  bl.position.set(0.1,0.28,0); axeMesh.add(h2,bl); axeMesh.position.set(0,-0.5,0.14); axeMesh.rotation.x=-0.5;
-  axeMesh.visible=false; armR.add(axeMesh); }
+{ const h2=new THREE.Mesh(new THREE.BoxGeometry(0.12,1.05,0.12),new THREE.MeshLambertMaterial({map:TEX.bark}));
+  const bl=new THREE.Mesh(new THREE.BoxGeometry(0.34,0.46,0.12),new THREE.MeshLambertMaterial({color:0xcfd8de}));
+  bl.position.set(0.24,0.38,0);
+  const edge=new THREE.Mesh(new THREE.BoxGeometry(0.08,0.5,0.13),new THREE.MeshLambertMaterial({color:0xf0f5f8}));
+  edge.position.set(0.42,0.38,0);
+  const bind=new THREE.Mesh(new THREE.BoxGeometry(0.16,0.2,0.16),new THREE.MeshLambertMaterial({color:0x6d4a28}));
+  bind.position.y=0.34;
+  axeMesh.add(h2,bl,edge,bind); axeMesh.position.set(0,-0.42,0.3); axeMesh.rotation.x=-0.65;
+  axeMesh.traverse(m=>{m.castShadow=true;}); axeMesh.visible=false; armR.add(axeMesh); }
 const lineGeo=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(),new THREE.Vector3()]);
 const fishLine=new THREE.Line(lineGeo,new THREE.LineBasicMaterial({color:0xeeeeee,transparent:true,opacity:0.65}));
 fishLine.frustumCulled=false; fishLine.visible=false; scene.add(fishLine);
@@ -681,7 +699,36 @@ const sfx={cast:()=>beep(300,.15,'sine',.05),bite:()=>{beep(880,.08,'square',.06
   lose:()=>{beep(200,.3,'sawtooth',.07);setTimeout(()=>beep(130,.4,'sawtooth',.07),160);},
   pick:()=>beep(340+Math.random()*120,.05,'square',.04),
   ore:()=>{beep(620,.09,'triangle',.06);setTimeout(()=>beep(930,.12,'triangle',.06),80);}};
-document.getElementById('mute').onclick=()=>{muted=!muted;const b=document.getElementById('mute');b.textContent=muted?'♪ MUTED':'♪ SOUND';b.style.color=muted?'var(--faint)':'';};
+document.getElementById('mute').onclick=()=>{muted=!muted;const b=document.getElementById('mute');b.textContent=muted?'♪ MUTED':'♪ SOUND';b.style.color=muted?'var(--faint)':'';
+  if(musMaster)musMaster.gain.value=muted?0:MUS_VOL;};
+
+/* ---- chiptune loop + ocean ambience — pure WebAudio, no assets ---- */
+const MUS_VOL=0.14;
+let musMaster=null,musStep=0,musNext=0;
+const MUS_BASS=[131,0,98,0, 87,0,98,0, 131,0,98,0, 117,0,98,131];
+const MUS_LEAD=[523,0,659,784, 0,659,0,523, 587,0,698,880, 784,0,698,0];
+function musNote(t,f,dur,type,vol){ if(!f)return; const o=AC.createOscillator(),g=AC.createGain();
+  o.type=type; o.frequency.value=f; g.gain.value=0.0001; o.connect(g); g.connect(musMaster);
+  g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(vol,t+0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur); o.start(t); o.stop(t+dur+0.05); }
+function schedMusic(){ if(!AC||!musMaster)return;
+  while(musNext<AC.currentTime+0.35){ const s=musStep%16, bar=(musStep>>4)%4;
+    musNote(musNext,MUS_BASS[s],0.24,'triangle',0.45);
+    if(!(bar===3&&s>=12)) musNote(musNext,MUS_LEAD[s]*(bar===2?1.5:1),0.2,'square',0.18); // bar 3 lifts a fifth, bar 4 breathes
+    if(s%4===2) musNote(musNext,1760,0.05,'square',0.06);
+    musNext+=0.24; musStep++; } }
+function startMusic(){ if(!AC||musMaster)return;
+  musMaster=AC.createGain(); musMaster.gain.value=muted?0:MUS_VOL; musMaster.connect(AC.destination);
+  // ocean ambience: looped noise through a slowly wobbling lowpass
+  const len=(2*AC.sampleRate)|0, buf=AC.createBuffer(1,len,AC.sampleRate), d=buf.getChannelData(0);
+  for(let i=0;i<len;i++)d[i]=Math.random()*2-1;
+  const noise=AC.createBufferSource(); noise.buffer=buf; noise.loop=true;
+  const lp=AC.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=420; lp.Q.value=0.5;
+  const ng=AC.createGain(); ng.gain.value=0.28;
+  const lfo=AC.createOscillator(); lfo.frequency.value=0.11; const lg=AC.createGain(); lg.gain.value=0.14;
+  lfo.connect(lg); lg.connect(ng.gain); noise.connect(lp); lp.connect(ng); ng.connect(musMaster);
+  noise.start(); lfo.start();
+  musNext=AC.currentTime+0.15; musStep=0; setInterval(schedMusic,110); }
 
 const RAR={common:'#b9c6c4',uncommon:'#74e08a',rare:'#57b7ff',epic:'#c07bff',legendary:'#ffc24b'};
 
@@ -1081,8 +1128,8 @@ function drawMinimap(){ if(!mmX)return; const W=mmC.width;
    9. STATE + FISH + UPGRADES
    ======================================================================== */
 const SAVE='reelfortune3d-v1', CAP=12, MAXLVL=10;
-const state={coins:0,bucket:[],ores:{wood:0,coal:0,iron:0,gold:0,diamond:0},rodLvl:1,pickLvl:1,
-  dex:{},treasure:null,worlds:['isle'],
+const state={coins:0,bucket:[],ores:{wood:0,coal:0,iron:0,gold:0,diamond:0},rodLvl:1,pickLvl:1,axeLvl:1,
+  dex:{},treasure:null,worlds:['isle'],ach:{},
   stats:{caught:0,mined:0,earned:0,bestWin:0,spins:0,winsCt:0,losses:0}};
 function save(){try{localStorage.setItem(SAVE,JSON.stringify(state));}catch(e){}}
 function load(){try{const r=localStorage.getItem(SAVE);if(r){const s=JSON.parse(r);
@@ -1090,9 +1137,11 @@ function load(){try{const r=localStorage.getItem(SAVE);if(r){const s=JSON.parse(
   if(s.ores)for(const k in state.ores)state.ores[k]=s.ores[k]|0;
   if(s.stats)for(const k in state.stats)state.stats[k]=+s.stats[k]||0;
   if(s.dex&&typeof s.dex==='object')state.dex=s.dex;
+  if(s.ach&&typeof s.ach==='object')state.ach=s.ach;
   if(s.treasure&&s.treasure.i!=null)state.treasure=s.treasure;
   if(Array.isArray(s.worlds)&&s.worlds.length)state.worlds=s.worlds;
-  state.rodLvl=clamp(s.rodLvl|0||1,1,MAXLVL);state.pickLvl=clamp(s.pickLvl|0||1,1,MAXLVL);}}catch(e){}}
+  state.rodLvl=clamp(s.rodLvl|0||1,1,MAXLVL);state.pickLvl=clamp(s.pickLvl|0||1,1,MAXLVL);
+  state.axeLvl=clamp(s.axeLvl|0||1,1,MAXLVL);}}catch(e){}}
 load();
 function F(name,rar,val){return {name,rar,val};}
 // time-of-day + weather globals (driven by the sky system in animate)
@@ -1146,7 +1195,8 @@ function mktMods(){ const e=Math.floor(Date.now()/MKT_MS);
   return {hot:MKT_CATS[hi],cold:MKT_CATS[lo]}; }
 function priceMult(cat){ const m=mktMods(); return cat===m.hot?1.6:cat===m.cold?0.75:1; }
 const catLabel=c=>c==='fish'?'Fish':ORE_INFO[c].name;
-const ROD_BASE=250, PICK_BASE=200;
+const ROD_BASE=250, PICK_BASE=200, AXE_BASE=180;
+const AXE_NAMES=['','Dull Axe','Stone Axe','Iron Axe','Steel Axe','Golden Axe','Crystal Axe','Obsidian Axe','Mythril Axe','Dragon Axe','Titan Axe'];
 const upCost=(base,lvl)=>Math.round(base*Math.pow(1.75,lvl-1)); // cost lvl -> lvl+1
 const ROD_NAMES=['','Old Rod','Birch Rod','Lucky Rod','Fiber Rod','Golden Rod','Prism Rod','Storm Rod','Mythic Rod','Abyss Rod','Poseidon Rod'];
 const PICK_NAMES=['','Rusty Pick','Stone Pick','Iron Pick','Steel Pick','Golden Pick','Crystal Pick','Obsidian Pick','Mythril Pick','Dragon Pick','Titan Pick'];
@@ -1154,6 +1204,31 @@ const PICK_NAMES=['','Rusty Pick','Stone Pick','Iron Pick','Steel Pick','Golden 
 const UP_REQ=[null,null,{wood:5},{wood:8,coal:4},{iron:4},{iron:8},{gold:3},{gold:6},{diamond:2},{diamond:4},{diamond:7}];
 function haveOres(req){ for(const k in req)if(state.ores[k]<req[k])return false; return true; }
 function reqLabel(req){ return Object.keys(req).map(k=>`${req[k]} ${ORE_INFO[k].name}`).join(' + '); }
+
+/* ---- achievements: milestone rewards, checked on a slow tick ---- */
+const ACH=[
+  ['fish1','First Catch','catch your first fish',25,s=>s.stats.caught>=1],
+  ['fish25','Angler','catch 25 fish',100,s=>s.stats.caught>=25],
+  ['fish100','Master Angler','catch 100 fish',300,s=>s.stats.caught>=100],
+  ['fish500','Sea Legend','catch 500 fish',1500,s=>s.stats.caught>=500],
+  ['mine10','Prospector','mine 10 ores',50,s=>s.stats.mined>=10],
+  ['mine100','Quarry Boss','mine 100 ores',300,s=>s.stats.mined>=100],
+  ['rich1k','First Grand','earn 1,000 coins',100,s=>s.stats.earned>=1000],
+  ['rich10k','Tycoon','earn 10,000 coins',500,s=>s.stats.earned>=10000],
+  ['rich100k','Isle Magnate','earn 100,000 coins',3000,s=>s.stats.earned>=100000],
+  ['spin10','Regular','spin the wheel 10 times',100,s=>s.stats.spins>=10],
+  ['win5','Eel Tamer','win 5 spins',150,s=>s.stats.winsCt>=5],
+  ['big1k','High Roller','a single win worth 1,000+',250,s=>s.stats.bestWin>=1000],
+  ['dex5','Collector','5 species in the Fishdex',150,s=>Object.keys(s.dex).length>=5],
+  ['dexAll','Completionist','every species in the Fishdex',2000,s=>Object.keys(s.dex).length>=TABLE.length],
+  ['world2','Set Sail','unlock a second island',400,s=>s.worlds.length>=2],
+  ['world4','Archipelago','unlock every island',5000,s=>s.worlds.length>=4]];
+let achT=0;
+function checkAch(){ for(const [id,name,desc,rw,chk] of ACH){
+  if(state.ach[id]||!chk(state))continue;
+  state.ach[id]=1; state.coins+=rw;
+  toast(`${pixSVG('trophy',13)} ${name} — +◈${fmt(rw)}`,'gold'); coinFly(rw); sfx.win();
+  updateHUD(); save(); } }
 
 /* ========================================================================
    10. MARKET (fish · ores · upgrades)
@@ -1179,12 +1254,12 @@ function renderOres(){ const any=Object.values(state.ores).some(v=>v>0);
   oreList.innerHTML=h; }
 function renderUpg(){
   const row=(kind,lvl,base,names)=>{ const nxt=lvl+1, cost=upCost(base,lvl), req=UP_REQ[nxt];
-    if(lvl>=MAXLVL)return `<div class="fishrow"><span class="nm">${pixSVG(kind==='rod'?'rod':'pick',14)} ${names[lvl]} <span style="color:var(--teal)">Lv.${lvl}</span></span><span class="rr" style="color:var(--gold)">MAX</span></div>`;
+    if(lvl>=MAXLVL)return `<div class="fishrow"><span class="nm">${pixSVG(kind==='rod'?'rod':kind==='axe'?'axe':'pick',14)} ${names[lvl]} <span style="color:var(--teal)">Lv.${lvl}</span></span><span class="rr" style="color:var(--gold)">MAX</span></div>`;
     const can=state.coins>=cost&&haveOres(req);
-    return `<div class="fishrow"><span class="nm">${pixSVG(kind==='rod'?'rod':'pick',14)} ${names[lvl]} <span style="color:var(--teal)">Lv.${lvl}</span>
+    return `<div class="fishrow"><span class="nm">${pixSVG(kind==='rod'?'rod':kind==='axe'?'axe':'pick',14)} ${names[lvl]} <span style="color:var(--teal)">Lv.${lvl}</span>
         <span style="color:var(--faint);font-size:11px">→ ${names[nxt]} · needs ${reqLabel(req)}</span></span>
       <span class="vv">◈ ${fmt(cost)}</span><button class="btn gold" data-buy="${kind}" ${can?'':'disabled'}>Craft</button></div>`; };
-  upgList.innerHTML=row('rod',state.rodLvl,ROD_BASE,ROD_NAMES)+row('pick',state.pickLvl,PICK_BASE,PICK_NAMES)+renderWorldRows(); }
+  upgList.innerHTML=row('rod',state.rodLvl,ROD_BASE,ROD_NAMES)+row('pick',state.pickLvl,PICK_BASE,PICK_NAMES)+row('axe',state.axeLvl,AXE_BASE,AXE_NAMES)+renderWorldRows(); }
 function renderWorldRows(){
   let h='<div class="seclab" style="margin-top:14px">'+pixSVG('boat',12)+' Harbor — sail to another island</div>';
   for(const k of WORLD_ORDER){ const w=WORLDS[k];
@@ -1224,6 +1299,7 @@ marketEl.addEventListener('click',e=>{
       state[lvlKey]=lvl+1; sfx.ore(); addShake(0.1); toast(pixSVG(lvlKey==='rodLvl'?'rod':'pick',13)+' '+names[lvl+1]+' crafted!','gold'); };
     if(kind==='rod')doCraft('rodLvl',ROD_BASE,ROD_NAMES);
     else if(kind==='pick')doCraft('pickLvl',PICK_BASE,PICK_NAMES);
+    else if(kind==='axe')doCraft('axeLvl',AXE_BASE,AXE_NAMES);
     updateHUD();renderOres();renderUpg();save(); return;}
   const t4=e.target.closest?e.target.closest('[data-world]'):null;
   if(t4){buyOrSail(t4.getAttribute('data-world'));} });
@@ -1232,33 +1308,44 @@ marketEl.addEventListener('click',e=>{
    11. CASINO ROULETTE — bets & spins on the real table out in the world
    (the wheel, ball and table live at the casino landmark, section 6)
    ======================================================================== */
-let casinoOpen=false,stakeIdx=-1,betColor=null,spinning=false;
+let casinoOpen=false,stakeIdx=-1,betColor=null,spinning=false,coinStake=0;
 const casinoEl=document.getElementById('casino'),stakeListEl=document.getElementById('stakeList'),
   spinBtn=document.getElementById('spinBtn'),spinResult=document.getElementById('spinResult');
-function renderStakes(){ if(!state.bucket.length){stakeListEl.innerHTML='<div class="empty" style="padding:8px">No fish to stake — go fishing first.</div>';return;}
-  let h=''; state.bucket.forEach((f,i)=>{h+=`<div class="stake${i===stakeIdx?' sel':''}" data-stake="${i}">${pixFish(RAR[f.rar],16)}
+const COIN_STAKES=[50,250,1000];
+function renderStakes(){
+  let h='<div class="bets" style="margin:0 0 6px">'+COIN_STAKES.map(c=>
+    `<div class="betbtn${coinStake===c?' sel':''}" data-cstake="${c}" role="button" tabindex="0" style="color:var(--gold)${state.coins<c?';opacity:.4':''}">◈${c}<small>${state.coins<c?'not enough':'coin stake'}</small></div>`).join('')+'</div>';
+  if(!state.bucket.length) h+='<div class="empty" style="padding:8px">No fish to stake — bet coins or go fishing.</div>';
+  else state.bucket.forEach((f,i)=>{h+=`<div class="stake${i===stakeIdx?' sel':''}" data-stake="${i}">${pixFish(RAR[f.rar],16)}
     <span class="nm">${f.name}${f.wins?` <span style="color:var(--rose)">★${f.wins}</span>`:''}</span><span class="vv">◈ ${fmt(f.val)}</span></div>`;});
   stakeListEl.innerHTML=h; }
-function updateSpinBtn(){spinBtn.disabled=!(stakeIdx>=0&&betColor&&!spinning&&state.bucket[stakeIdx]);}
-function openCasino(){casinoOpen=true;viewMode='casino';casinoLabel.visible=false;casinoEl.classList.add('on');stakeIdx=-1;betColor=null;spinning=false;spinResult.innerHTML='';
+function updateSpinBtn(){ const hasStake=(stakeIdx>=0&&state.bucket[stakeIdx])||(coinStake>0&&state.coins>=coinStake);
+  spinBtn.disabled=!(hasStake&&betColor&&!spinning); }
+function openCasino(){casinoOpen=true;viewMode='casino';casinoLabel.visible=false;casinoEl.classList.add('on');stakeIdx=-1;betColor=null;spinning=false;coinStake=0;spinResult.innerHTML='';
   document.querySelectorAll('.betbtn').forEach(b=>b.classList.remove('sel'));renderStakes();updateSpinBtn();}
 function closeCasino(){casinoOpen=false;viewMode='follow';casinoLabel.visible=true;spinSeq++;spinAnim=null;spinning=false;casinoEl.classList.remove('on');save();}
 document.getElementById('casinoX').onclick=closeCasino;
-stakeListEl.addEventListener('click',e=>{if(spinning)return;const t=e.target.closest('[data-stake]');if(t){stakeIdx=+t.getAttribute('data-stake');renderStakes();updateSpinBtn();}});
+stakeListEl.addEventListener('click',e=>{if(spinning)return;
+  const c=e.target.closest('[data-cstake]');
+  if(c){ const amt=+c.getAttribute('data-cstake'); if(state.coins>=amt){ coinStake=(coinStake===amt?0:amt); if(coinStake)stakeIdx=-1; renderStakes(); updateSpinBtn(); } return; }
+  const t=e.target.closest('[data-stake]');if(t){stakeIdx=+t.getAttribute('data-stake');coinStake=0;renderStakes();updateSpinBtn();}});
 document.querySelectorAll('.betbtn').forEach(b=>{const pick=()=>{if(spinning)return;betColor=b.getAttribute('data-bet');
   document.querySelectorAll('.betbtn').forEach(x=>x.classList.remove('sel'));b.classList.add('sel');updateSpinBtn();};
   b.onclick=pick;b.onkeydown=e=>{if(e.code==='Enter'||e.code==='Space'){e.preventDefault();pick();}};});
 let spinSeq=0,spinAnim=null;
-spinBtn.onclick=()=>{ if(spinBtn.disabled)return; const fish=state.bucket[stakeIdx]; if(!fish)return;
+spinBtn.onclick=()=>{ if(spinBtn.disabled)return;
+  const fish=stakeIdx>=0?state.bucket[stakeIdx]:null, coins=fish?0:coinStake;
+  if(!fish&&!(coins>0&&state.coins>=coins))return;
+  if(coins){ state.coins-=coins; updateHUD(); }               // coin stake leaves your purse now; refunded if cancelled
   spinning=true;updateSpinBtn();spinResult.innerHTML='<span style="color:var(--muted)">No more bets — the ball is rolling…</span>';
   const winIdx=Math.floor(Math.random()*NSEG);
   const th0=wheelAngle, th1=th0-(4+Math.random()*2)*TAU;   // wheel spins one way…
   const bTarget=-(winIdx*SEGA+SEGA/2)-th1;                 // …ball must come to rest on the winning pocket
   let base=(ballA-bTarget)%TAU; if(base<0)base+=TAU;
-  spinAnim={seq:++spinSeq,t:0,dur:4.4,th0,th1,b0:ballA,bTot:base+6*TAU,winIdx,fish,bet:betColor,lastPocket:-1}; };
+  spinAnim={seq:++spinSeq,t:0,dur:4.4,th0,th1,b0:ballA,bTot:base+6*TAU,winIdx,fish,coins,bet:betColor,lastPocket:-1}; };
 function updateRoulette(dt){ // every frame from the main loop — the table is part of the world
   if(spinAnim){
-    if(spinAnim.seq!==spinSeq||!casinoOpen) spinAnim=null; // spin cancelled (ESC/close) — fish untouched
+    if(spinAnim.seq!==spinSeq||!casinoOpen){ if(spinAnim.coins){state.coins+=spinAnim.coins;updateHUD();} spinAnim=null; } // cancelled (ESC/close) — stake refunded
     else{ spinAnim.t+=dt; const p=Math.min(1,spinAnim.t/spinAnim.dur);
       const ew=1-Math.pow(1-p,3), eb=1-Math.pow(1-p,2.55);
       wheelAngle=spinAnim.th0+(spinAnim.th1-spinAnim.th0)*ew;
@@ -1269,22 +1356,32 @@ function updateRoulette(dt){ // every frame from the main loop — the table is 
       setBall(b,r,by);
       const phi=(((-b-wheelAngle)%TAU)+TAU)%TAU, pk=Math.floor(phi/SEGA);
       if(pk!==spinAnim.lastPocket){ spinAnim.lastPocket=pk; sfx.spin(420-280*p); } // pitch falls as it settles
-      if(p>=1){ const sa=spinAnim; spinAnim=null; ballLockIdx=sa.winIdx; resolveSpin(sa.winIdx,sa.fish,sa.bet); } } }
+      if(p>=1){ const sa=spinAnim; spinAnim=null; ballLockIdx=sa.winIdx; resolveSpin(sa); } } }
   if(!spinAnim){ wheelAngle-=dt*(casinoOpen?0.4:0.7); setBallPocket(ballLockIdx); } // idle attract spin
   wheelDisc.rotation.y=wheelAngle; }
 const ballWP=new THREE.Vector3();
-function resolveSpin(idx,fish,myBet){ const color=SEG[idx],won=(color===myBet);
+function resolveSpin(sa){ const idx=sa.winIdx,fish=sa.fish,coins=sa.coins||0,color=SEG[idx],won=(color===sa.bet);
   state.stats.spins++;
   ball.getWorldPosition(ballWP);
-  if(won){ const mult=(color==='green')?14:2,before=fish.val; fish.val=Math.round(fish.val*mult); fish.wins++;
-    state.stats.winsCt++; state.stats.bestWin=Math.max(state.stats.bestWin,fish.val);
+  if(won){ const mult=(color==='green')?14:2;
+    state.stats.winsCt++;
     addShake(color==='green'?0.45:0.25); if(color==='green')addFreeze(0.15);
     fxBurst(ballWP.x,ballWP.y+0.2,ballWP.z,{n:color==='green'?34:16,cols:[0xffd24f,0xffefb0,0x74e08a],speed:2.6,up:3.6,size:1.1,grav:7});
-    spinResult.innerHTML=`<span class="win">▲ ${color.toUpperCase()} — WON! ${fish.name} ◈${fmt(before)} → <b>◈${fmt(fish.val)}</b>. Spin again or cash out.</span>`;
-    sfx.win();toast(`${fish.name} doubled → ◈${fmt(fish.val)}`,'gold'); }
-  else { state.stats.losses++; addShake(0.2); const lost=fish.name,li=state.bucket.indexOf(fish); if(li>=0)state.bucket.splice(li,1); stakeIdx=-1;
+    if(fish){ const before=fish.val; fish.val=Math.round(fish.val*mult); fish.wins++;
+      state.stats.bestWin=Math.max(state.stats.bestWin,fish.val);
+      spinResult.innerHTML=`<span class="win">▲ ${color.toUpperCase()} — WON! ${fish.name} ◈${fmt(before)} → <b>◈${fmt(fish.val)}</b>. Spin again or cash out.</span>`;
+      toast(`${fish.name} doubled → ◈${fmt(fish.val)}`,'gold'); }
+    else{ const gain=coins*mult; state.coins+=gain; state.stats.earned+=gain-coins;
+      state.stats.bestWin=Math.max(state.stats.bestWin,gain); coinFly(gain);
+      spinResult.innerHTML=`<span class="win">▲ ${color.toUpperCase()} — WON! ◈${fmt(coins)} → <b>◈${fmt(gain)}</b>. Again?</span>`;
+      toast(`◈${fmt(coins)} → ◈${fmt(gain)}!`,'gold'); }
+    sfx.win(); }
+  else { state.stats.losses++; addShake(0.2);
     fxBurst(ballWP.x,ballWP.y+0.15,ballWP.z,{n:14,cols:[0xff5d7a,0x8a2033,0x242a30],speed:2.2,up:2.6,size:1,grav:8});
-    spinResult.innerHTML=`<span class="lose">▼ ${color.toUpperCase()} — the eel swallowed your ${lost}. Gone.</span>`; sfx.lose();toast('Lost your '+lost,'bad'); }
+    if(fish){ const lost=fish.name,li=state.bucket.indexOf(fish); if(li>=0)state.bucket.splice(li,1); stakeIdx=-1;
+      spinResult.innerHTML=`<span class="lose">▼ ${color.toUpperCase()} — the eel swallowed your ${lost}. Gone.</span>`; toast('Lost your '+lost,'bad'); }
+    else{ spinResult.innerHTML=`<span class="lose">▼ ${color.toUpperCase()} — the eel gulped your ◈${fmt(coins)}.</span>`; toast('Lost ◈'+fmt(coins),'bad'); }
+    sfx.lose(); }
   spinning=false;betColor=null;document.querySelectorAll('.betbtn').forEach(b=>b.classList.remove('sel'));
   renderStakes();updateHUD();updateSpinBtn();save(); }
 
@@ -1371,7 +1468,7 @@ function updateChopping(dt){ const t=chopping.tree;
   const p=chopping.t/chopping.dur,k=Math.floor(p*8);
   hint(`${pixSVG('axe',13)} Chopping… <b>${'▰'.repeat(k)+'▱'.repeat(8-k)}</b> hold <span class="key">E</span>`);
   if(chopping.t>=chopping.dur){
-    const got=1+(Math.random()<0.45?1:0);
+    const got=1+(Math.random()<Math.min(0.85,0.35+0.08*(state.axeLvl-1))?1:0)+(state.axeLvl>=6&&Math.random()<0.2?1:0);
     state.ores.wood+=got; state.stats.mined+=got;
     addShake(0.16); sfx.ore();
     const leafCols=t.pink?[0xec9fcb,0xf5b5d9,0x9a6b3a]:[0x3aa626,0x54cb3c,0x9a6b3a];
@@ -1414,17 +1511,21 @@ let invOpen=false;
 const invEl=document.getElementById('inv'),invTools=document.getElementById('invTools'),
   invFish=document.getElementById('invFish'),invOres=document.getElementById('invOres'),
   invStats=document.getElementById('invStats'),invDex=document.getElementById('invDex');
-const HB={rod:document.getElementById('hbRod'),pick:document.getElementById('hbPick'),
+const HB={rod:document.getElementById('hbRod'),pick:document.getElementById('hbPick'),axe:document.getElementById('hbAxe'),
   bucket:document.getElementById('hbBucket'),pouch:document.getElementById('hbPouch')};
 function updateHotbar(){ HB.rod.textContent='Lv'+state.rodLvl; HB.pick.textContent='Lv'+state.pickLvl;
+  if(HB.axe)HB.axe.textContent='Lv'+state.axeLvl;
   HB.bucket.textContent=state.bucket.length+'/'+CAP;
   HB.pouch.textContent=state.ores.wood+state.ores.coal+state.ores.iron+state.ores.gold+state.ores.diamond; }
 function renderInv(){
   const rodNext=state.rodLvl<MAXLVL?`next ◈${fmt(upCost(ROD_BASE,state.rodLvl))} + ${reqLabel(UP_REQ[state.rodLvl+1])}`:'MAX';
   const pickNext=state.pickLvl<MAXLVL?`next ◈${fmt(upCost(PICK_BASE,state.pickLvl))} + ${reqLabel(UP_REQ[state.pickLvl+1])}`:'MAX';
+  const axeNext=state.axeLvl<MAXLVL?`next ◈${fmt(upCost(AXE_BASE,state.axeLvl))} + ${reqLabel(UP_REQ[state.axeLvl+1])}`:'MAX';
   invTools.innerHTML=
     `<div class="fishrow"><span class="nm">${pixSVG('rod',15)} ${ROD_NAMES[state.rodLvl]} <span style="color:var(--teal)">Lv.${state.rodLvl}</span></span>
       <span class="rr" style="color:var(--muted)">${rodNext}</span></div>
+    <div class="fishrow"><span class="nm">${pixSVG('axe',15)} ${AXE_NAMES[state.axeLvl]} <span style="color:var(--teal)">Lv.${state.axeLvl}</span></span>
+      <span class="rr" style="color:var(--muted)">${axeNext}</span></div>
     <div class="fishrow"><span class="nm">${pixSVG('pick',15)} ${PICK_NAMES[state.pickLvl]} <span style="color:var(--teal)">Lv.${state.pickLvl}</span></span>
       <span class="rr" style="color:var(--muted)">${pickNext}</span></div>`;
   if(!state.bucket.length)invFish.innerHTML='<div class="empty">Bucket empty — go fishing!</div>';
@@ -1454,8 +1555,17 @@ function renderInv(){
      <div class="statrow"><span>◈ Coins earned</span><b>${fmt(st.earned)}</b></div>
      <div class="statrow"><span>${pixSVG('wheel',14)} Roulette spins</span><b>${fmt(st.spins)}${wl}</b></div>
      <div class="statrow"><span>${pixSVG('trophy',14)} Biggest win</span><b>◈ ${fmt(st.bestWin)}</b></div>`;
+  const achDone=ACH.filter(a=>state.ach[a[0]]).length;
+  const achC=document.getElementById('achCount'); if(achC)achC.textContent=achDone+'/'+ACH.length;
+  const achEl=document.getElementById('invAch');
+  if(achEl)achEl.innerHTML=ACH.map(([id,name,desc,rw])=>{ const ok=!!state.ach[id];
+    return `<div class="statrow" style="${ok?'':'opacity:.55'}"><span>${pixSVG('trophy',13)} <b style="color:${ok?'var(--gold)':'var(--muted)'}">${name}</b> <span style="color:var(--faint)">· ${desc}</span></span><b style="color:${ok?'var(--teal)':'var(--faint)'}">${ok?'✓ done':'◈ '+fmt(rw)}</b></div>`; }).join('');
 }
-function openInv(){ if(marketOpen||casinoOpen)return; invOpen=true; invEl.classList.add('on'); renderInv(); }
+const invTabs=document.querySelectorAll('#inv .tabbtn');
+function setInvTab(t){ invTabs.forEach(b=>b.classList.toggle('sel',b.getAttribute('data-tab')===t));
+  for(const k of ['bag','dex','stats']){ const p=document.getElementById('tab-'+k); if(p)p.style.display=k===t?'':'none'; } }
+invTabs.forEach(b=>b.addEventListener('click',()=>setInvTab(b.getAttribute('data-tab'))));
+function openInv(){ if(marketOpen||casinoOpen)return; invOpen=true; invEl.classList.add('on'); renderInv(); setInvTab('bag'); }
 function closeInv(){ invOpen=false; invEl.classList.remove('on'); }
 document.getElementById('invX').onclick=closeInv;
 document.querySelectorAll('#hotbar .slot').forEach(s=>{ s.addEventListener('click',()=>{ if(invOpen)closeInv(); else openInv(); }); });
@@ -1546,7 +1656,7 @@ function interactions(){
   else if(dC<2.8){ hint('<span class="key">E</span> Enter the Spinning Eel'); if(actEdge){initAudio();openCasino();} }
   else if(treasureDist()<1.8){ hint(pixSVG('map',13)+' <span class="key">E</span> Dig here!'); if(actEdge){initAudio();digging.active=true;digging.t=0;} }
   else if(ore){ hint(`<span class="key">E</span> Mine ${ORE_INFO[ore.type].name}`); if(actEdge)startMine(ore); }
-  else if((tree=nearestTree())){ hint(pixSVG('axe',13)+' <span class="key">E</span> Chop wood'); if(actEdge){initAudio();chopping.tree=tree;chopping.t=0;} }
+  else if((tree=nearestTree())){ hint(pixSVG('axe',13)+' <span class="key">E</span> Chop wood'); if(actEdge){initAudio();chopping.tree=tree;chopping.t=0;chopping.dur=1.4/(1+(state.axeLvl-1)*0.22);} }
   else if(canFish){ if(state.bucket.length>=CAP)hint('Bucket full — sell at the Trader'); else { hint('<span class="key">E</span> Cast your line'); if(actEdge)startCast(w); } }
   else hint('');
 }
@@ -1594,6 +1704,7 @@ function animate(now){
 
     for(const n of oreNodes){ if(!n.alive&&clock>=n.respawnAt&&n.respawnAt>0){n.alive=true;n.mesh.visible=true;} }
     biomeCheck();
+    if((achT+=dt)>1.4){achT=0;checkAch();}
     if(marketOpen===true&&clock-bannerT>0.5){bannerT=clock;renderBanner();
       const e=Math.floor(Date.now()/MKT_MS);
       if(e!==mktEpochSeen){mktEpochSeen=e;renderMarket();renderOres();}}
@@ -1602,9 +1713,10 @@ function animate(now){
   }
 
   // camera: smooth fly between the follow-cam and a close-up over the roulette table
-  if(viewMode==='casino'){ vTargL.copy(WHEEL_CENTER).addScaledVector(CAS_SHIFT,1); vTargP.copy(vTargL).add(CAS_CAM_OFF); }
+  if(!running){ const ta=clock*0.05; vTargL.set(0,5,0); vTargP.set(Math.cos(ta)*62,50,Math.sin(ta)*62); } // title: slow cinematic orbit of the isle
+  else if(viewMode==='casino'){ vTargL.copy(WHEEL_CENTER).addScaledVector(CAS_SHIFT,1); vTargP.copy(vTargL).add(CAS_CAM_OFF); }
   else{ vTargP.set(pWorld.x+CAM_OFF.x,pWorld.y+CAM_OFF.y,pWorld.z+CAM_OFF.z); vTargL.set(pWorld.x,pWorld.y+1,pWorld.z); }
-  const vTargS=viewMode==='casino'?3.2:camSize, vk=1-Math.exp(-4.5*rdt);
+  const vTargS=!running?15:viewMode==='casino'?3.2:camSize, vk=1-Math.exp(-4.5*rdt);
   vPos.lerp(vTargP,vk); vLook.lerp(vTargL,vk); vSize+=(vTargS-vSize)*vk;
   { const a=window.innerWidth/window.innerHeight;
     camera.left=-vSize*a;camera.right=vSize*a;camera.top=vSize;camera.bottom=-vSize;camera.updateProjectionMatrix(); }
@@ -1636,7 +1748,28 @@ function animate(now){
    ======================================================================== */
 addEventListener('resize',()=>{ renderer.setSize(window.innerWidth,window.innerHeight); fitCamera(); });
 const startOv=document.getElementById('start');
-function start(){ initAudio(); if(AC&&AC.state==='suspended')AC.resume();
+// title-screen world showcase: real generated map thumbnails per theme, auto-cycling
+{ const rowEl=document.getElementById('worldRow'),capEl=document.getElementById('worldCap');
+  if(rowEl){ const thumbs=[];
+    for(const k of WORLD_ORDER){ const W2=WORLDS[k];
+      const c=document.createElement('canvas'); c.width=64; c.height=64; const g=c.getContext('2d');
+      const waterHex='#'+W2.water.toString(16).padStart(6,'0');
+      for(let i=0;i<64;i++)for(let j=0;j<64;j++){ const ii=i*1.5,jj=j*1.5;
+        const n=fbm(ii*0.085+3.5+W2.seed,jj*0.085+1.2+W2.seed*0.7),dx=(ii-HALF)/HALF,dz=(jj-HALF)/HALF,d=Math.sqrt(dx*dx+dz*dz);
+        const fall=clamp(1-Math.pow(d,2.5)*1.02,0,1),h=Math.min(13,Math.round(n*fall*10*W2.hMul));
+        g.fillStyle=h<=2?waterHex:h===3?W2.sand[0]:h<W2.stoneH?W2.grass[0]:W2.stone[0];
+        g.fillRect(i,j,1,1); }
+      const d2=document.createElement('div'); d2.className='wthumb'+(k===worldKey?' cur':'');
+      d2.appendChild(c); const nm=document.createElement('span'); nm.textContent=W2.name; d2.appendChild(nm);
+      rowEl.appendChild(d2); thumbs.push({el:d2,w:W2,k}); }
+    let ti=WORLD_ORDER.indexOf(worldKey);
+    const cyc=()=>{ thumbs.forEach((t,i2)=>t.el.classList.toggle('sel',i2===ti));
+      const t=thumbs[ti];
+      if(capEl)capEl.textContent=t.k===worldKey?t.w.name+' · you are here':
+        t.w.name+' · '+t.w.sub+(state.worlds.includes(t.k)?' · unlocked':' · unlock for ◈'+fmt(t.w.cost));
+      ti=(ti+1)%thumbs.length; };
+    cyc(); setInterval(cyc,2600); } }
+function start(){ initAudio(); if(AC&&AC.state==='suspended')AC.resume(); startMusic();
   startOv.classList.remove('on'); running=true; updateHUD(); setArea(WORLD.name,WORLD.sub);
   if(state.stats.caught===0&&state.stats.mined===0)toast(pixSVG('island',13)+' Welcome to '+WORLD.name+'! Walk through the gate','gold'); }
 document.getElementById('startBtn').onclick=start;
@@ -1644,8 +1777,8 @@ document.getElementById('startBtn').onclick=start;
 // idle preview loop: the island is already alive behind the start menu
 last=performance.now(); requestAnimationFrame(animate);
 document.getElementById('wipe').onclick=()=>{try{localStorage.removeItem(SAVE);localStorage.removeItem('reelfortune3d-world');}catch(e){}
-  state.coins=0;state.bucket=[];state.ores={wood:0,coal:0,iron:0,gold:0,diamond:0};state.rodLvl=1;state.pickLvl=1;
-  state.dex={};state.treasure=null;state.worlds=['isle'];
+  state.coins=0;state.bucket=[];state.ores={wood:0,coal:0,iron:0,gold:0,diamond:0};state.rodLvl=1;state.pickLvl=1;state.axeLvl=1;
+  state.dex={};state.treasure=null;state.worlds=['isle'];state.ach={};
   state.stats={caught:0,mined:0,earned:0,bestWin:0,spins:0,winsCt:0,losses:0};
   updateHUD();toast('Save wiped');};
 updateHUD();
