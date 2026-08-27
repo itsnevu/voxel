@@ -416,19 +416,84 @@ trader.position.set(tX,tY,tZ); scene.add(trader);
 const traderLabel=makeLabel('TRADER','#ffcf5c'); traderLabel.position.set(tX,tY+3.9,tZ); scene.add(traderLabel);
 const TRADER_POS=new THREE.Vector3(tX,tY,tZ);
 
-// --- casino: stone dais, glowing carpet, gold lamps, spinning ring ---
+// --- casino: stone dais, gold lamps + a REAL roulette table standing in the world ---
+const NSEG=15,SEG=[]; SEG[0]='green'; for(let i=1;i<NSEG;i++)SEG[i]=(i%2===1)?'red':'black';
+const SEGCOL={red:0xc0392b,black:0x242a30,green:0x2fae5e};
+const SEGA=TAU/NSEG, WR=1.15;
+const R_TRACK=1.44,R_POCK=0.82,Y_TRACK=1.36,Y_POCK=1.31; // ball path, local to the table group
+function wedgeGeo(r,thetaStart,thetaLength,h){
+  const shape=new THREE.Shape(); shape.moveTo(0,0); shape.absarc(0,0,r,thetaStart,thetaStart+thetaLength,false); shape.lineTo(0,0);
+  const g=new THREE.ExtrudeGeometry(shape,{depth:h,bevelEnabled:false}); g.rotateX(-Math.PI/2); return g; }
 const casino=new THREE.Group(); const lamps=[];
-{ const cbase=texturedBox(3.4,0.5,3.4,TEX.stone); cbase.position.y=0.25; cbase.castShadow=true; cbase.receiveShadow=true; casino.add(cbase);
-  const carpet=new THREE.Mesh(new THREE.BoxGeometry(2.3,0.16,2.3), new THREE.MeshLambertMaterial({color:0x9a5cff,emissive:0x6a2fbf,emissiveIntensity:0.65})); carpet.position.y=0.58; casino.add(carpet);
-  for(const [lx,lz] of [[-1.45,-1.45],[1.45,-1.45],[-1.45,1.45],[1.45,1.45]]){
-    const post=texturedBox(0.18,1.5,0.18,TEX.bark); post.position.set(lx,1.0,lz); post.castShadow=true; casino.add(post);
+{ const cbase=texturedBox(4.2,0.5,4.2,TEX.stone); cbase.position.y=0.25; cbase.castShadow=true; cbase.receiveShadow=true; casino.add(cbase);
+  for(const [lx,lz] of [[-1.85,-1.85],[1.85,-1.85],[-1.85,1.85],[1.85,1.85]]){
+    const post=texturedBox(0.18,2.4,0.18,TEX.bark); post.position.set(lx,1.55,lz); post.castShadow=true; casino.add(post);
     const lamp=new THREE.Mesh(new THREE.BoxGeometry(0.34,0.34,0.34), new THREE.MeshLambertMaterial({color:0xffd24f,emissive:0xffb320,emissiveIntensity:0.85}));
-    lamp.position.set(lx,1.9,lz); casino.add(lamp); lamps.push(lamp); } }
-const ring=new THREE.Mesh(new THREE.TorusGeometry(1.05,0.13,10,26), new THREE.MeshLambertMaterial({color:0xff5d7a,emissive:0x7a1030,emissiveIntensity:0.5}));
-ring.rotation.x=Math.PI/2; ring.position.y=1.5; ring.castShadow=true; casino.add(ring);
+    lamp.position.set(lx,2.95,lz); casino.add(lamp); lamps.push(lamp); } }
+const tableG=new THREE.Group(); tableG.position.y=0.5; casino.add(tableG);
+{ // wooden legs + top + green felt + raised rim: an actual roulette table
+  for(const [lx,lz] of [[-0.95,-0.95],[0.95,-0.95],[-0.95,0.95],[0.95,0.95]]){
+    const leg=texturedBox(0.2,0.85,0.2,TEX.bark); leg.position.set(lx,0.42,lz); leg.castShadow=true; tableG.add(leg); }
+  const ttop=new THREE.Mesh(new THREE.CylinderGeometry(1.95,1.8,0.18,26),new THREE.MeshLambertMaterial({map:TEX.wood}));
+  ttop.position.y=0.94; ttop.castShadow=true; ttop.receiveShadow=true; tableG.add(ttop);
+  const felt=new THREE.Mesh(new THREE.CylinderGeometry(1.8,1.8,0.1,26),new THREE.MeshLambertMaterial({color:0x1c6a45}));
+  felt.position.y=1.06; felt.receiveShadow=true; tableG.add(felt);
+  const rim=new THREE.Mesh(new THREE.TorusGeometry(1.56,0.13,10,30),new THREE.MeshLambertMaterial({color:0x8a5d33}));
+  rim.rotation.x=Math.PI/2; rim.position.y=1.2; rim.castShadow=true; tableG.add(rim);
+  const plankGeo=new THREE.BoxGeometry(0.2,0.26,0.14);
+  for(let k=0;k<26;k++){ const a=k*(TAU/26);
+    const m=new THREE.Mesh(plankGeo,new THREE.MeshLambertMaterial({color:k%2?0x9a6b3a:0x7d5530}));
+    m.position.set(Math.cos(a)*1.86,1.06,Math.sin(a)*1.86); m.rotation.y=-a; m.castShadow=true; tableG.add(m); } }
+const wheelDisc=new THREE.Group(); wheelDisc.position.y=1.12; tableG.add(wheelDisc);
+for(let i=0;i<NSEG;i++){ const w=new THREE.Mesh(wedgeGeo(WR,i*SEGA,SEGA,0.14),new THREE.MeshLambertMaterial({color:SEGCOL[SEG[i]]}));
+  w.castShadow=true; wheelDisc.add(w); }
+{ // pocket pins on the wedge borders — they spin with the wheel
+  const pinGeo=new THREE.BoxGeometry(0.06,0.14,0.06), pinMat=new THREE.MeshLambertMaterial({color:0xd9b45c,emissive:0x604a17,emissiveIntensity:0.3});
+  for(let i=0;i<NSEG;i++){ const a=-(i*SEGA), pin=new THREE.Mesh(pinGeo,pinMat);
+    pin.position.set(Math.cos(a)*1.04,0.2,Math.sin(a)*1.04); wheelDisc.add(pin); } }
+{ const c=px(64),cx2=c.getContext('2d'); cx2.fillStyle='#eafff1'; cx2.font='700 22px "Chakra Petch",sans-serif';
+  cx2.textAlign='center'; cx2.textBaseline='middle'; cx2.fillText('14×',32,34);
+  const spr=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),transparent:true,depthTest:false}));
+  const gAng=-(SEGA/2); spr.position.set(Math.cos(gAng)*WR*0.6,0.26,Math.sin(gAng)*WR*0.6); spr.scale.set(0.5,0.5,1);
+  wheelDisc.add(spr); }
+{ const hub=new THREE.Mesh(new THREE.CylinderGeometry(0.26,0.3,0.2,10),new THREE.MeshLambertMaterial({color:0x3a4048}));
+  hub.position.y=0.2; wheelDisc.add(hub);
+  const turr=new THREE.Mesh(new THREE.BoxGeometry(0.7,0.05,0.08),new THREE.MeshLambertMaterial({color:0xd9b45c}));
+  turr.position.y=0.32; wheelDisc.add(turr);
+  const turr2=turr.clone(); turr2.rotation.y=Math.PI/2; wheelDisc.add(turr2);
+  const knob=new THREE.Mesh(new THREE.ConeGeometry(0.09,0.22,8),new THREE.MeshLambertMaterial({color:0xd9b45c}));
+  knob.position.y=0.45; wheelDisc.add(knob); }
+const ball=new THREE.Mesh(new THREE.SphereGeometry(0.09,12,10),new THREE.MeshLambertMaterial({color:0xf4f6f0,emissive:0x50524e,emissiveIntensity:0.35}));
+ball.castShadow=true; tableG.add(ball);
 casino.position.set(casinoCell[0]-HALF,heightMap[casinoCell[0]][casinoCell[1]],casinoCell[1]-HALF); scene.add(casino);
-const casinoLabel=makeLabel('CASINO','#ff5d7a'); casinoLabel.position.copy(casino.position).add(new THREE.Vector3(0,3.6,0)); scene.add(casinoLabel);
+const casinoLabel=makeLabel('CASINO','#ff5d7a'); casinoLabel.position.copy(casino.position).add(new THREE.Vector3(0,3.9,0)); scene.add(casinoLabel);
 const CASINO_POS=casino.position.clone();
+const WHEEL_CENTER=casino.position.clone().add(new THREE.Vector3(0,1.7,0));
+let viewMode='follow'; // 'follow' walks with the player · 'casino' flies the camera onto the table
+let wheelAngle=0, ballA=0, ballLockIdx=0;
+function setBall(b,r,y){ ballA=b; ball.position.set(Math.cos(b)*r,y,Math.sin(b)*r); }
+function setBallPocket(i){ const phi=i*SEGA+SEGA/2; setBall(-phi-wheelAngle,R_POCK,Y_POCK); }
+setBallPocket(0);
+
+// --- entrance monument: a grand voxel gate greeting new arrivals at spawn ---
+{ const gate=new THREE.Group();
+  const dirX=traderCell[0]-spawnCell[0], dirZ=traderCell[1]-spawnCell[1];
+  const dl=Math.hypot(dirX,dirZ)||1, ux=dirX/dl, uz=dirZ/dl;
+  const gx=spawnCell[0]-HALF+ux*2.5, gz=spawnCell[1]-HALF+uz*2.5;
+  const gy=heightAt(gx,gz);
+  for(const side of [-1,1]){
+    const base=texturedBox(0.95,0.6,0.95,TEX.stone); base.position.set(side*1.7,0.3,0); base.castShadow=true; gate.add(base);
+    const pil=texturedBox(0.62,3.1,0.62,TEX.stone); pil.position.set(side*1.7,2.05,0); pil.castShadow=true; gate.add(pil);
+    const cap=texturedBox(0.82,0.3,0.82,TEX.stone); cap.position.set(side*1.7,3.75,0); cap.castShadow=true; gate.add(cap);
+    const glow=new THREE.Mesh(new THREE.BoxGeometry(0.4,0.4,0.4),new THREE.MeshLambertMaterial({color:0x7fdcff,emissive:0x3aa9d8,emissiveIntensity:0.9}));
+    glow.position.set(side*1.7,4.12,0); gate.add(glow); lamps.push(glow);
+    const torch=new THREE.Mesh(new THREE.BoxGeometry(0.16,0.28,0.16),new THREE.MeshLambertMaterial({color:0xffb320,emissive:0xff8c1a,emissiveIntensity:0.9}));
+    torch.position.set(side*1.7,2.55,0.44); gate.add(torch); lamps.push(torch); }
+  const beam=texturedBox(4.7,0.5,0.82,TEX.stone); beam.position.y=3.35; beam.castShadow=true; gate.add(beam);
+  const beam2=texturedBox(3.6,0.34,0.6,TEX.wood); beam2.position.y=3.82; beam2.castShadow=true; gate.add(beam2);
+  const banner=makeLabel(WORLD.name.toUpperCase(),'#7fdcff');
+  banner.position.set(0,2.55,0); banner.scale.set(3.1,0.78,1); gate.add(banner);
+  gate.position.set(gx,gy,gz); gate.rotation.y=Math.atan2(ux,uz); scene.add(gate); }
 
 // --- quarry: ore nodes on the reachable stone ---
 const ORE_INFO={
@@ -854,81 +919,61 @@ marketEl.addEventListener('click',e=>{
   if(t4){buyOrSail(t4.getAttribute('data-world'));} });
 
 /* ========================================================================
-   11. CASINO ROULETTE (real 3D wheel in its own scene)
+   11. CASINO ROULETTE — bets & spins on the real table out in the world
+   (the wheel, ball and table live at the casino landmark, section 6)
    ======================================================================== */
 let casinoOpen=false,stakeIdx=-1,betColor=null,spinning=false;
 const casinoEl=document.getElementById('casino'),stakeListEl=document.getElementById('stakeList'),
   spinBtn=document.getElementById('spinBtn'),spinResult=document.getElementById('spinResult');
-const NSEG=15,SEG=[]; SEG[0]='green'; for(let i=1;i<NSEG;i++)SEG[i]=(i%2===1)?'red':'black';
-const SEGCOL={red:0xc0392b,black:0x242a30,green:0x2fae5e};
-const SEGA=TAU/NSEG, WPTR=-Math.PI/2; // angle per wedge · fixed world angle the gold pointer reads off
-
-const wc=document.getElementById('wheel');
-const wheelScene=new THREE.Scene();
-const wheelCam=new THREE.PerspectiveCamera(30,1,0.1,20); wheelCam.position.set(0,3.5,3.1); wheelCam.lookAt(0,0,0.15);
-wheelScene.add(new THREE.HemisphereLight(0xffffff,0x2a2018,1.05));
-const wheelSun=new THREE.DirectionalLight(0xfff2d8,0.9); wheelSun.position.set(2.5,5,2); wheelScene.add(wheelSun);
-let wheelRenderer=null;
-try{ wheelRenderer=new THREE.WebGLRenderer({canvas:wc,antialias:true,alpha:true});
-  wheelRenderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2)); wheelRenderer.setSize(260,260); }catch(e){}
-
-function wedgeGeo(r,thetaStart,thetaLength,h){
-  const shape=new THREE.Shape(); shape.moveTo(0,0); shape.absarc(0,0,r,thetaStart,thetaStart+thetaLength,false); shape.lineTo(0,0);
-  const g=new THREE.ExtrudeGeometry(shape,{depth:h,bevelEnabled:false}); g.rotateX(-Math.PI/2); return g; }
-
-const WR=1.15;
-const wheelDisc=new THREE.Group(); wheelScene.add(wheelDisc);
-for(let i=0;i<NSEG;i++) wheelDisc.add(new THREE.Mesh(wedgeGeo(WR,i*SEGA,SEGA,0.22),new THREE.MeshLambertMaterial({color:SEGCOL[SEG[i]]})));
-{ const c=px(64),cx2=c.getContext('2d'); cx2.fillStyle='#eafff1'; cx2.font='700 22px "Chakra Petch",sans-serif';
-  cx2.textAlign='center'; cx2.textBaseline='middle'; cx2.fillText('14×',32,34);
-  const spr=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),transparent:true,depthTest:false}));
-  const gAng=-(SEGA/2); spr.position.set(Math.cos(gAng)*WR*0.62,0.3,Math.sin(gAng)*WR*0.62); spr.scale.set(0.5,0.5,1);
-  wheelDisc.add(spr); }
-{ const hub=new THREE.Mesh(new THREE.CylinderGeometry(0.3,0.32,0.3,10),new THREE.MeshLambertMaterial({color:0x3a4048}));
-  hub.position.y=0.24; wheelScene.add(hub); }
-{ const plankGeo=new THREE.BoxGeometry(0.22,0.3,0.16);
-  for(let k=0;k<28;k++){ const a=k*(TAU/28);
-    const m=new THREE.Mesh(plankGeo,new THREE.MeshLambertMaterial({color:k%2?0x9a6b3a:0x7d5530}));
-    m.position.set(Math.cos(a)*(WR+0.16),0.16,Math.sin(a)*(WR+0.16)); m.rotation.y=-a; wheelScene.add(m); } }
-{ const ptr=new THREE.Mesh(new THREE.ConeGeometry(0.14,0.26,4),new THREE.MeshLambertMaterial({color:0xffcf5c}));
-  ptr.position.set(Math.cos(WPTR)*(WR+0.05),0.5,Math.sin(WPTR)*(WR+0.05)); ptr.rotation.x=Math.PI; wheelScene.add(ptr); }
-let wheelAngle=0;
-function renderWheelScene(){ wheelDisc.rotation.y=wheelAngle; if(wheelRenderer)wheelRenderer.render(wheelScene,wheelCam); }
 function renderStakes(){ if(!state.bucket.length){stakeListEl.innerHTML='<div class="empty" style="padding:8px">No fish to stake — go fishing first.</div>';return;}
   let h=''; state.bucket.forEach((f,i)=>{h+=`<div class="stake${i===stakeIdx?' sel':''}" data-stake="${i}"><span class="dot" style="background:${RAR[f.rar]};color:${RAR[f.rar]}"></span>
     <span class="nm">${f.name}${f.wins?` <span style="color:var(--rose)">★${f.wins}</span>`:''}</span><span class="vv">◈ ${fmt(f.val)}</span></div>`;});
   stakeListEl.innerHTML=h; }
 function updateSpinBtn(){spinBtn.disabled=!(stakeIdx>=0&&betColor&&!spinning&&state.bucket[stakeIdx]);}
-function openCasino(){casinoOpen=true;casinoEl.classList.add('on');stakeIdx=-1;betColor=null;spinning=false;spinResult.innerHTML='';
-  document.querySelectorAll('.betbtn').forEach(b=>b.classList.remove('sel'));renderStakes();updateSpinBtn();renderWheelScene();}
-function closeCasino(){casinoOpen=false;spinSeq++;spinning=false;casinoEl.classList.remove('on');save();}
+function openCasino(){casinoOpen=true;viewMode='casino';casinoEl.classList.add('on');stakeIdx=-1;betColor=null;spinning=false;spinResult.innerHTML='';
+  document.querySelectorAll('.betbtn').forEach(b=>b.classList.remove('sel'));renderStakes();updateSpinBtn();}
+function closeCasino(){casinoOpen=false;viewMode='follow';spinSeq++;spinAnim=null;spinning=false;casinoEl.classList.remove('on');save();}
 document.getElementById('casinoX').onclick=closeCasino;
 stakeListEl.addEventListener('click',e=>{if(spinning)return;const t=e.target.closest('[data-stake]');if(t){stakeIdx=+t.getAttribute('data-stake');renderStakes();updateSpinBtn();}});
 document.querySelectorAll('.betbtn').forEach(b=>{const pick=()=>{if(spinning)return;betColor=b.getAttribute('data-bet');
   document.querySelectorAll('.betbtn').forEach(x=>x.classList.remove('sel'));b.classList.add('sel');updateSpinBtn();};
   b.onclick=pick;b.onkeydown=e=>{if(e.code==='Enter'||e.code==='Space'){e.preventDefault();pick();}};});
-let spinSeq=0;
+let spinSeq=0,spinAnim=null;
 spinBtn.onclick=()=>{ if(spinBtn.disabled)return; const fish=state.bucket[stakeIdx]; if(!fish)return;
-  spinning=true;updateSpinBtn();spinResult.innerHTML='<span style="color:var(--muted)">The wheel spins…</span>';
-  const mySpin=++spinSeq, myBet=betColor;
-  const winIdx=Math.floor(Math.random()*NSEG),targetCenter=winIdx*SEGA+SEGA/2,turns=5+Math.floor(Math.random()*3);
-  const startA=wheelAngle%TAU; let finalA=-targetCenter-WPTR; while(finalA<startA)finalA+=TAU; finalA+=turns*TAU;
-  const dur=3.6; let t0=null,lastBeep=0;
-  function tick(ts){ if(mySpin!==spinSeq||!casinoOpen)return; // spin cancelled (ESC/close) — fish untouched
-    if(t0==null)t0=ts; const el=(ts-t0)/1000,p=Math.min(1,el/dur),e=1-Math.pow(1-p,3);
-    wheelAngle=startA+(finalA-startA)*e; renderWheelScene();
-    if(el-lastBeep>0.09+0.4*p){lastBeep=el;sfx.spin(420-280*p);} // tick pitch falls as the wheel settles
-    if(p<1)requestAnimationFrame(tick); else resolveSpin(winIdx,fish,myBet); }
-  requestAnimationFrame(tick); };
+  spinning=true;updateSpinBtn();spinResult.innerHTML='<span style="color:var(--muted)">No more bets — the ball is rolling…</span>';
+  const winIdx=Math.floor(Math.random()*NSEG);
+  const th0=wheelAngle, th1=th0-(4+Math.random()*2)*TAU;   // wheel spins one way…
+  const bTarget=-(winIdx*SEGA+SEGA/2)-th1;                 // …ball must come to rest on the winning pocket
+  let base=(ballA-bTarget)%TAU; if(base<0)base+=TAU;
+  spinAnim={seq:++spinSeq,t:0,dur:4.4,th0,th1,b0:ballA,bTot:base+6*TAU,winIdx,fish,bet:betColor,lastPocket:-1}; };
+function updateRoulette(dt){ // every frame from the main loop — the table is part of the world
+  if(spinAnim){
+    if(spinAnim.seq!==spinSeq||!casinoOpen) spinAnim=null; // spin cancelled (ESC/close) — fish untouched
+    else{ spinAnim.t+=dt; const p=Math.min(1,spinAnim.t/spinAnim.dur);
+      const ew=1-Math.pow(1-p,3), eb=1-Math.pow(1-p,2.55);
+      wheelAngle=spinAnim.th0+(spinAnim.th1-spinAnim.th0)*ew;
+      const b=spinAnim.b0-spinAnim.bTot*eb; let r,by;
+      if(p<0.55){ r=R_TRACK; by=Y_TRACK; }
+      else{ const s=(p-0.55)/0.45; r=lerp(R_TRACK,R_POCK,s); // spiral down + little bounces as it settles
+        by=lerp(Y_TRACK,Y_POCK,s)+Math.abs(Math.sin(s*Math.PI*2.5))*0.1*(1-s); }
+      setBall(b,r,by);
+      const phi=(((-b-wheelAngle)%TAU)+TAU)%TAU, pk=Math.floor(phi/SEGA);
+      if(pk!==spinAnim.lastPocket){ spinAnim.lastPocket=pk; sfx.spin(420-280*p); } // pitch falls as it settles
+      if(p>=1){ const sa=spinAnim; spinAnim=null; ballLockIdx=sa.winIdx; resolveSpin(sa.winIdx,sa.fish,sa.bet); } } }
+  if(!spinAnim){ wheelAngle-=dt*(casinoOpen?0.4:0.7); setBallPocket(ballLockIdx); } // idle attract spin
+  wheelDisc.rotation.y=wheelAngle; }
+const ballWP=new THREE.Vector3();
 function resolveSpin(idx,fish,myBet){ const color=SEG[idx],won=(color===myBet);
   state.stats.spins++;
+  ball.getWorldPosition(ballWP);
   if(won){ const mult=(color==='green')?14:2,before=fish.val; fish.val=Math.round(fish.val*mult); fish.wins++;
     state.stats.winsCt++; state.stats.bestWin=Math.max(state.stats.bestWin,fish.val);
     addShake(color==='green'?0.45:0.25); if(color==='green')addFreeze(0.15);
-    fxBurst(pWorld.x,pWorld.y+1.5,pWorld.z,{n:color==='green'?26:14,cols:[0xffd24f,0xffefb0,0xff5d7a],speed:3,up:4.5,size:1.1});
+    fxBurst(ballWP.x,ballWP.y+0.2,ballWP.z,{n:color==='green'?34:16,cols:[0xffd24f,0xffefb0,0x74e08a],speed:2.6,up:3.6,size:1.1,grav:7});
     spinResult.innerHTML=`<span class="win">▲ ${color.toUpperCase()} — WON! ${fish.name} ◈${fmt(before)} → <b>◈${fmt(fish.val)}</b>. Spin again or cash out.</span>`;
     sfx.win();toast(`${fish.name} doubled → ◈${fmt(fish.val)}`,'gold'); }
-  else { state.stats.losses++; addShake(0.14); const lost=fish.name,li=state.bucket.indexOf(fish); if(li>=0)state.bucket.splice(li,1); stakeIdx=-1;
+  else { state.stats.losses++; addShake(0.2); const lost=fish.name,li=state.bucket.indexOf(fish); if(li>=0)state.bucket.splice(li,1); stakeIdx=-1;
+    fxBurst(ballWP.x,ballWP.y+0.15,ballWP.z,{n:14,cols:[0xff5d7a,0x8a2033,0x242a30],speed:2.2,up:2.6,size:1,grav:8});
     spinResult.innerHTML=`<span class="lose">▼ ${color.toUpperCase()} — the eel swallowed your ${lost}. Gone.</span>`; sfx.lose();toast('Lost your '+lost,'bad'); }
   spinning=false;betColor=null;document.querySelectorAll('.betbtn').forEach(b=>b.classList.remove('sel'));
   renderStakes();updateHUD();updateSpinBtn();save(); }
@@ -1235,18 +1280,26 @@ function animate(now){
     if(revT>0){renderFishScene(dt);revT-=dt;if(revT<=0){revEl.classList.remove('on');disposeFishModel();}}
   }
 
-  camera.position.set(pWorld.x+CAM_OFF.x,pWorld.y+CAM_OFF.y,pWorld.z+CAM_OFF.z);
-  camera.lookAt(pWorld.x,pWorld.y+1,pWorld.z);
-  if(trauma>0){ const sh=trauma*trauma*0.55;
+  // camera: smooth fly between the follow-cam and a close-up over the roulette table
+  if(viewMode==='casino'){ vTargL.copy(WHEEL_CENTER).addScaledVector(CAS_SHIFT,1); vTargP.copy(vTargL).add(CAS_CAM_OFF); }
+  else{ vTargP.set(pWorld.x+CAM_OFF.x,pWorld.y+CAM_OFF.y,pWorld.z+CAM_OFF.z); vTargL.set(pWorld.x,pWorld.y+1,pWorld.z); }
+  const vTargS=viewMode==='casino'?3.2:camSize, vk=1-Math.exp(-4.5*rdt);
+  vPos.lerp(vTargP,vk); vLook.lerp(vTargL,vk); vSize+=(vTargS-vSize)*vk;
+  { const a=window.innerWidth/window.innerHeight;
+    camera.left=-vSize*a;camera.right=vSize*a;camera.top=vSize;camera.bottom=-vSize;camera.updateProjectionMatrix(); }
+  camera.position.copy(vPos);
+  camera.lookAt(vLook);
+  if(trauma>0){ const sh=trauma*trauma*(viewMode==='casino'?0.22:0.55);
     camera.position.x+=rand(-sh,sh); camera.position.y+=rand(-sh,sh)*0.5; camera.position.z+=rand(-sh,sh);
-    trauma=Math.max(0,trauma-dt*2.4); }
+    trauma=Math.max(0,trauma-rdt*2.4); }
+  updateRoulette(dt);
   fxUpdate(dt);
 
   animWater(clock); animGrass(clock);
   skyUpdate(dt); rainUpdate(dt);
   if((chipT+=dt)>0.5){chipT=0;chipUpdate();}
   water.position.y=WATER_TOP+Math.sin(clock*0.8)*0.03;
-  ring.rotation.z+=dt*0.9; trader.rotation.y=Math.sin(clock*0.5)*0.25;
+  trader.rotation.y=Math.sin(clock*0.5)*0.25;
   updateFishLine();
   const lampNight=isNight()?1.7:1;
   for(let k=0;k<lamps.length;k++)lamps[k].material.emissiveIntensity=(0.7+Math.sin(clock*3+k*1.7)*0.3)*lampNight;
@@ -1263,7 +1316,8 @@ function animate(now){
 addEventListener('resize',()=>{ renderer.setSize(window.innerWidth,window.innerHeight); fitCamera(); });
 const startOv=document.getElementById('start');
 function start(){ initAudio(); if(AC&&AC.state==='suspended')AC.resume();
-  startOv.classList.remove('on'); running=true; updateHUD(); setArea('Fortune Isle','world 1'); }
+  startOv.classList.remove('on'); running=true; updateHUD(); setArea(WORLD.name,WORLD.sub);
+  if(state.stats.caught===0&&state.stats.mined===0)toast('🏝️ Welcome to '+WORLD.name+'! Walk through the gate','gold'); }
 document.getElementById('startBtn').onclick=start;
 
 // idle preview loop: the island is already alive behind the start menu
