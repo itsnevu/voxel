@@ -410,6 +410,26 @@ app.post('/api/save', requireAuth, (req, res) => {
     if (state.titleId !== next) { state.titleId = next; touched = true; }
   }
 
+  // --- ach / deeds: the server does not evaluate these yet, so they are the
+  //     client's to keep. Accept them APPEND-ONLY (a key may appear and a block
+  //     number may rise, never fall) so a page reload stops wiping the trophy
+  //     wall — without letting a client hand itself a coin reward twice.
+  for (const field of ['ach', 'deeds']) {
+    const incoming = body[field];
+    if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) continue;
+    if (!state[field] || typeof state[field] !== 'object') state[field] = {};
+    let n = 0;
+    for (const key of Object.keys(incoming)) {
+      if (n++ > 200) break;                              // no unbounded growth
+      if (!/^[a-zA-Z0-9_]{1,32}$/.test(key)) continue;
+      const v = Number(incoming[key]);
+      if (!Number.isFinite(v) || v < 0) continue;
+      const cur = Number(state[field][key]) || 0;
+      const next = Math.trunc(v);
+      if (next > cur) { state[field][key] = next; touched = true; }
+    }
+  }
+
   // --- tipEpoch: the kiosk sells a peek at the NEXT epoch's market mods for
   //     30 pearls, so accepting an arbitrary value would hand out the tip for
   //     free. The client may only clear or lower a tip it already paid for.

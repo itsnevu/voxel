@@ -533,12 +533,14 @@ function makeHero(){ const g=new THREE.Group();
     bootL,bootR:legR.children[0],handL,handR:armR.children[0],   // clones have no names of their own
     mats:{band:bandM,scarf:scarfM,vest:vestM}}; return g; }
 
-function makeLabel(text,color){ const c=px(256); c.height=64; const x=c.getContext('2d');
+const LABELS=[];   // every world sign, so a cinematic can clear them out of frame
+function makeLabel(text,color,reg){ const c=px(256); c.height=64; const x=c.getContext('2d');
   x.fillStyle='rgba(9,16,20,0.82)'; const r=10,w=256,h=52,y=6; x.beginPath();
   x.moveTo(r,y);x.arcTo(w,y,w,h,r);x.arcTo(w,h+y,0,h+y,r);x.arcTo(0,h+y,0,y,r);x.arcTo(0,y,w,y,r);x.closePath();x.fill();
   x.fillStyle=color;x.font='bold 30px "Chakra Petch",sans-serif';x.textAlign='center';x.textBaseline='middle';x.fillText(text,128,34);
   const tex=new THREE.CanvasTexture(c); tex.anisotropy=MAXANISO;
-  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true,depthTest:false,depthWrite:false})); sp.scale.set(3.4,0.85,1); return sp; }
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true,depthTest:false,depthWrite:false})); sp.scale.set(3.4,0.85,1);
+  if(reg!==false)LABELS.push(sp); return sp; }
 
 // --- trader stall: checkered roof on wooden posts, counter + crates ---
 const trader=humanoid({shirt:0x7a4a2a,pants:0x3a2c1c,hat:0xcaa15a,skin:0xe8bd8f});
@@ -1134,10 +1136,10 @@ addEventListener('keydown',e=>{
   const m=KMAP[e.code]; if(m){e.preventDefault(); if(!keys[m]&&m==='act')actEdge=true; keys[m]=true;}
   if(e.code==='KeyI'||e.code==='Tab'){ e.preventDefault(); if(invOpen)closeInv(); else if(running)openInv(); }
   if(e.code==='KeyT'&&running&&!chatOpen&&!marketOpen&&!casinoOpen&&!invOpen){ e.preventDefault(); openChat(); }
-  if(e.code>='Digit1'&&e.code<='Digit8'&&running&&capCam){ e.preventDefault(); playBarEmote(+e.code.slice(5)-1); return; }
+  if(e.code>='Digit1'&&e.code<='Digit8'&&running&&capCam&&!chatOpen){ e.preventDefault(); playBarEmote(+e.code.slice(5)-1); return; }
   if(e.code>='Digit1'&&e.code<='Digit5'&&running&&!marketOpen&&!casinoOpen&&!harborOpen){ setHotSlot(+e.code.slice(5)-1); }
   if(e.code==='KeyP'&&running){ e.preventDefault(); togglePhoto(); }
-  if(e.code==='KeyC'&&running&&!marketOpen&&!casinoOpen&&!invOpen&&!harborOpen){ e.preventDefault(); toggleCam(); }
+  if(e.code==='KeyC'&&running&&!chatOpen&&!marketOpen&&!casinoOpen&&!invOpen&&!harborOpen){ e.preventDefault(); toggleCam(); }
   if(e.code==='Escape'){ if(marketOpen)closeMarket(); else if(casinoOpen)closeCasino(); else if(harborOpen)closeHarbor(); else if(invOpen)closeInv(); else if(capCam)closeCam(); else if(fishing.state!=='idle')cancelFish(); else if(mining.node)cancelMine(); else if(chopping.tree)cancelChop(); else if(digging.active){digging.active=false;hint('');} }},{passive:false});
 addEventListener('keyup',e=>{const m=KMAP[e.code]; if(m)keys[m]=false;});
 addEventListener('blur',()=>{for(const k in keys)keys[k]=false;});
@@ -1687,8 +1689,9 @@ const SRV={
     finally{ this.busy=false; }
   }
 };
-function save(){ if(SRV.on){ // server holds the economy; only mirror cosmetics
-    try{ RFNet.saveCosmetics({wardrobe:state.wardrobe,titleId:state.titleId,tipEpoch:state.tipEpoch}); }catch(e){}
+function save(){ if(SRV.on){ // server holds the economy; only mirror what it lets us keep
+    try{ RFNet.saveCosmetics({wardrobe:state.wardrobe,titleId:state.titleId,tipEpoch:state.tipEpoch,
+      ach:state.ach,deeds:state.deeds}); }catch(e){}   // append-only on the server side
     return; }
   try{localStorage.setItem(SAVE,JSON.stringify(state));}catch(e){}}
 function load(){try{const r=localStorage.getItem(SAVE);if(r){const s=JSON.parse(r);
@@ -2058,8 +2061,19 @@ function caveTravel(){ initAudio();
   // first descent costs coins: pay once to open the shaft, then travel is free forever
   if(!WORLD.cave&&!state.worlds.includes('cave')){ const c=WORLDS.cave.cost;
     if(state.coins<c){ toast('Need ◈ '+fmt(c)+' to open the mine shaft','bad'); sfx.miss(); return; }
+    if(SRV.on){ // buying the shaft must go through the server, or the reload bounces us back out
+      SRV.act('travel',{world:'cave'}).then(r=>{ if(!r)return; sfx.win();
+        toast(pixSVG('pick',13)+' Mine shaft opened — ◈ '+fmt(c),'gold');
+        setTimeout(caveTravel,400); });
+      return; }
     state.coins-=c; state.worlds.push('cave'); updateHUD(); sfx.win();
     toast(pixSVG('pick',13)+' Mine shaft opened — ◈ '+fmt(c),'gold'); }
+  if(SRV.on){ // tell the server which isle we are standing on before the reload
+    const dest=WORLD.cave?caveReturn():'cave';
+    SRV.act('travel',{world:dest}).then(()=>{
+      try{ localStorage.setItem('reelfortune3d-world',dest); }catch(e){}
+      setTimeout(()=>location.reload(),400); });
+    return; }
   save();
   const back=caveReturn();
   try{ if(WORLD.cave){ localStorage.setItem('reelfortune3d-world',back); }
@@ -2100,7 +2114,7 @@ function applyTitle(){
   if(titleSprite){ titleSprite.material.map.dispose(); titleSprite.material.dispose();
     scene.remove(titleSprite); titleSprite=null; }
   if(!state.titleId)return;
-  titleSprite=makeLabel(state.titleId,'#7fdcff'); titleSprite.scale.set(2.3,0.58,1);
+  titleSprite=makeLabel(state.titleId,'#7fdcff',false); titleSprite.scale.set(2.3,0.58,1);
   titleSprite.position.set(pWorld.x,pWorld.y+2.95,pWorld.z);
   scene.add(titleSprite); }
 const KIOSK_TITLES=[['t1','Deckhand',50],['t2','Pearl Diver',150],['t3','Eel Whisperer',500],['t4','Isle Legend',2500]];
@@ -2431,6 +2445,13 @@ function renderHarbor(){ if(!boatCurEl)return;
   if(sailListEl)sailListEl.innerHTML=renderWorldRows(); }
 function buyBoat(){ const nxt=state.boatLvl+1; if(nxt>=BOATS.length)return; const b=BOATS[nxt];
   if(state.coins<b.cost||!haveOres(b.req))return;
+  if(SRV.on){ // the server owns the shipyard too, or the hull would vanish on the next reply
+    SRV.act('boat',{}).then(r=>{ if(!r)return;
+      sfx.win(); addShake(0.14); toast(pixSVG('boat',13)+' '+(r.name||b.name)+' launched!','gold');
+      if(DOCK)fxBurst(DOCK.boat.x,WATER_TOP+0.3,DOCK.boat.z,{n:22,cols:[0x7fdcff,0xd9f6ff,0xffd24f],speed:2.8,up:3.6,size:1.1,grav:7});
+      rebuildDockBoat(); buildPreview(state.boatLvl); renderHarbor();
+      if(crewOnline())crewRefresh(); });
+    return; }
   state.coins-=b.cost; for(const k in b.req)state.ores[k]-=b.req[k];
   state.boatLvl=nxt; sfx.win(); addShake(0.14);
   toast(pixSVG('boat',13)+' '+b.name+' launched!','gold');
@@ -2694,10 +2715,15 @@ function updateMining(dt){ const n=mining.node;
     oreCombo=oreComboT>0?oreCombo+1:1; oreComboT=6.5;   // keep the chain alive by finding the next node fast
     addShake(n.geode?0.4:0.22); addFreeze(n.geode?0.12:0.05);
     fxBurst(n.x,n.y+0.6,n.z,{n:n.geode?40:18,cols:[ORE_INFO[n.type].color,0x9aa1a8,0x747c84],speed:n.geode?4.4:3.2,up:n.geode?5.5:4.2,size:1.1});
-    n.alive=false; n.mesh.visible=false; n.respawnAt=clock+40+rand(0,25);
     if(SRV.on){ sfx.ore();
-      SRV.act('mine',{type:n.type,node:n.id}).then(r=>{ if(r&&r.got)toast(`+${r.got} ${ORE_INFO[r.type||n.type].name}`,'good'); });
+      // hide it optimistically, but PUT IT BACK if the server refuses — otherwise a
+      // rate-limited swing would erase the vein for a minute and pay nothing
+      n.alive=false; n.mesh.visible=false;
+      SRV.act('mine',{type:n.type,node:n.id}).then(r=>{
+        if(r&&r.got)toast(`+${r.got} ${ORE_INFO[r.type||n.type].name}`,'good');
+        else if(!n.srvUntil){ n.alive=true; n.mesh.visible=true; } });
       cancelMine(); return; }
+    n.alive=false; n.mesh.visible=false; n.respawnAt=clock+40+rand(0,25);
     const bonus=Math.random()<Math.min(0.85,0.15+0.08*(state.pickLvl-1))?1:0;
     // a storm loosens the rock — bad weather actually pays at the quarry
     const wBoost=(wState==='storm'?1.5:wState==='rain'||wState==='snow'||wState==='ash'?1.2:1);
@@ -2733,7 +2759,8 @@ function togglePhoto(){ if(capCam)closeCam();   // both modes own vTargP/vTargL 
    own vTargP/vTargL and would otherwise fight over the frame.
    ======================================================================== */
 let capCam=false, capAng=0;
-const CAP_R=6.6, CAP_EY=3.0, CAP_ORBIT=0.22, CAP_SHIFT=1.35, CAP_SIZE=2.55; // ortho: only CAP_SIZE zooms
+const CAP_R=6.2, CAP_EY=4.4, CAP_ORBIT=0.22, CAP_SHIFT=1.35, CAP_SIZE=2.9; // ortho: only CAP_SIZE zooms
+// 35deg elevation — lower than the 40.5deg follow-cam for a heroic read, high enough to clear a 1-block step
 const capCardEl=document.getElementById('capcard'), emoBarEl=document.getElementById('emotebar');
 
 // the rig's rest pose, captured once — the per-frame loop never resets the head/hat/torso, so we must
@@ -2964,6 +2991,42 @@ function idleFidget(dt){
   playEmote(f[0],f[1],-1,true); }
 
 // ---- the close-up itself ----
+/* Occlusion. Two levers, in order of preference:
+   1. Pick a GOOD AZIMUTH. Spawn sits in a hollow at the foot of a cliff — from the follow-cam side the
+      terrain climbs 5→8 and the captain is simply not visible from there at any elevation. So on open we
+      scan the circle, find the widest arc with a clean sight line, and sweep back and forth inside it.
+   2. DOLLY IN along the view axis. For an ortho camera that changes nothing about scale or framing —
+      it only walks the near plane past a ridge. Used as the in-arc safety net. */
+const CAP_EL=Math.atan2(CAP_EY,CAP_R), CAP_DIST=4.4;   // NOT hypot(R,EY): ortho scale ignores distance,
+// so we sit deliberately close — only props within 4.4 units can ever come between the lens and the captain
+let capA0=0, capA1=TAU, capPhase=Math.PI/2;
+function capClear(a){                       // furthest the eye can sit on this bearing with the feet in view
+  const ce=Math.cos(CAP_EL), ux=Math.cos(a)*ce, uy=Math.sin(CAP_EL), uz=Math.sin(a)*ce;
+  for(let i=2;i<=14;i++){ const d=CAP_DIST*i/14;
+    if(pWorld.y+uy*d < heightAt(pWorld.x+ux*d,pWorld.z+uz*d)+0.55)return CAP_DIST*(i-1)/14; }
+  return CAP_DIST; }
+let capElNow=CAP_EL; const capOut=[CAP_EL,CAP_DIST];
+function capSolve(a){                       // first (elevation, distance) pair on this bearing that sees the feet
+  for(let e=0;e<6;e++){
+    const el=CAP_EL+e*0.115, ce=Math.cos(el), ux=Math.cos(a)*ce, uy=Math.sin(el), uz=Math.sin(a)*ce;
+    let t=CAP_DIST, hit=false;
+    for(let i=2;i<=14;i++){ const d=CAP_DIST*i/14;
+      if(pWorld.y+uy*d < heightAt(pWorld.x+ux*d,pWorld.z+uz*d)+0.55){ t=CAP_DIST*(i-1)/14-0.15; hit=true; break; } }
+    if(!hit||t>=3.4){ capOut[0]=el; capOut[1]=clamp(t,2.6,CAP_DIST); return; } }
+  capOut[0]=CAP_EL+5*0.115; capOut[1]=CAP_DIST; }   // last resort: look down over whatever it is
+function capPickArc(){                      // the widest run of clear bearings, scanned twice around for wrap
+  const N=48, ok=[]; let any=false;
+  for(let i=0;i<N;i++){ const c=capClear(i/N*TAU)>=3.4; ok.push(c); any=any||c; }
+  capA0=0; capA1=TAU; capPhase=Math.PI/2;
+  if(!any)return;                           // ringed in on every side: fall back to a plain full turn
+  let bl=-1,st=0,en=0,s=-1,run=0;
+  for(let i=0;i<N*2;i++){ if(ok[i%N]){ if(s<0)s=i; if(++run>bl){bl=run;st=s;en=i;} } else { s=-1; run=0; } }
+  if(bl>=N)return;                          // clear all the way round
+  const m=0.7;                              // pull in from both edges so the sweep never grazes the cliff
+  capA0=(st+m)/N*TAU; capA1=(en+1-m)/N*TAU;
+  if(capA1-capA0<0.5){ const c=(capA0+capA1)/2; capA0=c-0.25; capA1=c+0.25; } }
+function capLabels(on){ for(const l of LABELS){ if(on){ l.userData._pv=l.visible; l.visible=false; }
+  else if(l.userData._pv!==undefined)l.visible=l.userData._pv; } }
 function capShadow(on){ const c=sun.shadow.camera, s=on?15:60; // tighten the shadow map or the close-up goes blocky
   c.left=-s;c.right=s;c.top=s;c.bottom=-s;c.updateProjectionMatrix(); }
 function bestCatch(){ let bn='',bk=0;
@@ -2983,7 +3046,8 @@ function renderCapCard(){ if(!capCardEl)return; const st=state.stats;
       <span>${pixSVG('boat',15)}<b>Lv ${state.boatLvl}</b></span></div>
     ${row(pixSVG('trophy',14),'Personal best',bestCatch(),'var(--gold)')}
     ${row(pixSVG('fish',14),'Fish caught',fmt(st.caught))}
-    ${row(pixSVG('pick',14),'Resources gathered',fmt(st.mined))}
+    ${row(pixSVG('ore',14),'Ores mined',fmt(Math.max(0,st.mined-(st.wood||0))))}
+    ${row(pixSVG('wood',14),'Logs chopped',fmt(st.wood||0))}
     ${row('◈','Coins earned',fmt(st.earned))}
     ${row('◉','Pearls (lifetime)',fmt(state.pearlsLife),'var(--teal)')}
     ${row(pixSVG('island',14),'Isles unlocked',isles+'/'+WORLD_ORDER.length)}
@@ -3000,16 +3064,19 @@ function openCam(){
   if(chopping.tree)cancelChop();
   digging.active=false;
   capCam=true;
-  capAng=Math.atan2(CAM_OFF.z,CAM_OFF.x);   // start where the follow-cam already sits — no whip-pan on entry
+  capPickArc();                            // find the bearing that can actually see him, then fly there
+  capAng=capA1-capA0>=TAU-0.01?Math.atan2(CAM_OFF.z,CAM_OFF.x):(capA0+capA1)/2;
+  capPhase=capA1-capA0>=TAU-0.01?0:Math.PI/2;
+  capSolve(capAng); capElNow=capOut[0];   // open at the right tilt instead of easing into it
   document.body.classList.add('capcam');
-  capShadow(true); renderCapCard(); markEmote(-1); hint('');
+  capShadow(true); capLabels(true); renderCapCard(); markEmote(-1); hint('');
   faceCam(); addFreeze(0.05);
   beep(520,0.09,'sine',0.05); setTimeout(()=>beep(780,0.13,'sine',0.045),75); }
 function closeCam(){
   if(!capCam)return;
   capCam=false; stopEmote();
   document.body.classList.remove('capcam');
-  capShadow(false);
+  capShadow(false); capLabels(false);
   beep(300,0.09,'sine',0.04); }
 function toggleCam(){ capCam?closeCam():openCam(); }
 
@@ -3139,9 +3206,12 @@ function updateChopping(dt){ const t=chopping.tree;
     addShake(0.16); sfx.ore();
     const leafCols=t.pink?[0xec9fcb,0xf5b5d9,0x9a6b3a]:[0x3aa626,0x54cb3c,0x9a6b3a];
     fxBurst(t.x,t.y+3,t.z,{n:16,cols:leafCols,speed:2.6,up:1.6,size:1.1,grav:5});
-    t.cd=clock+30+rand(0,15);
-    if(SRV.on){ SRV.act('chop',{tree:t.id}).then(r=>{ if(r&&r.got)toast(`+${r.got} Wood`,'good'); });
+    if(SRV.on){ const wasCd=t.cd; t.cd=clock+30+rand(0,15);
+      SRV.act('chop',{tree:t.id}).then(r=>{
+        if(r&&r.got)toast(`+${r.got} Wood`,'good');
+        else if(!t.srvUntil)t.cd=wasCd; });   // refused: the tree is still standing
       cancelChop(); return; }
+    t.cd=clock+30+rand(0,15);
     const wWood=(wState==='storm'?1.5:wState==='rain'||wState==='snow'||wState==='ash'?1.2:1); // wind brings the limbs down
     const got=Math.round((1+(Math.random()<Math.min(0.85,0.35+0.08*(state.axeLvl-1))?1:0)+(state.axeLvl>=6&&Math.random()<0.2?1:0))*wWood);
     state.ores.wood+=got; state.stats.mined+=got; state.stats.wood=(state.stats.wood||0)+got;
@@ -3403,7 +3473,7 @@ function snowUpdate(dt){ if(!snowMesh.visible)return;
   snowMesh.instanceMatrix.needsUpdate=true; }
 // HUD time/weather chip
 const timeIco=document.getElementById('timeIco'),wIco=document.getElementById('wIco');
-let chipT=0,chipKey='';
+let chipT=1,chipKey='';  // start past the 0.5s gate so the dial paints on the very first frame
 /* --- the sky dial: a pocket-sized sky in the HUD -----------------------------
    The world camera can never show the real sky (an orthographic look-down means
    every screen ray hits ground), so the celestial state gets its own readout.
@@ -3575,7 +3645,7 @@ function animate(now){
     shovelMesh.visible=(act==='dig');
     axeMesh.visible=(act==='chop'||carry==='chop');
     player.position.set(pWorld.x, pWorld.y+(moving?Math.abs(Math.sin(pWorld.step))*0.08:0), pWorld.z);
-    updateEmote(dt); // emotes + idle fidgets override the pose above; nothing below re-writes the rig
+    updateEmote(rdt); // rdt, not dt: a meteor's hit-stop must not slow a cinematic to 8% speed
 
     // respawn: online the server's clock rules (so every player sees the same node return)
     for(const n of oreNodes){ if(n.alive)continue;
@@ -3597,15 +3667,22 @@ function animate(now){
   if(!running){ const ta=clock*0.05; vTargL.set(0,5,0); vTargP.set(Math.cos(ta)*62,50,Math.sin(ta)*62); } // title: slow cinematic orbit of the isle
   else if(viewMode==='casino'){ vTargL.copy(WHEEL_CENTER).addScaledVector(CAS_SHIFT,1); vTargP.copy(vTargL).add(CAS_CAM_OFF); }
   else if(capCam){ // Captain Cam: a slow turntable, framed left of centre so the stat card has room
-    capAng+=CAP_ORBIT*rdt;
-    const cs=Math.cos(capAng), sn=Math.sin(capAng);
-    vTargL.set(pWorld.x+sn*CAP_SHIFT,pWorld.y+1.25,pWorld.z-cs*CAP_SHIFT); // +camera-right shifts the hero LEFT
-    const ex=vTargL.x+cs*CAP_R, ez=vTargL.z+sn*CAP_R;
-    vTargP.set(ex,Math.max(vTargL.y+CAP_EY,heightAt(ex,ez)+1.5),ez); } // a hill must never swallow the shot
+    capPhase+=CAP_ORBIT*rdt*(capA1-capA0>=TAU-0.01?1:1.7);
+    const span=capA1-capA0;
+    capAng=span>=TAU-0.01?capA0+capPhase                       // open ground: keep turning
+      :capA0+span*(0.5-0.5*Math.cos(capPhase));                // boxed in: ease back and forth across the arc
+    capSolve(capAng);
+    capElNow=lerp(capElNow,capOut[0],1-Math.exp(-3.5*rdt));   // ease the tilt so a passing ridge never snaps it
+    const cs=Math.cos(capAng), sn=Math.sin(capAng), ce=Math.cos(capElNow), t=capOut[1];
+    const ux=cs*ce, uy=Math.sin(capElNow), uz=sn*ce;
+    vTargL.set(pWorld.x+sn*CAP_SHIFT,pWorld.y+1.15,pWorld.z-cs*CAP_SHIFT); // +camera-right shifts the hero LEFT
+    vTargP.set(vTargL.x+ux*t,vTargL.y+uy*t,vTargL.z+uz*t); }
   else if(photoMode){ // free orbit around the hero; tilting down to the horizon is what finally reveals the sky
     photoAng+=((keys.right?1:0)-(keys.left?1:0))*rdt*1.1;
-    // the seabed plane closes the world's underside, so the camera may drop right down to the waterline
-    photoPitch=clamp(photoPitch+((keys.up?1:0)-(keys.down?1:0))*rdt*0.7,0.1,1.25);
+    // 0.55 is the verified floor. Lower than this and two things break: an orthographic camera
+    // flattens the sea into a sliver at grazing angles, and the terrain's hollow column bottoms
+    // come into view. Sealing that properly would mean changing terrain generation.
+    photoPitch=clamp(photoPitch+((keys.up?1:0)-(keys.down?1:0))*rdt*0.7,0.55,1.3);
     const r=camSize*1.5, ey=camSize*1.5*photoPitch;
     vTargP.set(pWorld.x+Math.cos(photoAng)*r,pWorld.y+1.1+ey,pWorld.z+Math.sin(photoAng)*r);
     vTargL.set(pWorld.x,pWorld.y+1.1,pWorld.z); }
@@ -3697,8 +3774,8 @@ function peerColors(g,w){ const m=g.userData.mats; if(!m||!w)return;
 function addPeer(p){ if(!p||p.id==null||peers.has(p.id))return;
   const g=makeHero(); g.rotation.order='YXZ'; peerColors(g,p.wardrobe);
   g.position.set(p.x||0,p.y||0,p.z||0); scene.add(g);
-  const tag=makeLabel(p.name||'angler','#bfe8e2'); tag.scale.set(2.1,0.53,1); scene.add(tag);
-  const sub=p.title?makeLabel(p.title,'#7fdcff'):null;
+  const tag=makeLabel(p.name||'angler','#bfe8e2',false); tag.scale.set(2.1,0.53,1); scene.add(tag);
+  const sub=p.title?makeLabel(p.title,'#7fdcff',false):null;
   if(sub){ sub.scale.set(1.8,0.45,1); scene.add(sub); }
   peers.set(p.id,{g,tag,sub,name:p.name||'angler',
     x:p.x||0,y:p.y||0,z:p.z||0,tx:p.x||0,ty:p.y||0,tz:p.z||0,

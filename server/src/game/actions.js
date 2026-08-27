@@ -71,8 +71,8 @@ import {
    ============================================================================ */
 export const RATE = {
   catch: 2500,
-  mine: 900,
-  chop: 900,
+  mine: 500,
+  chop: 500,
   dig: 1200,
   sell: 250,
   craft: 400,
@@ -234,7 +234,7 @@ function ensure(state) {
   if (!state.dex || typeof state.dex !== 'object') state.dex = {};
 
   if (!state.stats || typeof state.stats !== 'object') state.stats = {};
-  for (const k of ['caught', 'mined', 'earned', 'bestWin', 'spins', 'winsCt', 'losses', 'divEarned']) {
+  for (const k of ['caught', 'mined', 'earned', 'bestWin', 'spins', 'winsCt', 'losses', 'divEarned', 'wood']) {
     state.stats[k] = int0(state.stats[k]);
   }
 
@@ -399,7 +399,9 @@ export const HANDLERS = {
 
   /* --------------------------------------------------------------------------
      catch — the client reports that the reel minigame finished; the SERVER
-     decides what was on the hook. body: { night, wet }
+     decides what was on the hook. body: { night, wet, storm? }
+     `wet` is the client's weather state ('clear'|'rain'|'storm'|'snow'|'ash');
+     a bare boolean from an older build still reads as rain.
      -------------------------------------------------------------------------- */
   catch: handler((state, body) => {
     const limit = cap(state);
@@ -430,15 +432,25 @@ export const HANDLERS = {
     /* The client may NOT choose what it digs up. A node's ore is a pure function
        of (world, node id), so the server derives it and every client agrees —
        otherwise a script would simply mine diamond (70c) every time instead of
-       coal (5c). body.type is accepted only as a legacy hint when no id is sent. */
+       coal (5c). `body.type` is never read at all; an older client that sends
+       no node id gets a blind roll on the same odds instead. */
+    /* The id must be one the client could actually have: 0 .. quarry+3 (the four
+       grass starters sit past the quarry count). Without this a negative id slips
+       past the starter-node gate — opening the full table on a coal-only isle —
+       and past realtime's id check, so the vein never records as depleted:
+       unlimited diamonds at the rate limit. */
     const rawId = body.node;
-    const hasId = rawId !== undefined && rawId !== null && Number.isFinite(+rawId);
-    const type = hasId ? oreTypeFor(state.world, +rawId) : rollOreType();
+    const nodeMax = (worldOf(state).oreN | 0) + 4;
+    const idNum = +rawId;
+    const hasId = rawId !== undefined && rawId !== null
+      && Number.isInteger(idNum) && idNum >= 0 && idNum < nodeMax;
+    if (rawId !== undefined && rawId !== null && !hasId) return err('No such ore node');
+    const type = hasId ? oreTypeFor(state.world, idNum) : rollOreType();
     if (!MINE_TYPES.includes(type)) {
       return err(`Unknown ore node — expected one of ${MINE_TYPES.join(', ')}`);
     }
     /* shared world: a vein someone already stripped stays stripped for everyone */
-    if (hasId && sharedNodes.isDown(state.world, 'node', +rawId)) {
+    if (hasId && sharedNodes.isDown(state.world, 'node', idNum)) {
       return err('that vein is already stripped');
     }
 
@@ -460,7 +472,7 @@ export const HANDLERS = {
       if (Math.random() < chance) share = tryShare(state, Math.random() < 0.5 ? 'HARB' : 'EEL');
     } else if (Math.random() < chance) share = tryShare(state, 'DIGG');
 
-    if (hasId) sharedNodes.deplete(state.world, 'node', +rawId, Date.now() + 45000);
+    if (hasId) sharedNodes.deplete(state.world, 'node', idNum, Date.now() + 45000);
 
     const result = { type, got, pearls, ores: state.ores[type],
       message: `+${got} ${oreName(type)}` };
@@ -473,8 +485,12 @@ export const HANDLERS = {
      -------------------------------------------------------------------------- */
   chop: handler((state, body) => {
     const rawTree = body && body.tree;
-    const hasTree = rawTree !== undefined && rawTree !== null && Number.isFinite(+rawTree);
-    if (hasTree && sharedNodes.isDown(state.world, 'tree', +rawTree)) {
+    const treeNum = +rawTree;
+    const treeMax = (worldOf(state).treeMax | 0) || 200;   // client caps tree count per world
+    const hasTree = rawTree !== undefined && rawTree !== null
+      && Number.isInteger(treeNum) && treeNum >= 0 && treeNum < treeMax;
+    if (rawTree !== undefined && rawTree !== null && !hasTree) return err('No such tree');
+    if (hasTree && sharedNodes.isDown(state.world, 'tree', treeNum)) {
       return err('someone already felled that tree');
     }
     const lvl = state.axeLvl;
@@ -484,11 +500,12 @@ export const HANDLERS = {
 
     state.ores.wood += got;
     state.stats.mined += got;
+    state.stats.wood = (state.stats.wood | 0) + got;   // wood bounties read this
     const pearls = addPearls(state, 1);
 
     const share = Math.random() < 0.04 ? tryShare(state, 'LUMB') : null;
 
-    if (hasTree) sharedNodes.deplete(state.world, 'tree', +rawTree, Date.now() + 35000);
+    if (hasTree) sharedNodes.deplete(state.world, 'tree', treeNum, Date.now() + 35000);
 
     const result = { got, pearls, ores: state.ores.wood, message: `+${got} Wood` };
     attachShare(result, share);
@@ -902,6 +919,12 @@ export const HANDLERS = {
       fishIdx = idxRaw;
       fish = state.bucket[fishIdx];
     } else if (wantsCoins) {
+      /* the rod gates how large a chip the table will take (game.js betCap) —
+         enforce it here too, or the gear requirement is pure decoration */
+      const stakeCap = [250, 1000, 5000, 25000, 100000][clamp(Math.floor((state.rodLvl - 1) / 2), 0, 4)];
+      if (coinRaw > stakeCap) {
+        return err(`Your rod only covers a ${stakeCap} chip — upgrade it to bet bigger`);
+      }
       if (!COIN_STAKES.includes(coinRaw)) {
         return err(`Coin stake must be one of ${COIN_STAKES.join(', ')}`);
       }
@@ -976,7 +999,11 @@ export const HANDLERS = {
      -------------------------------------------------------------------------- */
   travel: handler((state, body) => {
     const k = String(body.world || '');
-    if (!WORLD_ORDER.includes(k)) {
+    /* 'cave' (The Undermine) is reached by descending a shaft, not by sailing, so
+       it is not in WORLD_ORDER — but it is still a real world the player can be in
+       and must be buyable/travellable, or the client's reload lands somewhere the
+       server disagrees with and bounces the player straight back out. */
+    if (!WORLD_ORDER.includes(k) && !(k === 'cave' && has(WORLDS, k))) {
       return err(`Unknown island — expected one of ${WORLD_ORDER.join(', ')}`);
     }
     const w = WORLDS[k];
@@ -984,8 +1011,8 @@ export const HANDLERS = {
     if (!state.worlds.includes(k)) {
       /* a charter also needs a hull that survives the crossing — the same gate
          the client draws its Unlock button from (game.js:1932), so both sides
-         agree on which voyages are legal */
-      const need = has(BOAT_REQ, k) ? BOAT_REQ[k] | 0 : 0;
+         agree on which voyages are legal. The shaft needs no boat. */
+      const need = k === 'cave' ? 0 : (has(BOAT_REQ, k) ? BOAT_REQ[k] | 0 : 0);
       if (state.boatLvl < need) {
         return err(`Your ${BOATS[state.boatLvl].name} can't make that voyage — `
           + `build a ${BOATS[need].name} at the Harbor dock`);
