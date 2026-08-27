@@ -58,6 +58,19 @@ Everything is plain JavaScript — no build step. Open `game.js` and tweak:
 
 Save the file and refresh the browser to see changes.
 
+## 🗺️ Worlds
+
+Unlock new themed islands at the **⛵ Harbor** section of the Trader's market:
+
+| World | Cost | Theme |
+|-------|------|-------|
+| Fortune Isle | free | vivid starter island |
+| The Great Mine | ◈2,500 | grey highlands, **double ore yield**, 30 nodes |
+| Cinder Atoll | ◈8,000 | volcanic ash & black sand, fish worth ×2.2 |
+| Frostbite Isle | ◈25,000 | snow & frosted pines, fish worth ×4 |
+
+Your coins, gear, bucket and dex travel with you — sailing regenerates the island.
+
 ## ✨ What's in it
 
 - Big 96×96 procedurally generated island with a mineable stone quarry
