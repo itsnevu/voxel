@@ -1,6 +1,6 @@
 # 🎣 Reel Fortune 3D
 
-A voxel (Minecraft-style) fishing & gambling adventure on one roamable island — built with **Three.js**. Walk around a textured blocky isle, fish the shores, sell to the Trader, then risk your catch on the roulette wheel: **double your fish or lose it.**
+A voxel (Minecraft-style) fishing, mining & gambling adventure on one big roamable island — built with **Three.js**. Walk a vivid blocky isle, fish the shores, mine the quarry, play the market's rotating prices, upgrade your gear, then risk your catch on the roulette wheel: **double your fish or lose it.**
 
 ## ▶️ How to run
 
@@ -20,18 +20,19 @@ python3 -m http.server 8000
 |-----|--------|
 | **W A S D** / arrows | walk around the isle |
 | **E** | cast your line · hook the bite · interact with Trader / Casino |
-| **hold E** | reel the fish in |
-| **ESC** | close a menu / cancel fishing |
+| **hold E** | reel the fish in · mine an ore node |
+| **scroll** | zoom the camera in/out |
+| **ESC** | close a menu / cancel fishing or mining |
 
-## 🐟 The loop
+## 🐟⛏️ The loop
 
-1. **Walk to any shore** → press **E** to cast. When you see **❗ BITE**, press **E**, then **hold E** to reel it in.
-2. Fish fill your **bucket** (top-left). Rarer fish = more coins.
-3. Walk to the **TRADER** → press **E** → sell fish for coins.
-4. Walk to the **CASINO** (purple dais) → press **E** → stake a fish, bet **RED / BLACK** (×2) or **GREEN** (jackpot ×14), and **SPIN**.
+1. **Fish any shore** → press **E** to cast. On **❗ BITE**, press **E**, then **hold E** to reel it in.
+2. **Mine the quarry** — follow the dirt path to the stone mountain (see the minimap). Hold **E** on ore rocks: coal, iron, gold, diamond. Nodes respawn after a while.
+3. **Sell at the TRADER** — fish and ores. Watch the banner: every 3 minutes one category is **HOT ×1.6** and one is **SURPLUS ×0.75**. Time your sales!
+4. **Upgrade** at the Trader: a better **rod** (faster bites, rarer fish) and a better **pick** (faster mining, bonus yield).
+5. **Gamble** at the **CASINO** — stake a fish on the 3D roulette wheel, bet **RED / BLACK** (×2) or **GREEN** (jackpot ×14), and **SPIN**.
    - **Win** → the fish is worth double. Re-spin a winner to push your luck (×4, ×8…).
    - **Lose** → the eel eats it. Gone.
-5. Sell your (hopefully multiplied) fish back at the Trader.
 
 Progress **auto-saves** in your browser. There's a **wipe save** link on the start screen.
 
@@ -39,8 +40,8 @@ Progress **auto-saves** in your browser. There's a **wipe save** link on the sta
 
 ```
 ReelFortune3D/
-├── index.html      ← page, HUD, menus, styling  (open this)
-├── game.js         ← all the game code (world, fishing, roulette)
+├── index.html      ← page, HUD, minimap, menus, styling  (open this)
+├── game.js         ← all the game code (world, fishing, mining, market, roulette)
 ├── lib/three.min.js ← the Three.js engine (r128)
 └── README.md
 ```
@@ -49,21 +50,24 @@ ReelFortune3D/
 
 Everything is plain JavaScript — no build step. Open `game.js` and tweak:
 
-- **World** — `N` (island size), `fbm()` / falloff (terrain shape), `COLORS` & the `tex*()` functions (block textures).
+- **World** — `N` (island size), `fbm()` / falloff (terrain shape), `COLORS` in the `tex*()` functions (block textures).
 - **Fish** — the `TABLE` array (species, rarity, value, drop weight).
-- **Economy** — `RES` sell values, roulette `SEG` / payouts.
-- **Look** — `CAM_OFF` (camera angle), `sun` (lighting), water/grass animation in `animWater()` / `animGrass()`.
+- **Ores** — `ORE_INFO` (prices, colors), node counts in the quarry section.
+- **Economy** — `ROD_UP` / `PICK_UP` upgrade costs, `MKT_MS` market rotation, roulette `SEG` / payouts.
+- **Look** — `CAM_OFF` (camera angle), `camSize` (zoom), lights in section 1, water/grass animation.
 
 Save the file and refresh the browser to see changes.
 
 ## ✨ What's in it
 
-- Textured voxel terrain (grass / dirt / sand / stone), procedurally generated island
-- **Flowing water** — animated waves + scrolling caustics
-- **Swaying grass** tufts that move in the wind
-- Trees, rocks, a Trader stall and a glowing Casino dais with a spinning ring
-- Isometric camera, soft shadows, day-lit sky
-- Fishing minigame, market, and a Minecraft-styled roulette wheel
-- Sound effects (toggle with the ♪ button) and local auto-save
+- Big 96×96 procedurally generated island with a mineable stone quarry
+- Vivid Minecraft-style palette: checkered turf, stepped voxel trees (plus pink cherry trees), flowers, mushrooms, rocks
+- Dirt paths carved from spawn to the Trader, Casino and Mine (BFS-guaranteed walkable)
+- **Flowing water** — animated waves + scrolling caustics · swaying grass tufts
+- Trader stall with a checkered market roof, a glowing casino dais with spinning ring & lamps
+- Mining: hold-E ore nodes (coal/iron/gold/diamond) with respawns
+- Rotating market demand (HOT/SURPLUS) + rod & pickaxe upgrades
+- Minimap with POI markers, resource HUD, isometric camera with scroll zoom, soft shadows
+- A real **3D roulette wheel**, sound effects (toggle with ♪) and local auto-save
 
 Built with [Three.js](https://threejs.org) r128. Pure client-side, MIT-spirited — do whatever you like with it.
