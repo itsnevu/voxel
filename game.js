@@ -35,14 +35,14 @@ const CAM_OFF=new THREE.Vector3(48,58,48);
 function fitCamera(){ const a=window.innerWidth/window.innerHeight;
   camera.left=-camSize*a;camera.right=camSize*a;camera.top=camSize;camera.bottom=-camSize;camera.updateProjectionMatrix(); }
 fitCamera();
-addEventListener('wheel',e=>{ if(typeof marketOpen!=='undefined'&&(marketOpen||casinoOpen||invOpen))return;
+addEventListener('wheel',e=>{ if(typeof marketOpen!=='undefined'&&(marketOpen||casinoOpen||invOpen||harborOpen))return;
   camSize=clamp(camSize+Math.sign(e.deltaY)*1.1,7,17); fitCamera(); },{passive:true});
 
 const hemiL=new THREE.HemisphereLight(0xffffff,0x8fb060,0.62); scene.add(hemiL);
 const ambL=new THREE.AmbientLight(0xd6ecf2,0.16); scene.add(ambL);
 const sun=new THREE.DirectionalLight(0xffefcf,0.55);
 sun.position.set(60,100,44); sun.castShadow=true;
-sun.shadow.mapSize.set(4096,4096);
+sun.shadow.mapSize.set(2048,2048); // 4096 cost ~4x GPU + 67MB VRAM for no visible gain at iso zoom
 sun.shadow.camera.near=1; sun.shadow.camera.far=320;
 sun.shadow.camera.left=-60; sun.shadow.camera.right=60; sun.shadow.camera.top=60; sun.shadow.camera.bottom=-60;
 sun.shadow.bias=-0.0005;
@@ -52,7 +52,7 @@ scene.add(sun); scene.add(sun.target);
    1b. WORLDS — themed islands unlocked at the Harbor (travel = regenerate)
    ======================================================================== */
 const WORLDS={
-  isle:{name:'Fortune Isle',sub:'world 1',cost:0,seed:0,hMul:1,stoneH:6,fishMul:1,oreN:14,oreYield:1,
+  isle:{name:'Fortune Isle',sub:'world 1 · fishing haven',cost:0,seed:0,hMul:1,stoneH:6,fishMul:1,oreN:0,oreYield:1,
     sky:0x6fd6f6,water:0x2fc0e8,pink:0.16,treeMax:90,
     grass:['#4fc32f','#46b527',['#5bd83b','#3da521','#6ae94a','#43ae24']],
     leaf:['#3aa626',['#2f9420','#48bb31','#279016','#54cb3c']],
@@ -70,12 +70,18 @@ const WORLDS={
     leaf:['#3d3a38',['#4a4644','#332f2d','#57524f']],
     sand:['#5e5450',['#524844','#6a605c','#463e3a']],
     stone:['#4e4a48',['#5a5654','#423e3c','#666260']]},
-  frost:{name:'Frostbite Isle',sub:'world 4 · frozen riches',cost:25000,seed:311,hMul:1.2,stoneH:6,fishMul:4,oreN:26,oreYield:1,
+  frost:{name:'Frostbite Isle',sub:'world 4 · frozen riches',cost:15000,seed:311,hMul:1.2,stoneH:6,fishMul:4,oreN:26,oreYield:1,
     sky:0xbfe6f5,water:0x7fd4e8,pink:0,treeMax:60,
     grass:['#e8f2f5','#dcebf0',['#f5fbfd','#cfe2e8','#ffffff','#c2d8e0']],
     leaf:['#9fd0c8',['#8fc2ba','#b2ded6','#7fb3ab']],
     sand:['#d8e4e8',['#cbd9de','#e6eff2','#bccdd3']],
-    stone:['#a8b4bc',['#98a4ac','#b6c2ca','#8a969e']]}};
+    stone:['#a8b4bc',['#98a4ac','#b6c2ca','#8a969e']]},
+  cave:{name:'The Undermine',sub:'the mining cave',cost:0,seed:777,hMul:1.15,stoneH:5,fishMul:2,oreN:40,oreYield:1,cave:true,
+    sky:0x0b0e14,water:0x1e6f7a,pink:0,treeMax:16,
+    grass:['#3f5a4c','#37503f',['#4a685a','#2f4638','#557767','#283d30']],
+    leaf:['#3fae9c',['#35998a','#4cc4b0','#2b8578','#5cd8c4']],
+    sand:['#5a5248',['#4e463c','#665e54','#423a30']],
+    stone:['#3c4148',['#464b52','#32373e','#50555c']]}};
 const WORLD_ORDER=['isle','mine','volcano','frost'];
 let worldKey='isle'; try{ const wk=localStorage.getItem('reelfortune3d-world'); if(wk&&WORLDS[wk])worldKey=wk; }catch(e){}
 const WORLD=WORLDS[worldKey];
@@ -168,7 +174,8 @@ function runBFS(){ const cameFrom=new Int32Array(N*N).fill(-2); const q=[spawnCe
 let cameFrom=runBFS();
 const reachable=(i,j)=>cameFrom[i*N+j]!==-2;
 
-// guarantee a mineable quarry: if no stone is reachable, raise a plateau on a far reachable grass cell
+// guarantee reachable stone: every world needs a mine-shaft site (even ore-free isles,
+// where the shaft is the door down into The Undermine)
 { let hasStone=false;
   for(let i=0;i<N&&!hasStone;i++)for(let j=0;j<N;j++) if(heightMap[i][j]>=WORLD.stoneH&&reachable(i,j)){hasStone=true;break;}
   if(!hasStone){ let cand=null,bd=0;
@@ -190,10 +197,42 @@ function findCellNear(cx,cj,minR,maxR,extra){ let cand=null,bd=1e9;
     if(extra&&!extra(i,j))continue;
     const d=Math.hypot(i-cx,j-cj); if(d>=minR&&d<=maxR&&d<bd){bd=d;cand=[i,j,h];} }
   return cand; }
-const traderCell=findCellNear(spawnCell[0],spawnCell[1],7,12)||spawnCell; usedCells.add(keyOf(traderCell[0],traderCell[1]));
-const casinoCell=findCellNear(spawnCell[0],spawnCell[1],11,20,(i,j)=>Math.hypot(i-traderCell[0],j-traderCell[1])>=9)
+// spread the landmarks: distance bands + angular separation so they fan out across the isle
+const angFrom=(i,j)=>Math.atan2(j-spawnCell[1],i-spawnCell[0]);
+const angDiff=(a,b)=>{ let d=Math.abs(a-b)%TAU; return d>Math.PI?TAU-d:d; };
+const traderCell=findCellNear(spawnCell[0],spawnCell[1],10,16)||findCellNear(spawnCell[0],spawnCell[1],6,20)||spawnCell;
+usedCells.add(keyOf(traderCell[0],traderCell[1]));
+const traderAng=angFrom(traderCell[0],traderCell[1]);
+const casinoCell=findCellNear(spawnCell[0],spawnCell[1],18,30,(i,j)=>angDiff(angFrom(i,j),traderAng)>=1.5)
+  ||findCellNear(spawnCell[0],spawnCell[1],14,34,(i,j)=>Math.hypot(i-traderCell[0],j-traderCell[1])>=12)
   ||findCellNear(spawnCell[0],spawnCell[1],9,26)||spawnCell;
 usedCells.add(keyOf(casinoCell[0],casinoCell[1]));
+const casinoAng=angFrom(casinoCell[0],casinoCell[1]);
+const portalCell=findCellNear(spawnCell[0],spawnCell[1],16,30,(i,j)=>angDiff(angFrom(i,j),traderAng)>=1.4&&angDiff(angFrom(i,j),casinoAng)>=1.4)
+  ||findCellNear(spawnCell[0],spawnCell[1],12,32,(i,j)=>Math.hypot(i-traderCell[0],j-traderCell[1])>=10&&Math.hypot(i-casinoCell[0],j-casinoCell[1])>=10)
+  ||findCellNear(spawnCell[0],spawnCell[1],6,24)||null;
+if(portalCell)usedCells.add(keyOf(portalCell[0],portalCell[1]));
+
+// harbor dock: a reachable sand cell with a clear 3-wide water channel running
+// toward +x or +z (the iso camera looks from +x/+z, so those piers stay visible)
+let harborCell=null,harborDir=null;
+{ let bestScore=-1;
+  const isWaterCell=(i,j)=>i>=1&&j>=1&&i<N-1&&j<N-1&&heightMap[i][j]<=2;
+  for(let i=2;i<N-2;i++)for(let j=2;j<N-2;j++){
+    if(heightMap[i][j]!==3||!reachable(i,j)||usedCells.has(keyOf(i,j)))continue;
+    const dSp=Math.hypot(i-spawnCell[0],j-spawnCell[1]); if(dSp<6||dSp>36)continue;
+    if(Math.hypot(i-traderCell[0],j-traderCell[1])<7)continue;
+    if(Math.hypot(i-casinoCell[0],j-casinoCell[1])<7)continue;
+    if(portalCell&&Math.hypot(i-portalCell[0],j-portalCell[1])<7)continue;
+    for(const [dx,dz] of [[1,0],[0,1],[-1,0],[0,-1]]){
+      let wide=0; // channel length where boat + pier both fit (3 cells wide)
+      for(let k=1;k<=6;k++){ let ok=true;
+        for(let s=-1;s<=1;s++){ if(!isWaterCell(i+dx*k-dz*s,j+dz*k+dx*s)){ok=false;break;} }
+        if(!ok)break; wide=k; }
+      if(wide<4)continue;
+      const score=wide*((dx>0||dz>0)?1.6:1)+(20-Math.abs(dSp-13))*0.06;
+      if(score>bestScore){bestScore=score;harborCell=[i,j,3];harborDir=[dx,dz];} } }
+  if(harborCell)usedCells.add(keyOf(harborCell[0],harborCell[1])); }
 
 // mine heart: reachable stone cell with the most stone around it
 let mineCell=null; { let bs=-1;
@@ -211,6 +250,8 @@ function carvePath(ti,tj){ let k=ti*N+tj;
       if(oi>=0&&oj>=0&&oi<N&&oj<N&&heightMap[oi][oj]>=3&&!usedCells.has(keyOf(oi,oj)))pathSet.add(keyOf(oi,oj)); }
     k=cameFrom[k]; } }
 carvePath(traderCell[0],traderCell[1]); carvePath(casinoCell[0],casinoCell[1]);
+if(portalCell)carvePath(portalCell[0],portalCell[1]);
+if(harborCell)carvePath(harborCell[0],harborCell[1]);
 if(mineCell&&reachable(mineCell[0],mineCell[1]))carvePath(mineCell[0],mineCell[1]);
 
 // partition cells by render type
@@ -256,12 +297,14 @@ water.rotation.x=-Math.PI/2; water.position.set(0,WATER_TOP,0);
 scene.add(water);
 const wPos=waterGeo.attributes.position, wBaseX=new Float32Array(wPos.count), wBaseY=new Float32Array(wPos.count);
 for(let i=0;i<wPos.count;i++){ wBaseX[i]=wPos.getX(i); wBaseY[i]=wPos.getY(i); }
+let waterAlt=0;
 function animWater(t){
+  TEX.water.offset.x=(t*0.015)%1; TEX.water.offset.y=(t*0.01)%1;
+  if((waterAlt^=1))return; // vertex waves at 30Hz — invisible difference, halves the upload cost
   for(let i=0;i<wPos.count;i++){ const x=wBaseX[i],y=wBaseY[i];
     const z=Math.sin(x*0.5+t*1.3)*0.11+Math.sin(y*0.4-t*1.1)*0.09+Math.sin((x+y)*0.3+t*0.7)*0.05;
     wPos.setZ(i,z); }
   wPos.needsUpdate=true;
-  TEX.water.offset.x=(t*0.015)%1; TEX.water.offset.y=(t*0.01)%1;
 }
 
 /* ========================================================================
@@ -269,7 +312,7 @@ function animWater(t){
    ======================================================================== */
 const decorUsed=new Set();
 const nearAny=(i,j,pts,gap)=>pts.some(p=>Math.hypot(p[0]-i,p[1]-j)<gap);
-const landmarks=[spawnCell,traderCell,casinoCell]; if(mineCell)landmarks.push(mineCell);
+const landmarks=[spawnCell,traderCell,casinoCell]; if(mineCell)landmarks.push(mineCell); if(portalCell)landmarks.push(portalCell); if(harborCell)landmarks.push(harborCell);
 function decorOK(i,j,gap){ return !usedCells.has(keyOf(i,j))&&!decorUsed.has(keyOf(i,j))&&!pathSet.has(keyOf(i,j))&&!nearAny(i,j,landmarks,gap); }
 
 // tree layouts -> instanced trunk cubes + leaf cubes (green / pink)
@@ -540,9 +583,175 @@ setBallPocket(0);
   banner.position.set(0,2.55,0); banner.scale.set(3.1,0.78,1); gate.add(banner);
   gate.position.set(gx,gy,gz); gate.rotation.y=Math.atan2(ux,uz); scene.add(gate); }
 
+// --- island portal: an obsidian arch with a swirling rift — step through to hop isles ---
+let PORTAL_POS=null,portalSwirl=null,portalCore=null; const portalBits=[];
+if(portalCell){
+  const p=new THREE.Group(); const obsMat=new THREE.MeshLambertMaterial({color:0x241b38});
+  for(const s of[-1,1]){
+    const base=texturedBox(0.8,0.5,0.8,TEX.stone); base.position.set(s*1.25,0.25,0); base.castShadow=true; p.add(base);
+    const pil=new THREE.Mesh(new THREE.BoxGeometry(0.55,2.9,0.55),obsMat); pil.position.set(s*1.25,1.95,0); pil.castShadow=true; p.add(pil);
+    const gl=new THREE.Mesh(new THREE.BoxGeometry(0.3,0.3,0.3),new THREE.MeshLambertMaterial({color:0xc490ff,emissive:0x8a3cff,emissiveIntensity:0.9}));
+    gl.position.set(s*1.25,3.62,0); p.add(gl); lamps.push(gl); }
+  const top=new THREE.Mesh(new THREE.BoxGeometry(3.05,0.55,0.55),obsMat); top.position.y=3.35; top.castShadow=true; p.add(top);
+  portalCore=new THREE.Mesh(new THREE.PlaneGeometry(1.85,2.55),
+    new THREE.MeshLambertMaterial({color:0x120a22,emissive:0x5b2bd8,emissiveIntensity:0.55,transparent:true,opacity:0.92,side:THREE.DoubleSide}));
+  portalCore.position.y=1.82; p.add(portalCore);
+  { const sc=px(64),sg=sc.getContext('2d'); sg.translate(32,32);
+    for(let a=0;a<70;a++){ const t=a/70,r2=2+t*27,ang=t*TAU*2.3;
+      sg.fillStyle=`rgba(${(170+t*70)|0},${(110+t*120)|0},255,${(0.9-t*0.8).toFixed(2)})`;
+      sg.fillRect(Math.cos(ang)*r2-2,Math.sin(ang)*r2-2,4,4); }
+    portalSwirl=new THREE.Mesh(new THREE.PlaneGeometry(1.6,1.6),
+      new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(sc),transparent:true,depthWrite:false,side:THREE.DoubleSide}));
+    portalSwirl.position.set(0,1.82,0.04); p.add(portalSwirl); }
+  for(let k=0;k<7;k++){ const b=new THREE.Mesh(new THREE.BoxGeometry(0.09,0.09,0.09),
+    new THREE.MeshLambertMaterial({color:0xc9a5ff,emissive:0x9a5cff,emissiveIntensity:0.9}));
+    b.userData={ph:k/7*TAU,r:rand(1.0,1.5),sp:rand(0.5,1.2)}; p.add(b); portalBits.push(b); }
+  p.position.set(portalCell[0]-HALF,portalCell[2],portalCell[1]-HALF); p.rotation.y=Math.PI/4; scene.add(p);
+  PORTAL_POS=p.position.clone();
+  const pl=makeLabel('PORTAL','#c490ff'); pl.position.copy(PORTAL_POS).add(new THREE.Vector3(0,4.5,0)); scene.add(pl); }
+
+/* --- HARBOR DOCK: a timber pier over the shallows + the player's boat.
+       Five hand-built voxel ships, raft → galleon, swapped in on upgrade. --- */
+function makeBoat(lvl){
+  const g=new THREE.Group(); g.userData={sails:[],flags:[],lanterns:[]};
+  const woodM=new THREE.MeshLambertMaterial({map:TEX.wood}), barkM=new THREE.MeshLambertMaterial({map:TEX.bark});
+  const tealM=new THREE.MeshLambertMaterial({color:0x2ba394}), whiteM=new THREE.MeshLambertMaterial({color:0xf2ede2});
+  const darkM=new THREE.MeshLambertMaterial({color:0x4a3520}), ropeM=new THREE.MeshLambertMaterial({color:0x2b2320});
+  const sailM=new THREE.MeshLambertMaterial({color:0xf4efe0,side:THREE.DoubleSide});
+  const goldM=new THREE.MeshLambertMaterial({color:0xffd24f,emissive:0x8a6a1e,emissiveIntensity:0.3});
+  const roseM=new THREE.MeshLambertMaterial({color:0xd8483f});
+  const V=(m,x,y,z,sx,sy,sz,par)=>{const b=new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz),m);b.position.set(x,y,z);b.castShadow=true;(par||g).add(b);return b;};
+  const flag=(m,x,y,z,sx,sy)=>{const f=V(m,x,y,z,sx,sy,0.035);f.userData={y0:0};g.userData.flags.push(f);return f;};
+  const sail=(x,y,z,sx,sy,sz)=>{const s=V(sailM,x,y,z,sx,sy,sz);s.userData={y0:0};g.userData.sails.push(s);return s;};
+  const lantern=(x,y,z,s)=>{const l=new THREE.Mesh(new THREE.BoxGeometry(s,s,s),
+    new THREE.MeshLambertMaterial({color:0xffd27a,emissive:0xffa235,emissiveIntensity:0.9}));
+    l.position.set(x,y,z); g.add(l); g.userData.lanterns.push(l); return l;};
+
+  if(lvl<=0){ // ── Lv0 · DRIFTWOOD RAFT — lashed logs & a prayer
+    for(let k=0;k<4;k++)V(barkM,(k%2?0.05:-0.03),0.07,(k-1.5)*0.33,1.55+(k%2?0.18:0),0.22,0.29);
+    V(woodM,-0.52,0.23,0,0.16,0.07,1.34); V(woodM,0.52,0.23,0,0.16,0.07,1.34);
+    V(ropeM,-0.52,0.23,0.52,0.2,0.09,0.1); V(ropeM,0.52,0.23,-0.52,0.2,0.09,0.1); // lashings
+    V(barkM,-0.62,0.6,-0.4,0.09,0.85,0.09);
+    flag(roseM,-0.44,0.86,-0.4,0.3,0.2).userData.y0=0;
+    { const pad=new THREE.Group(); pad.position.set(0.3,0.32,0.3); pad.rotation.y=0.55; g.add(pad);
+      V(barkM,0,0,0,0.9,0.06,0.07,pad); V(woodM,0.52,0,0,0.24,0.04,0.16,pad); } // paddle
+    V(darkM,0.55,0.31,-0.32,0.2,0.13,0.2); // rope coil
+  } else if(lvl===1){ // ── Lv1 · CORK DINGHY — a real hull at last
+    V(woodM,0,0.14,0,1.9,0.2,0.84);
+    V(woodM,0,0.42,0.47,1.9,0.36,0.1); V(woodM,0,0.42,-0.47,1.9,0.36,0.1);
+    V(woodM,-0.98,0.42,0,0.13,0.36,0.98);
+    V(woodM,1.05,0.42,0,0.42,0.36,0.58); V(woodM,1.3,0.47,0,0.2,0.28,0.26); // stepped bow
+    V(darkM,0.05,0.5,0,0.46,0.07,0.86); V(darkM,-0.62,0.5,0,0.32,0.07,0.86); // benches
+    for(const s of[-1,1]){ const oar=new THREE.Group(); oar.position.set(0.28,0.56,s*0.34); oar.rotation.set(s*0.32,s*0.5,0); g.add(oar);
+      V(barkM,0,0,0,0.07,0.07,1.5,oar); V(woodM,0,0,s*0.82,0.05,0.2,0.36,oar); }
+    V(goldM,1.22,0.62,0,0.09,0.07,0.12); // bow cleat
+    V(darkM,-0.78,0.56,0.22,0.18,0.12,0.18); // rope coil
+  } else if(lvl===2){ // ── Lv2 · TEAL SLOOP — painted hull, single proud sail
+    V(tealM,0,0.16,0,2.5,0.26,0.94);
+    V(whiteM,0,0.31,0,2.54,0.07,0.99); // waterline stripe
+    V(tealM,0,0.49,0.5,2.5,0.3,0.11); V(tealM,0,0.49,-0.5,2.5,0.3,0.11); V(tealM,-1.25,0.49,0,0.13,0.3,1.02);
+    V(tealM,1.36,0.4,0,0.5,0.44,0.58); V(tealM,1.66,0.46,0,0.2,0.3,0.28); // pointed bow
+    V(woodM,0,0.62,0,2.32,0.07,0.88); // deck
+    V(barkM,0.35,1.92,0,0.11,2.7,0.11); // mast
+    V(barkM,-0.38,0.9,0,1.42,0.08,0.08); // boom
+    sail(-0.4,1.5,0,1.32,1.08,0.05); sail(-0.28,2.28,0,0.84,0.5,0.05); // main, gaff-cut
+    sail(1.0,1.55,0,0.72,0.95,0.04); // jib
+    flag(tealM,0.55,3.36,0,0.34,0.18);
+    { const til=V(woodM,-1.12,0.76,0,0.42,0.07,0.09); til.rotation.y=0.35; } // tiller
+    V(woodM,0.75,0.78,0.25,0.32,0.26,0.32); // cargo crate
+    V(goldM,1.72,0.58,0,0.09,0.09,0.09);
+  } else if(lvl===3){ // ── Lv3 · STORM TRAWLER — iron-clad workhorse with a crane
+    const hullM=new THREE.MeshLambertMaterial({color:0x3e5a6e}), roofM=new THREE.MeshLambertMaterial({color:0x2b3a44});
+    V(hullM,0,0.18,0,3.1,0.34,1.12);
+    V(roseM,0,0.38,0,3.14,0.08,1.17); // red waterline
+    V(hullM,0,0.6,0.58,3.1,0.34,0.13); V(hullM,0,0.6,-0.58,3.1,0.34,0.13); V(hullM,-1.55,0.6,0,0.14,0.34,1.2);
+    V(hullM,1.72,0.5,0,0.52,0.6,0.78); V(hullM,2.06,0.56,0,0.24,0.44,0.4); // bow
+    V(woodM,0,0.76,0,2.94,0.08,1.06); // deck
+    V(whiteM,0.62,1.2,0,0.95,0.8,0.92); // wheelhouse
+    { const win=new THREE.MeshLambertMaterial({color:0x0c2a30,emissive:0x39d7c4,emissiveIntensity:0.5});
+      V(win,1.11,1.34,0,0.05,0.3,0.66); V(win,0.62,1.34,0.48,0.6,0.3,0.05); V(win,0.62,1.34,-0.48,0.6,0.3,0.05); }
+    V(roofM,0.62,1.66,0,1.1,0.12,1.06); // roof
+    V(roofM,0.3,1.95,0,0.2,0.5,0.2); V(goldM,0.3,2.16,0,0.23,0.09,0.23); // funnel + gold band
+    V(barkM,-0.65,1.55,0,0.1,1.55,0.1); // crane mast
+    { const boom=V(barkM,-1.18,1.85,0,1.15,0.08,0.08); boom.rotation.z=0.45;
+      V(ropeM,-1.62,1.5,0,0.035,0.9,0.035); V(darkM,-1.62,0.98,0,0.42,0.34,0.34); } // rope + hauled net crate
+    for(const s of[-1,1]){ V(roseM,0.15,0.52,s*0.68,0.18,0.18,0.09); V(roseM,-0.85,0.52,s*0.68,0.18,0.18,0.09); } // buoys
+    for(const s of[-1,1])for(let k=0;k<4;k++)V(roofM,-1.25+k*0.8,0.92,s*0.55,0.05,0.24,0.05); // railing posts
+    V(darkM,-1.15,0.92,0.25,0.36,0.24,0.36); V(darkM,-1.15,0.92,-0.28,0.3,0.2,0.3); // catch crates
+    lantern(2.1,0.92,0,0.16); lantern(-0.65,2.4,0,0.14);
+    flag(whiteM,-0.5,2.28,0,0.3,0.16);
+  } else { // ── Lv4 · GILDED GALLEON — pride of the archipelago
+    const timM=new THREE.MeshLambertMaterial({color:0x6b4a26}), tim2=new THREE.MeshLambertMaterial({color:0x59391c});
+    V(timM,0,0.2,0,4.1,0.4,1.28);
+    V(goldM,0,0.44,0,4.14,0.07,1.33); // gilded waterline
+    V(tim2,0,0.66,0.66,4.1,0.5,0.15); V(tim2,0,0.66,-0.66,4.1,0.5,0.15); V(tim2,-2.05,0.66,0,0.16,0.5,1.32);
+    V(timM,2.2,0.56,0,0.5,0.62,0.86); V(timM,2.56,0.68,0,0.3,0.44,0.48); // bow rise
+    { const bs=V(barkM,2.98,0.98,0,0.95,0.1,0.1); bs.rotation.z=0.32; } // bowsprit
+    V(goldM,2.64,0.95,0,0.24,0.17,0.15); V(goldM,2.8,1.02,0,0.1,0.1,0.09); // gold fish figurehead
+    V(woodM,0.35,0.9,0,3.25,0.08,1.12); // main deck
+    V(timM,-1.5,1.12,0,1.15,0.48,1.28); V(woodM,-1.5,1.38,0,1.2,0.07,1.32); // stern castle 1
+    V(timM,-1.78,1.6,0,0.62,0.4,1.28); V(woodM,-1.78,1.82,0,0.66,0.07,1.32); // stern castle 2
+    for(const s of[-1,1])for(let k=0;k<3;k++)V(goldM,-1.15-k*0.44,1.56,s*0.6,0.05,0.3,0.05); // gilt railing
+    lantern(-2.16,1.72,0,0.17); // great stern lantern
+    { const mg=new THREE.Group(); mg.position.set(0.5,0,0); mg.rotation.y=0.5; g.add(mg); // main mast, yards braced at an angle so the sails read from every camera side
+      V(barkM,0,2.7,0,0.13,3.6,0.13,mg);
+      V(barkM,0,3.5,0,0.08,0.08,1.9,mg); V(barkM,0,2.2,0,0.08,0.08,1.95,mg);
+      const s1=V(sailM,0,2.85,0,0.07,1.2,1.78,mg), s2=V(sailM,0,3.86,0,0.07,0.62,1.2,mg);
+      s1.userData={y0:0}; s2.userData={y0:0}; g.userData.sails.push(s1,s2);
+      V(darkM,0,4.42,0,0.36,0.2,0.36,mg); // crow's nest
+      const f1=V(tealM,0.22,4.68,0,0.4,0.2,0.035,mg); f1.userData={y0:0}; g.userData.flags.push(f1); }
+    { const zg=new THREE.Group(); zg.position.set(-0.85,0,0); zg.rotation.y=0.35; g.add(zg); // mizzen mast
+      V(barkM,0,2.3,0,0.11,2.8,0.11,zg);
+      V(barkM,0,3.1,0,0.07,0.07,1.5,zg);
+      const s3=V(sailM,0,2.62,0,0.07,0.9,1.42,zg); s3.userData={y0:0}; g.userData.sails.push(s3);
+      const f2=V(roseM,0.19,3.82,0,0.3,0.16,0.035,zg); f2.userData={y0:0}; g.userData.flags.push(f2); }
+    for(const s of[-1,1])for(let k=0;k<5;k++)V(goldM,-1.7+k*0.85,0.95,s*0.68,0.09,0.09,0.05); // gunwale studs
+    V(darkM,1.3,1.02,0.3,0.4,0.3,0.4); V(darkM,-0.2,1.0,-0.35,0.34,0.26,0.34); // deck cargo
+  }
+  return g; }
+function animBoat(b,t){ if(!b)return; const u=b.userData; if(!u)return;
+  if(u.flags)for(let i=0;i<u.flags.length;i++){const f=u.flags[i];f.rotation.y=(f.userData.y0||0)+Math.sin(t*3.1+i*1.4)*0.4;}
+  if(u.sails)for(let i=0;i<u.sails.length;i++){const s=u.sails[i];s.rotation.y=((s.userData&&s.userData.y0)||0)+Math.sin(t*1.5+i)*0.035;}
+  if(u.lanterns)for(let i=0;i<u.lanterns.length;i++)u.lanterns[i].material.emissiveIntensity=0.7+Math.sin(t*3+i*2)*0.3; }
+
+let DOCK=null,dockBoat=null;
+if(harborCell){
+  const ux=harborDir[0],uz=harborDir[1],px_=-uz,pz_=ux,AX=Math.abs(ux);
+  const hx=harborCell[0]-HALF,hz=harborCell[1]-HALF,DY=3.02;
+  const at=(t,s)=>({x:hx+ux*t+px_*s,z:hz+uz*t+pz_*s});
+  const pier=new THREE.Group();
+  for(let t=0.55;t<=4.95;t+=0.55){ const p=at(t,0);
+    const pl2=texturedBox(AX?0.5:1.18,0.09,AX?1.18:0.5,TEX.wood);
+    pl2.position.set(p.x,DY,p.z); pl2.castShadow=true; pl2.receiveShadow=true; pier.add(pl2); }
+  for(const s of[-1,1]){ const p=at(2.75,s*0.62); // low side rails
+    const r=texturedBox(AX?4.2:0.09,0.07,AX?0.09:4.2,TEX.wood); r.position.set(p.x,DY+0.34,p.z); r.castShadow=true; pier.add(r); }
+  for(const t of[1.15,2.5,3.85,4.95])for(const s of[-1,1]){ const p=at(t,s*0.58); // posts to the seabed, bollards at the head
+    const hb=Math.max(0.4,heightAt(p.x,p.z)-0.2), top=DY+(t>4.5?0.42:0.22);
+    const post=texturedBox(0.17,top-hb,0.17,TEX.bark); post.position.set(p.x,(top+hb)/2,p.z); post.castShadow=true; pier.add(post); }
+  { const p=at(4.95,-0.58); // lantern on the pier head
+    const lp=texturedBox(0.12,0.95,0.12,TEX.bark); lp.position.set(p.x,DY+0.85,p.z); lp.castShadow=true; pier.add(lp);
+    const glow=new THREE.Mesh(new THREE.BoxGeometry(0.26,0.26,0.26),new THREE.MeshLambertMaterial({color:0xffd27a,emissive:0xffa235,emissiveIntensity:0.9}));
+    glow.position.set(p.x,DY+1.42,p.z); pier.add(glow); lamps.push(glow); }
+  { const p=at(-0.5,0.72); const crate=texturedBox(0.56,0.56,0.56,TEX.wood); crate.position.set(p.x,DY+0.28,p.z); crate.castShadow=true; pier.add(crate);
+    const c2=texturedBox(0.44,0.44,0.44,TEX.wood); c2.position.set(p.x-0.1,DY+0.78,p.z+0.06); c2.rotation.y=0.4; c2.castShadow=true; pier.add(c2);
+    const p2=at(-0.55,-0.65); const barrel=texturedBox(0.4,0.62,0.4,TEX.bark); barrel.position.set(p2.x,DY+0.31,p2.z); barrel.castShadow=true; pier.add(barrel); }
+  scene.add(pier);
+  DOCK={boat:at(3.3,1.18), yaw:AX?(ux>0?0:Math.PI):(uz>0?-Math.PI/2:Math.PI/2), base:at(0,0), head:at(4.95,0.58)};
+  { const b=DOCK.head, m=at(4.0,0.95); // mooring rope, gently sagging
+    const rg=new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(b.x,DY+0.4,b.z), new THREE.Vector3((b.x+m.x)/2,WATER_TOP+0.42,(b.z+m.z)/2), new THREE.Vector3(m.x,WATER_TOP+0.32,m.z)]);
+    const rope=new THREE.Line(rg,new THREE.LineBasicMaterial({color:0x2b2320,transparent:true,opacity:0.85})); scene.add(rope); }
+  const hLabel=makeLabel('HARBOR','#39d7c4'); hLabel.position.set(at(2.2,0).x,DY+3.1,at(2.2,0).z); scene.add(hLabel); }
+const HARBOR_POS=DOCK?new THREE.Vector3(DOCK.base.x,3,DOCK.base.z):null;
+function rebuildDockBoat(){ if(!DOCK)return;
+  if(dockBoat){ dockBoat.traverse(o=>{if(o.geometry)o.geometry.dispose();if(o.material&&o.material.dispose)o.material.dispose();}); scene.remove(dockBoat); }
+  dockBoat=makeBoat(state.boatLvl);
+  dockBoat.position.set(DOCK.boat.x,WATER_TOP+0.02,DOCK.boat.z);
+  dockBoat.rotation.y=DOCK.yaw; scene.add(dockBoat); }
+
 // --- quarry: ore nodes on the reachable stone ---
 const ORE_INFO={
-  wood:   {name:'Wood',   price:3,  color:0x9a6b3a, glow:false, dot:'#9a6b3a'},
+  wood:   {name:'Wood',   price:6,  color:0x9a6b3a, glow:false, dot:'#9a6b3a'},
   coal:   {name:'Coal',   price:5,  color:0x2e3338, glow:false, dot:'#565e66'},
   iron:   {name:'Iron',   price:12, color:0xd8cfc4, glow:false, dot:'#d8cfc4'},
   gold:   {name:'Gold',   price:28, color:0xffd24f, glow:true,  dot:'#ffd24f'},
@@ -558,16 +767,17 @@ function makeOreNode(type){ const g=new THREE.Group(); const info=ORE_INFO[type]
     chip.rotation.y=rand(0,TAU); g.add(chip); }
   return g; }
 const oreNodes=[];
-{ const stoneCand=[]; for(let i=0;i<N;i++)for(let j=0;j<N;j++)
-    if(heightMap[i][j]>=WORLD.stoneH&&reachable(i,j)&&!usedCells.has(keyOf(i,j)))stoneCand.push([i,j,heightMap[i][j]]);
-  stoneCand.sort(()=>Math.random()-0.5);
-  const pts=[];
-  for(const [i,j,h] of stoneCand){ if(oreNodes.length>=WORLD.oreN)break;
-    if(nearAny(i,j,pts,2.3))continue; pts.push([i,j]);
-    const type=rollOreType(), mesh=makeOreNode(type);
-    mesh.position.set(i-HALF,h,j-HALF); scene.add(mesh);
-    oreNodes.push({x:i-HALF,z:j-HALF,y:h,type,mesh,alive:true,respawnAt:0}); }
-  // starter nodes on grass so mining is discoverable early (coal/iron only)
+{ const pts=[];
+  if(WORLD.oreN>0){ const stoneCand=[]; for(let i=0;i<N;i++)for(let j=0;j<N;j++)
+      if(heightMap[i][j]>=WORLD.stoneH&&reachable(i,j)&&!usedCells.has(keyOf(i,j)))stoneCand.push([i,j,heightMap[i][j]]);
+    stoneCand.sort(()=>Math.random()-0.5);
+    for(const [i,j,h] of stoneCand){ if(oreNodes.length>=WORLD.oreN)break;
+      if(nearAny(i,j,pts,2.3))continue; pts.push([i,j]);
+      const type=rollOreType(), mesh=makeOreNode(type);
+      mesh.position.set(i-HALF,h,j-HALF); scene.add(mesh);
+      oreNodes.push({x:i-HALF,z:j-HALF,y:h,type,mesh,alive:true,respawnAt:0}); } }
+  // starter nodes on grass — ALWAYS, even on mine-less isles: guarantees an early coal/iron
+  // source so L3 tool crafting ({coal}) is never impossible in world 1
   const sh2=grassCells.slice().sort(()=>Math.random()-0.5);
   for(const [i,j,h] of sh2){ if(oreNodes.length>=WORLD.oreN+4)break;
     if(!decorOK(i,j,3)||nearAny(i,j,treePts,1.6)||nearAny(i,j,pts,4))continue;
@@ -577,27 +787,30 @@ const oreNodes=[];
     mesh.position.set(i-HALF,h,j-HALF); scene.add(mesh);
     oreNodes.push({x:i-HALF,z:j-HALF,y:h,type,mesh,alive:true,respawnAt:0}); } }
 // --- the mine itself: shaft mouth, hoist headframe, cart on rails, timber supports ---
-const mineProps={cart:null,z0:0,z1:0,wheel:null};
+const mineProps={cart:null,z0:0,z1:0,wheel:null,door:null};
 if(mineCell){
   const [mi,mj]=mineCell, mh=heightMap[mi][mj];
   const oreNear=(i,j,r)=>oreNodes.some(n=>Math.hypot(n.x-(i-HALF),n.z-(j-HALF))<r);
   const stoneOK=(i,j)=>i>=0&&j>=0&&i<N&&j<N&&heightMap[i][j]>=WORLD.stoneH;
   const steel=new THREE.MeshLambertMaterial({color:0x555b63});
   const propPts=[];
-  // the iso camera always looks from +x/+z, so the shaft mouth must face one of
-  // those two axes to ever be seen — pick whichever is closer to the arrival path
-  const fdx=spawnCell[0]-mi, fdz=spawnCell[1]-mj;
-  const useX=fdx>=fdz;
-  const fx2=useX?1:0, fz2=useX?0:1;
-  const yaw=Math.atan2(fx2,fz2);
   let ei=mi,ej=mj,eh=mh;
   if(oreNear(mi,mj,1.4)){ let bd=1e9;
     for(let i=mi-3;i<=mi+3;i++)for(let j=mj-3;j<=mj+3;j++){ if(!stoneOK(i,j)||oreNear(i,j,1.35))continue;
       const d=Math.hypot(i-mi,j-mj); if(d<bd){bd=d;ei=i;ej=j;} }
     eh=heightMap[ei][ej]; }
   propPts.push([ei,ej]);
+  // the iso camera always looks from +x/+z, so the shaft mouth must face one of
+  // those two axes to ever be seen — pick the one with the longer flat rail run
+  const flatRun=(dx,dz)=>{ let r=0; for(let k=1;k<=5;k++){ const ci=ei+dx*k,cj=ej+dz*k;
+    if(!stoneOK(ci,cj)||heightMap[ci][cj]!==eh||oreNear(ci,cj,1.0))break; r=k; } return r; };
+  const runX=flatRun(1,0), runZ=flatRun(0,1);
+  const useX=runX>runZ||(runX===runZ&&(spawnCell[0]-mi)>=(spawnCell[1]-mj));
+  const fx2=useX?1:0, fz2=useX?0:1, runLen=useX?runX:runZ;
+  const yaw=Math.atan2(fx2,fz2);
   const EX=ei-HALF,EZ=ej-HALF;
-  const mineLabel=makeLabel('MINE','#9fd7ff');
+  mineProps.door=new THREE.Vector3(EX,eh,EZ); // E here descends into (or climbs out of) The Undermine
+  const mineLabel=makeLabel(WORLD.cave?'EXIT':'MINE',WORLD.cave?'#7fe8a8':'#9fd7ff');
   mineLabel.position.set(EX,eh+6.4,EZ); scene.add(mineLabel);
   // A. entrance: rock backdrop, dark tunnel mouth, timber frame, lantern, hoist tower
   { const e=new THREE.Group();
@@ -616,9 +829,6 @@ if(mineCell){
     mineProps.wheel=wheel;
     e.position.set(EX,eh,EZ); e.rotation.y=yaw; scene.add(e); }
   // B. rails out of the mouth + an ore cart trundling back and forth
-  let runLen=0;
-  for(let k=1;k<=5;k++){ const ci=ei+fx2*k,cj=ej+fz2*k;
-    if(!stoneOK(ci,cj)||heightMap[ci][cj]!==eh||oreNear(ci,cj,1.0))break; runLen=k; }
   const inRail=(i,j)=>{ const a=(i-ei)*fx2+(j-ej)*fz2, p=Math.abs((i-ei)*fz2)+Math.abs((j-ej)*fx2);
     return a>=-1&&a<=runLen+1&&p<1.2; };
   if(runLen>=2){ const rg=new THREE.Group(); const L=runLen+0.35;
@@ -670,6 +880,7 @@ if(mineCell){
    7. PLAYER + BOBBER
    ======================================================================== */
 const player=makeHero();
+player.rotation.order='YXZ'; // yaw first, so body lean (rotation.x) always tips along the facing direction
 const pWorld={x:spawnCell[0]-HALF,z:spawnCell[1]-HALF,y:spawnCell[2],face:0,step:0};
 player.position.set(pWorld.x,pWorld.y,pWorld.z); scene.add(player);
 
@@ -709,6 +920,16 @@ const axeMesh=new THREE.Group();
   bind.position.y=0.34;
   axeMesh.add(h2,bl,edge,bind); axeMesh.position.set(0,-0.42,0.3); axeMesh.rotation.x=-0.65;
   axeMesh.traverse(m=>{m.castShadow=true;}); axeMesh.visible=false; armR.add(axeMesh); }
+const shovelMesh=new THREE.Group();
+{ const h2=new THREE.Mesh(new THREE.BoxGeometry(0.11,1.1,0.11),new THREE.MeshLambertMaterial({map:TEX.bark}));
+  const grip=new THREE.Mesh(new THREE.BoxGeometry(0.3,0.1,0.12),new THREE.MeshLambertMaterial({map:TEX.bark}));
+  grip.position.y=0.56;
+  const blade=new THREE.Mesh(new THREE.BoxGeometry(0.3,0.4,0.09),new THREE.MeshLambertMaterial({color:0xb8c2cc}));
+  blade.position.set(0,-0.62,0);
+  const edge=new THREE.Mesh(new THREE.BoxGeometry(0.3,0.09,0.1),new THREE.MeshLambertMaterial({color:0xf0f5f8}));
+  edge.position.set(0,-0.84,0);
+  shovelMesh.add(h2,grip,blade,edge); shovelMesh.position.set(0,-0.42,0.3); shovelMesh.rotation.x=-0.65;
+  shovelMesh.traverse(m=>{m.castShadow=true;}); shovelMesh.visible=false; armR.add(shovelMesh); }
 const lineGeo=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(),new THREE.Vector3()]);
 const fishLine=new THREE.Line(lineGeo,new THREE.LineBasicMaterial({color:0xeeeeee,transparent:true,opacity:0.65}));
 fishLine.frustumCulled=false; fishLine.visible=false; scene.add(fishLine);
@@ -736,15 +957,21 @@ function fxBurst(x,y,z,o){ o=o||{}; const n=o.n||10,cols=o.cols||[o.col||0xfffff
     const a=rand(0,TAU),sp=rand(0.4,1)*(o.speed||3);
     p.x=x;p.y=y;p.z=z; p.vx=Math.cos(a)*sp; p.vz=Math.sin(a)*sp; p.vy=rand(0.5,1)*(o.up==null?3.4:o.up);
     p.life=p.ttl=rand(0.35,0.75)*(o.ttl||1); p.s=rand(0.06,0.16)*(o.size||1);
-    p.col=cols[(Math.random()*cols.length)|0]; p.grav=o.grav!=null?o.grav:9; } }
+    p.col=cols[(Math.random()*cols.length)|0]; p.grav=o.grav!=null?o.grav:9; }
+  fxDirty=true; }
+let fxDirty=true; // skip the whole pool pass once everything is dead and hidden
 function fxUpdate(dt){
+  let any=false;
+  for(let k=0;k<FXN;k++)if(fxP[k].life>0){any=true;break;}
+  if(!any&&!fxDirty)return;
   for(let k=0;k<FXN;k++){ const p=fxP[k];
     if(p.life>0){ p.life-=dt; p.vy-=p.grav*dt; p.x+=p.vx*dt;p.y+=p.vy*dt;p.z+=p.vz*dt;
       const s=Math.max(0.0001,p.s*Math.max(0,p.life/p.ttl));
       dummy.position.set(p.x,p.y,p.z); dummy.scale.set(s,s,s); dummy.rotation.set(p.life*7,p.life*9,0); }
     else { dummy.position.set(0,-99,0); dummy.scale.set(0.0001,0.0001,0.0001); dummy.rotation.set(0,0,0); }
     dummy.updateMatrix(); fxMesh.setMatrixAt(k,dummy.matrix); fxMesh.setColorAt(k,fxCol.setHex(p.col)); }
-  fxMesh.instanceMatrix.needsUpdate=true; if(fxMesh.instanceColor)fxMesh.instanceColor.needsUpdate=true; }
+  fxMesh.instanceMatrix.needsUpdate=true; if(fxMesh.instanceColor)fxMesh.instanceColor.needsUpdate=true;
+  fxDirty=any; }
 let trauma=0,freezeT=0;
 function addShake(a){trauma=Math.min(1,trauma+a);}
 function addFreeze(t){freezeT=Math.max(freezeT,t);}
@@ -770,7 +997,7 @@ addEventListener('keydown',e=>{
   if(onUI&&(e.code==='Space'||e.code==='Enter'))return;
   const m=KMAP[e.code]; if(m){e.preventDefault(); if(!keys[m]&&m==='act')actEdge=true; keys[m]=true;}
   if(e.code==='KeyI'||e.code==='Tab'){ e.preventDefault(); if(invOpen)closeInv(); else if(running)openInv(); }
-  if(e.code==='Escape'){ if(marketOpen)closeMarket(); else if(casinoOpen)closeCasino(); else if(invOpen)closeInv(); else if(fishing.state!=='idle')cancelFish(); else if(mining.node)cancelMine(); else if(chopping.tree)cancelChop(); else if(digging.active){digging.active=false;hint('');} }},{passive:false});
+  if(e.code==='Escape'){ if(marketOpen)closeMarket(); else if(casinoOpen)closeCasino(); else if(harborOpen)closeHarbor(); else if(invOpen)closeInv(); else if(fishing.state!=='idle')cancelFish(); else if(mining.node)cancelMine(); else if(chopping.tree)cancelChop(); else if(digging.active){digging.active=false;hint('');} }},{passive:false});
 addEventListener('keyup',e=>{const m=KMAP[e.code]; if(m)keys[m]=false;});
 addEventListener('blur',()=>{for(const k in keys)keys[k]=false;});
 
@@ -1207,7 +1434,11 @@ const mmBase=px(N);
     g.fillStyle=t==='seabed'?waterHex:t==='sand'?WORLD.sand[0]:t==='grass'?WORLD.grass[0]:WORLD.stone[0];
     if(pathSet.has(keyOf(i,j))&&(t==='grass'||t==='sand'))g.fillStyle='#cba86f';
     g.fillRect(i,j,1,1); } }
+let mmLX=1e9,mmLZ=1e9,mmNext=0;
 function drawMinimap(){ if(!mmX)return; const W=mmC.width;
+  // dirty-check: full redraw only when the player moved or every 0.25s (for POI/treasure pulses)
+  if(Math.hypot(pWorld.x-mmLX,pWorld.z-mmLZ)<0.12&&clock<mmNext)return;
+  mmLX=pWorld.x; mmLZ=pWorld.z; mmNext=clock+0.25;
   mmX.clearRect(0,0,W,W);
   // rotate 45° so map-up matches screen-up (W key), clipped to a circle
   mmX.save(); mmX.beginPath(); mmX.arc(W/2,W/2,W/2-2,0,TAU); mmX.clip();
@@ -1218,6 +1449,8 @@ function drawMinimap(){ if(!mmX)return; const W=mmC.width;
     if(strk){mmX.strokeStyle='#0a1418';mmX.lineWidth=1.6;mmX.stroke();} };
   dot(TRADER_POS.x,TRADER_POS.z,'#ffcf5c',4);
   dot(CASINO_POS.x,CASINO_POS.z,'#ff5d7a',4);
+  if(PORTAL_POS)dot(PORTAL_POS.x,PORTAL_POS.z,'#c490ff',4);
+  if(HARBOR_POS)dot(HARBOR_POS.x,HARBOR_POS.z,'#39d7c4',4);
   if(mineCell)dot(mineCell[0]-HALF,mineCell[1]-HALF,'#e8f4ff',4);
   if(state.treasure){ const tx=(state.treasure.i)/N*W, ty=(state.treasure.j)/N*W;
     mmX.strokeStyle='#ffd24f'; mmX.lineWidth=2.4; mmX.beginPath();
@@ -1229,10 +1462,10 @@ function drawMinimap(){ if(!mmX)return; const W=mmC.width;
    9. STATE + FISH + UPGRADES
    ======================================================================== */
 const SAVE='reelfortune3d-v1', CAP_BASE=12, MAXLVL=10;
-const state={coins:0,bucket:[],ores:{wood:0,coal:0,iron:0,gold:0,diamond:0},rodLvl:1,pickLvl:1,axeLvl:1,
+const state={coins:0,bucket:[],ores:{wood:0,coal:0,iron:0,gold:0,diamond:0},rodLvl:1,pickLvl:1,axeLvl:1,boatLvl:0,
   dex:{},treasure:null,worlds:['isle'],ach:{},
   stocks:{own:{},basis:{},lastDiv:null,lastShareEpoch:0,gotFirst:0},
-  pearls:0,pearlsLife:0,wardrobe:{},titleId:'',ownedT:{},ownedW:{},bucketTier:0,boosts:{chumUntil:0},
+  pearls:0,pearlsLife:0,wardrobe:{},titleId:'',ownedT:{},ownedW:{},bucketTier:0,boosts:{chumUntil:0},tipEpoch:0,
   stats:{caught:0,mined:0,earned:0,bestWin:0,spins:0,winsCt:0,losses:0,divEarned:0}};
 const cap=()=>CAP_BASE+2*(state.bucketTier||0);
 function save(){try{localStorage.setItem(SAVE,JSON.stringify(state));}catch(e){}}
@@ -1256,10 +1489,14 @@ function load(){try{const r=localStorage.getItem(SAVE);if(r){const s=JSON.parse(
   if(s.ownedT&&typeof s.ownedT==='object')state.ownedT=s.ownedT;
   state.titleId=typeof s.titleId==='string'?s.titleId:'';
   state.bucketTier=clamp(s.bucketTier|0,0,4);
+  state.tipEpoch=+s.tipEpoch||0;
+  if(state.treasure&&state.treasure.w==null)state.treasure.w=worldKey; // legacy maps: assume current isle
   if(s.boosts&&typeof s.boosts==='object')state.boosts.chumUntil=+s.boosts.chumUntil||0;
   state.rodLvl=clamp(s.rodLvl|0||1,1,MAXLVL);state.pickLvl=clamp(s.pickLvl|0||1,1,MAXLVL);
-  state.axeLvl=clamp(s.axeLvl|0||1,1,MAXLVL);}}catch(e){}}
+  state.axeLvl=clamp(s.axeLvl|0||1,1,MAXLVL);
+  state.boatLvl=clamp(s.boatLvl|0,0,4);}}catch(e){}}
 load();
+rebuildDockBoat();
 function F(name,rar,val){return {name,rar,val};}
 // time-of-day + weather globals (driven by the sky system in animate)
 let dayT=0.3, wState='clear';
@@ -1287,6 +1524,8 @@ function rollFish(){ let f=rollOnce();
   const rr=Math.min(state.rodLvl-1,9);
   for(let k=0;k<rr;k++){ if(Math.random()<0.3){ const g=rollOnce(); if(RORDER[g.rar]>RORDER[f.rar])f=g; } }
   if((wState==='rain'||wState==='storm')&&Math.random()<0.12){ const g=rollOnce(); if(RORDER[g.rar]>RORDER[f.rar])f=g; }
+  const bl=BOATS[state.boatLvl]?BOATS[state.boatLvl].luck:0; // a finer ship stirs finer fish
+  if(bl&&Math.random()<bl){ const g=rollOnce(); if(RORDER[g.rar]>RORDER[f.rar])f=g; }
   if(Math.random()<0.018){ f.shiny=true; f.val*=5; f.name='✦ '+f.name; } // shiny mutation
   return f; }
 function biteTime(){ const wet=(wState==='rain'||wState==='storm')?0.65:1;
@@ -1307,7 +1546,7 @@ function onCatch(fish){ state.stats.caught++; state.bucket.push(fish);
   if(RORDER[fish.rar]>=3&&Math.random()<0.05)grantShare('REEL');
   // rare chance the catch also snags a bottled treasure map
   if(!state.treasure&&Math.random()<0.08){ const cand=landCells.filter(c=>reachable(c[0],c[1])&&Math.hypot(c[0]-spawnCell[0],c[1]-spawnCell[1])>14);
-    if(cand.length){ const c=cand[(Math.random()*cand.length)|0]; state.treasure={i:c[0],j:c[1]};
+    if(cand.length){ const c=cand[(Math.random()*cand.length)|0]; state.treasure={i:c[0],j:c[1],w:worldKey};
       toast(pixSVG('map',13)+' A bottle! X marks the spot on your map','gold'); } }
   sfx.catch(); reveal(fish); }
 // rotating market demand: every 3 min one category is HOT (x1.6), one SURPLUS (x0.75)
@@ -1347,7 +1586,7 @@ function grantShare(k){ const e=mktEpochNow(), st=state.stocks;
   const first=!st.gotFirst; st.gotFirst=1;
   toast(`${pixSVG('chart',13)} +1 share ${k} — ${STOCKS[k].name}`,'gold'); sfx.ore(); addShake(0.08);
   if(first)setTimeout(()=>toast('Shares pay hourly dividends — see ISLE EXCHANGE at the Trader','good'),1000);
-  updateHUD(); save(); return true; }
+  updateHUD(); if(typeof marketOpen!=='undefined'&&marketOpen)renderMarketAll(); save(); return true; }
 function payDividends(){ const st=state.stocks, dNow=Math.floor(Date.now()/(MKT_MS*DIV_Q));
   if(st.lastDiv==null||!isFinite(st.lastDiv)||st.lastDiv>dNow){ st.lastDiv=dNow; return; }
   if(dNow<=st.lastDiv)return;
@@ -1364,6 +1603,14 @@ function addPearls(n,why){ if(n<=0)return; state.pearls+=n; state.pearlsLife+=n;
   if(n>=2)toast(`+${n} ◉${why?' · '+why:''}`,'good');
   updateHUD(); }
 const catLabel=c=>c==='fish'?'Fish':ORE_INFO[c].name;
+/* ---- the fleet: coins + ores buy the next hull at the Harbor dock ---- */
+const BOATS=[
+  {name:'Driftwood Raft', sub:'lashed logs & a prayer',      cost:0,     req:{},                  luck:0},
+  {name:'Cork Dinghy',    sub:'a real hull at last',         cost:600,   req:{wood:12},           luck:0.06},
+  {name:'Teal Sloop',     sub:'painted hull · single sail',  cost:2400,  req:{wood:20,iron:8},    luck:0.12},
+  {name:'Storm Trawler',  sub:'iron-clad workhorse',         cost:8000,  req:{iron:14,gold:8},    luck:0.2},
+  {name:'Gilded Galleon', sub:'pride of the archipelago',    cost:22000, req:{gold:14,diamond:6}, luck:0.3}];
+const BOAT_REQ={isle:0,mine:1,volcano:2,frost:3}; // boat level needed to UNLOCK each isle
 const ROD_BASE=250, PICK_BASE=200, AXE_BASE=180;
 const AXE_NAMES=['','Dull Axe','Stone Axe','Iron Axe','Steel Axe','Golden Axe','Crystal Axe','Obsidian Axe','Mythril Axe','Dragon Axe','Titan Axe'];
 const upCost=(base,lvl)=>Math.round(base*Math.pow(1.75,lvl-1)); // cost lvl -> lvl+1
@@ -1371,6 +1618,9 @@ const ROD_NAMES=['','Old Rod','Birch Rod','Lucky Rod','Fiber Rod','Golden Rod','
 const PICK_NAMES=['','Rusty Pick','Stone Pick','Iron Pick','Steel Pick','Golden Pick','Crystal Pick','Obsidian Pick','Mythril Pick','Dragon Pick','Titan Pick'];
 // ore ingredients to craft the next tier (indexed by TARGET level) — mining feeds progression
 const UP_REQ=[null,null,{wood:5},{wood:8,coal:4},{iron:4},{iron:8},{gold:3},{gold:6},{diamond:2},{diamond:4},{diamond:7}];
+// axe has its own gentler ladder — wood is a 6-coin commodity, so its tool must not cost diamonds
+const AXE_REQ=[null,null,{wood:5},{wood:10,coal:3},{iron:3},{iron:6},{gold:2},{gold:4},{gold:6},{gold:8},{gold:10}];
+const axeCost=lvl=>Math.round(90*Math.pow(1.5,lvl-1)); // L1->L10 total ~6.7k vs 36.7k before
 function haveOres(req){ for(const k in req)if(state.ores[k]<req[k])return false; return true; }
 function reqLabel(req){ return Object.keys(req).map(k=>`${req[k]} ${ORE_INFO[k].name}`).join(' + '); }
 
@@ -1391,7 +1641,9 @@ const ACH=[
   ['dex5','Collector','5 species in the Fishdex',150,s=>Object.keys(s.dex).length>=5],
   ['dexAll','Completionist','every species in the Fishdex',2000,s=>Object.keys(s.dex).length>=TABLE.length],
   ['world2','Set Sail','unlock a second island',400,s=>s.worlds.length>=2],
-  ['world4','Archipelago','unlock every island',5000,s=>s.worlds.length>=4]];
+  ['world4','Archipelago','unlock every island',5000,s=>s.worlds.length>=4],
+  ['boat1','Shipwright','build your first real boat',150,s=>s.boatLvl>=1],
+  ['boat4','Admiral of the Isles','launch the Gilded Galleon',2500,s=>s.boatLvl>=4]];
 let achT=0;
 function checkAch(){ for(const [id,name,desc,rw,chk] of ACH){
   if(state.ach[id]||!chk(state))continue;
@@ -1406,8 +1658,11 @@ let marketOpen=false;
 const marketEl=document.getElementById('market'),marketList=document.getElementById('marketList'),
   oreList=document.getElementById('oreList'),upgList=document.getElementById('upgList'),mktBanner=document.getElementById('mktBanner');
 function renderBanner(){ const m=mktMods(), left=MKT_MS-(Date.now()%MKT_MS), mm=Math.floor(left/60000), ss=Math.floor(left/1000)%60;
+  let tip='';
+  if(state.tipEpoch===mktEpochNow()+1){ const t=mktModsAt(state.tipEpoch);
+    tip=`<br><span style="color:var(--teal)">◉ TIP — next: HOT ${catLabel(t.hot)} · SURPLUS ${catLabel(t.cold)}</span>`; }
   mktBanner.innerHTML=`<span class="mkthot">▲ HOT: ${catLabel(m.hot)} ×1.6</span> · <span class="mktcold">▼ SURPLUS: ${catLabel(m.cold)} ×0.75</span>
-    <span style="color:var(--faint)"> · rotates in ${mm}:${String(ss).padStart(2,'0')}</span>`; }
+    <span style="color:var(--faint)"> · rotates in ${mm}:${String(ss).padStart(2,'0')}</span>${tip}`; }
 function renderMarket(){ if(!state.bucket.length){marketList.innerHTML='<div class="empty">Your bucket is empty. Go catch something!</div>';return;}
   const pm=priceMult('fish');
   let h=''; state.bucket.forEach((f,i)=>{h+=`<div class="fishrow">${pixFish(RAR[f.rar],18)}
@@ -1422,7 +1677,9 @@ function renderOres(){ const any=Object.values(state.ores).some(v=>v>0);
       <span class="vv">◈ ${fmt(info.price*n*priceMult(k))}</span><button class="btn" data-sellore="${k}">Sell all</button></div>`; }
   oreList.innerHTML=h; }
 function renderUpg(){
-  const row=(kind,lvl,base,names)=>{ const nxt=lvl+1, cost=upCost(base,lvl), req=UP_REQ[nxt];
+  const row=(kind,lvl,base,names)=>{ const nxt=lvl+1,
+    cost=kind==='axe'?axeCost(lvl):upCost(base,lvl),
+    req=(kind==='axe'?AXE_REQ:UP_REQ)[nxt];
     if(lvl>=MAXLVL)return `<div class="fishrow"><span class="nm">${pixSVG(kind==='rod'?'rod':kind==='axe'?'axe':'pick',14)} ${names[lvl]} <span style="color:var(--teal)">Lv.${lvl}</span></span><span class="rr" style="color:var(--gold)">MAX</span></div>`;
     const can=state.coins>=cost&&haveOres(req);
     return `<div class="fishrow"><span class="nm">${pixSVG(kind==='rod'?'rod':kind==='axe'?'axe':'pick',14)} ${names[lvl]} <span style="color:var(--teal)">Lv.${lvl}</span>
@@ -1434,14 +1691,29 @@ function renderWorldRows(){
   for(const k of WORLD_ORDER){ const w=WORLDS[k];
     if(k===worldKey){ h+=`<div class="fishrow"><span class="nm">${pixSVG('island',15)} ${w.name} <span style="color:var(--faint)">${w.sub}</span></span><span class="rr" style="color:var(--teal)">YOU ARE HERE</span></div>`; }
     else if(state.worlds.includes(k)){ h+=`<div class="fishrow"><span class="nm">${pixSVG('island',15)} ${w.name} <span style="color:var(--faint)">${w.sub}</span></span><button class="btn" data-world="${k}">SAIL</button></div>`; }
-    else { h+=`<div class="fishrow"><span class="nm">${pixSVG('lock',15)} ${w.name} <span style="color:var(--faint)">${w.sub}</span></span><span class="vv">◈ ${fmt(w.cost)}</span><button class="btn gold" data-world="${k}" ${state.coins<w.cost?'disabled':''}>Unlock</button></div>`; } }
+    else { const br=BOAT_REQ[k]||0, okBoat=state.boatLvl>=br;
+      h+=`<div class="fishrow"><span class="nm">${pixSVG('lock',15)} ${w.name} <span style="color:var(--faint)">${w.sub}${okBoat?'':` · needs ${BOATS[br].name}`}</span></span><span class="vv">◈ ${fmt(w.cost)}</span><button class="btn gold" data-world="${k}" ${state.coins<w.cost||!okBoat?'disabled':''}>Unlock</button></div>`; } }
   return h; }
 function buyOrSail(k){ const w=WORLDS[k]; if(!w||k===worldKey)return;
-  if(!state.worlds.includes(k)){ if(state.coins<w.cost)return;
+  if(!state.worlds.includes(k)){
+    const br=BOAT_REQ[k]||0;
+    if(state.boatLvl<br){ toast('Your '+BOATS[state.boatLvl].name+" can't make that voyage — see the Harbor dock",'bad'); return; }
+    if(state.coins<w.cost)return;
     state.coins-=w.cost; state.worlds.push(k); sfx.win(); addShake(0.1);
     toast(pixSVG('island',13)+' '+w.name+' unlocked!','gold'); updateHUD(); renderUpg(); save(); return; }
   save(); try{localStorage.setItem('reelfortune3d-world',k);}catch(e){}
   toast(pixSVG('boat',13)+' Sailing to '+w.name+'…','good');
+  setTimeout(()=>location.reload(),600); }
+// the portal hops to the next unlocked isle in order (null while only one is unlocked)
+function portalDest(){ const un=WORLD_ORDER.filter(k=>state.worlds.includes(k));
+  if(un.length<2)return null; return un[(un.indexOf(worldKey)+1)%un.length]; }
+// the mine shaft is the door to The Undermine cave; climbing out returns to the isle you came from
+function caveReturn(){ let r='isle'; try{ const v=localStorage.getItem('reelfortune3d-return'); if(v&&WORLDS[v]&&v!=='cave')r=v; }catch(e){} return r; }
+function caveTravel(){ initAudio(); save();
+  const back=caveReturn();
+  try{ if(WORLD.cave){ localStorage.setItem('reelfortune3d-world',back); }
+    else { localStorage.setItem('reelfortune3d-return',worldKey); localStorage.setItem('reelfortune3d-world','cave'); } }catch(e){}
+  toast(pixSVG('pick',13)+(WORLD.cave?' Climbing back to '+WORLDS[back].name+'…':' Descending into The Undermine…'),'good');
   setTimeout(()=>location.reload(),600); }
 /* ---- ISLE EXCHANGE panel ---- */
 const stockList=document.getElementById('stockList'),kioskList=document.getElementById('kioskList');
@@ -1467,14 +1739,19 @@ function renderStocks(){ if(!stockList)return; const e=mktEpochNow(); let h='';
 /* ---- PEARL KIOSK ---- */
 const WPAL=[0xd8483f,0xffd24f,0x2ba394,0x57b7ff,0xc07bff,0xf2f2f2,0x2e3338,0xff8f3d];
 const BUCKET_COST=[150,300,600,1000];
+const WDEF={band:0xd8483f,scarf:0xd8483f,vest:0x2ba394}; // makeHero defaults
 function applyWardrobe(){ const m=player.userData.mats; if(!m)return;
   for(const slot of ['band','scarf','vest']){ const i=state.wardrobe[slot];
-    if(i!=null&&WPAL[i]!=null)m[slot].color.setHex(WPAL[i]); } }
+    m[slot].color.setHex(i!=null&&WPAL[i]!=null?WPAL[i]:WDEF[slot]); } }
 let titleSprite=null;
-function applyTitle(){ if(titleSprite){scene.remove(titleSprite);titleSprite=null;}
+function applyTitle(){
+  if(titleSprite){ titleSprite.material.map.dispose(); titleSprite.material.dispose();
+    scene.remove(titleSprite); titleSprite=null; }
   if(!state.titleId)return;
-  titleSprite=makeLabel(state.titleId,'#7fdcff'); titleSprite.scale.set(2.3,0.58,1); scene.add(titleSprite); }
-const KIOSK_TITLES=[['t1','Deckhand',50],['t2','Pearl Diver',150],['t3','Eel Whisperer',300],['t4','Isle Legend',1200]];
+  titleSprite=makeLabel(state.titleId,'#7fdcff'); titleSprite.scale.set(2.3,0.58,1);
+  titleSprite.position.set(pWorld.x,pWorld.y+2.95,pWorld.z);
+  scene.add(titleSprite); }
+const KIOSK_TITLES=[['t1','Deckhand',50],['t2','Pearl Diver',150],['t3','Eel Whisperer',500],['t4','Isle Legend',2500]];
 function renderKiosk(){ if(!kioskList)return; let h='';
   // wardrobe: buy once, then recolor freely
   if(!state.ownedW.wardrobe)
@@ -1490,7 +1767,7 @@ function renderKiosk(){ if(!kioskList)return; let h='';
         :`<span class="vv" style="color:var(--teal)">◉ ${cost}</span><button class="btn" data-kiosk="${id}" ${state.pearls<cost?'disabled':''}>Buy</button>`}</div>`; }
   const chumOn=Date.now()<state.boosts.chumUntil;
   h+=`<div class="fishrow"><span class="nm">Chum Jar <span style="color:var(--faint);font-size:10px">bites 2× faster · 10 min${chumOn?' · ACTIVE':''}</span></span>
-    <span class="vv" style="color:var(--teal)">◉ 40</span><button class="btn" data-kiosk="chum" ${state.pearls<40||chumOn?'disabled':''}>${chumOn?'Active':'Buy'}</button></div>`;
+    <span class="vv" style="color:var(--teal)">◉ 80</span><button class="btn" data-kiosk="chum" ${state.pearls<80||chumOn?'disabled':''}>${chumOn?'Active':'Buy'}</button></div>`;
   const bt=state.bucketTier;
   h+=bt>=4?`<div class="fishrow"><span class="nm">Deep Bucket <span style="color:var(--teal)">cap ${cap()}</span></span><span class="rr" style="color:var(--gold)">MAX</span></div>`
     :`<div class="fishrow"><span class="nm">Deep Bucket <span style="color:var(--faint);font-size:10px">bucket ${cap()} → ${cap()+2} (permanent)</span></span>
@@ -1498,7 +1775,8 @@ function renderKiosk(){ if(!kioskList)return; let h='';
   h+=`<div class="fishrow"><span class="nm">Insider Tip <span style="color:var(--faint);font-size:10px">reveal the NEXT market rotation</span></span>
     <span class="vv" style="color:var(--teal)">◉ 30</span><button class="btn" data-kiosk="tip" ${state.pearls<30?'disabled':''}>Buy</button></div>`;
   kioskList.innerHTML=h; }
-function openMarket(){marketOpen=true;marketEl.classList.add('on');renderBanner();renderMarket();renderOres();renderUpg();renderStocks();renderKiosk();}
+function renderMarketAll(){ renderMarket(); renderOres(); renderUpg(); renderStocks(); renderKiosk(); }
+function openMarket(){marketOpen=true;marketEl.classList.add('on');renderBanner();renderMarketAll();}
 function closeMarket(){marketOpen=false;marketEl.classList.remove('on');save();}
 document.getElementById('marketX').onclick=closeMarket;
 document.getElementById('sellAll').onclick=()=>{ if(!state.bucket.length){toast('Bucket empty');return;}
@@ -1506,25 +1784,26 @@ document.getElementById('sellAll').onclick=()=>{ if(!state.bucket.length){toast(
   state.bucket=state.bucket.filter(f=>{ if(f.wins>0){kept++;return true;} g+=Math.round(f.val*pm); return false; });
   if(!g){toast(kept?'Only ★ starred fish left — sell them one by one':'Bucket empty');return;}
   state.coins+=g;state.stats.earned+=g;coinFly(g);sfx.sell();
-  toast('+'+fmt(g)+' coins'+(kept?` (kept ${kept} ★)`:''),'gold');updateHUD();renderMarket();renderUpg();save();};
+  toast('+'+fmt(g)+' coins'+(kept?` (kept ${kept} ★)`:''),'gold');updateHUD();renderMarketAll();save();};
 marketEl.addEventListener('click',e=>{
   const t1=e.target.closest?e.target.closest('[data-sellone]'):null;
   if(t1){const i=+t1.getAttribute('data-sellone'),f=state.bucket[i];
-    if(f){const g=Math.round(f.val*priceMult('fish'));state.coins+=g;state.stats.earned+=g;state.bucket.splice(i,1);sfx.sell();toast('+'+fmt(g)+' coins','gold');updateHUD();renderMarket();renderUpg();save();} return;}
+    if(f){const g=Math.round(f.val*priceMult('fish'));state.coins+=g;state.stats.earned+=g;state.bucket.splice(i,1);sfx.sell();toast('+'+fmt(g)+' coins','gold');updateHUD();renderMarketAll();save();} return;}
   const t2=e.target.closest?e.target.closest('[data-sellore]'):null;
   if(t2){const k=t2.getAttribute('data-sellore'),n=state.ores[k];
-    if(n>0){const g=Math.round(n*ORE_INFO[k].price*priceMult(k));state.coins+=g;state.stats.earned+=g;state.ores[k]=0;sfx.sell();toast('+'+fmt(g)+' coins','gold');updateHUD();renderOres();renderUpg();save();} return;}
+    if(n>0){const g=Math.round(n*ORE_INFO[k].price*priceMult(k));state.coins+=g;state.stats.earned+=g;state.ores[k]=0;sfx.sell();toast('+'+fmt(g)+' coins','gold');updateHUD();renderMarketAll();save();} return;}
   const t3=e.target.closest?e.target.closest('[data-buy]'):null;
   if(t3){const kind=t3.getAttribute('data-buy');
     const doCraft=(lvlKey,base,names)=>{ const lvl=state[lvlKey]; if(lvl>=MAXLVL)return;
-      const cost=upCost(base,lvl),req=UP_REQ[lvl+1];
+      const cost=lvlKey==='axeLvl'?axeCost(lvl):upCost(base,lvl),
+        req=(lvlKey==='axeLvl'?AXE_REQ:UP_REQ)[lvl+1];
       if(state.coins<cost||!haveOres(req))return;
       state.coins-=cost; for(const k in req)state.ores[k]-=req[k];
       state[lvlKey]=lvl+1; sfx.ore(); addShake(0.1); toast(pixSVG(lvlKey==='rodLvl'?'rod':'pick',13)+' '+names[lvl+1]+' crafted!','gold'); };
     if(kind==='rod')doCraft('rodLvl',ROD_BASE,ROD_NAMES);
     else if(kind==='pick')doCraft('pickLvl',PICK_BASE,PICK_NAMES);
     else if(kind==='axe')doCraft('axeLvl',AXE_BASE,AXE_NAMES);
-    updateHUD();renderOres();renderUpg();save(); return;}
+    updateHUD();renderMarketAll();save(); return;}
   const t4=e.target.closest?e.target.closest('[data-world]'):null;
   if(t4){buyOrSail(t4.getAttribute('data-world'));return;}
   const t5=e.target.closest?e.target.closest('[data-buystk]'):null;
@@ -1532,20 +1811,20 @@ marketEl.addEventListener('click',e=>{
     if(state.coins>=a&&(st.own[k]|0)<STOCK_CAP){ state.coins-=a;
       const n=st.own[k]|0,p=stockPrice(k,ep);
       st.basis[k]=((st.basis[k]||p)*n+p)/(n+1); st.own[k]=n+1;
-      sfx.sell(); toast('+1 share '+k,'good'); updateHUD(); renderStocks(); save(); } return;}
+      sfx.sell(); toast('+1 share '+k,'good'); updateHUD(); renderMarketAll(); save(); } return;}
   const t6=e.target.closest?e.target.closest('[data-sellstk]'):null;
   if(t6){ const k=t6.getAttribute('data-sellstk'),ep=mktEpochNow(),st=state.stocks;
     if((st.own[k]|0)>0){ const g=stockBid(k,ep);
       st.own[k]--; state.coins+=g;
       state.stats.earned+=Math.max(0,g-Math.round(st.basis[k]||g)); // only real profit counts toward records
-      sfx.sell(); coinFly(g); toast('Sold 1 '+k+' for ◈'+fmt(g),'gold'); updateHUD(); renderStocks(); save(); } return;}
+      sfx.sell(); coinFly(g); toast('Sold 1 '+k+' for ◈'+fmt(g),'gold'); updateHUD(); renderMarketAll(); save(); } return;}
   const t7=e.target.closest?e.target.closest('[data-kiosk]'):null;
   if(t7){ const id=t7.getAttribute('data-kiosk');
-    const buy=(cost,fn)=>{ if(state.pearls<cost)return; state.pearls-=cost; fn(); sfx.ore(); updateHUD(); renderKiosk(); save(); };
+    const buy=(cost,fn)=>{ if(state.pearls<cost)return; state.pearls-=cost; fn(); sfx.ore(); updateHUD(); renderMarketAll(); save(); };
     if(id==='wardrobe')buy(80,()=>{state.ownedW.wardrobe=1;toast('Wardrobe unlocked — pick your colors!','good');});
-    else if(id==='chum')buy(40,()=>{state.boosts.chumUntil=Date.now()+600000;toast('Chum in the water — bites 2× faster for 10 min','good');});
+    else if(id==='chum')buy(80,()=>{state.boosts.chumUntil=Date.now()+600000;toast('Chum in the water — bites 2× faster for 10 min','good');});
     else if(id==='bucket'&&state.bucketTier<4)buy(BUCKET_COST[state.bucketTier],()=>{state.bucketTier++;toast('Deep Bucket! Capacity is now '+cap(),'good');});
-    else if(id==='tip')buy(30,()=>{const m=mktModsAt(mktEpochNow()+1);
+    else if(id==='tip')buy(30,()=>{state.tipEpoch=mktEpochNow()+1;renderBanner();const m=mktModsAt(mktEpochNow()+1);
       toast(`Tip: next HOT ${catLabel(m.hot)} · SURPLUS ${catLabel(m.cold)}`,'gold');});
     else{ const t=KIOSK_TITLES.find(x=>x[0]===id);
       if(t)buy(t[2],()=>{state.ownedT[id]=1;state.titleId=t[1];applyTitle();toast('Title equipped: '+t[1],'good');}); }
@@ -1556,6 +1835,75 @@ marketEl.addEventListener('click',e=>{
   const t9=e.target.closest?e.target.closest('[data-wcol]'):null;
   if(t9){ const [slot,i]=t9.getAttribute('data-wcol').split(':');
     if(state.ownedW.wardrobe){ state.wardrobe[slot]=+i; applyWardrobe(); renderKiosk(); save(); } return;} });
+
+/* ========================================================================
+   10b. THE HARBOR — shipwright panel with a live 3D boat preview
+   ======================================================================== */
+let harborOpen=false,previewLvl=0;
+const harborEl=document.getElementById('harbor'),boatCurEl=document.getElementById('boatCur'),
+  boatListEl=document.getElementById('boatList'),sailListEl=document.getElementById('sailList'),
+  dockViewEl=document.getElementById('dockView'),dockCapEl=document.getElementById('dockCap');
+const dockScene=new THREE.Scene();
+const dockCam=new THREE.PerspectiveCamera(30,320/180,0.1,40); dockCam.position.set(4.6,3.1,6.2); dockCam.lookAt(0,0.8,0);
+dockScene.add(new THREE.HemisphereLight(0xffffff,0x1c3038,1.0));
+{ const k=new THREE.DirectionalLight(0xfff2d8,0.95); k.position.set(3,5,3.5); dockScene.add(k);
+  const r=new THREE.DirectionalLight(0x9fd8ff,0.45); r.position.set(-3,2,-3); dockScene.add(r); }
+{ const sea=new THREE.Mesh(new THREE.CircleGeometry(3.6,26),
+    new THREE.MeshLambertMaterial({color:0x2fc0e8,transparent:true,opacity:0.55}));
+  sea.rotation.x=-Math.PI/2; sea.position.y=-0.03; dockScene.add(sea); }
+let dockRenderer=null;
+try{ dockRenderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+  dockRenderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2)); dockRenderer.setSize(320,180);
+  if(dockViewEl)dockViewEl.appendChild(dockRenderer.domElement); }catch(e){}
+let previewBoat=null,dockT=0;
+const BOAT_VIEW=[1.5,1.4,1.12,0.95,0.78]; // per-tier zoom so every hull fills the frame
+function buildPreview(lvl){ previewLvl=lvl;
+  if(previewBoat){ previewBoat.traverse(o=>{if(o.geometry)o.geometry.dispose();if(o.material&&o.material.dispose)o.material.dispose();}); dockScene.remove(previewBoat); }
+  previewBoat=makeBoat(lvl); previewBoat.scale.setScalar(BOAT_VIEW[lvl]||1); dockScene.add(previewBoat);
+  if(dockCapEl)dockCapEl.innerHTML=`${BOATS[lvl].name} — <span style="color:var(--muted)">${BOATS[lvl].sub}</span>${lvl>state.boatLvl?' <span style="color:var(--faint)">· preview</span>':''}`; }
+function renderDockView(dt){ if(!dockRenderer||!previewBoat)return; dockT+=dt;
+  previewBoat.rotation.y=dockT*0.45; previewBoat.position.y=Math.sin(dockT*1.4)*0.045;
+  previewBoat.rotation.z=Math.sin(dockT*0.9)*0.02;
+  animBoat(previewBoat,dockT);
+  dockRenderer.render(dockScene,dockCam); }
+function renderHarbor(){ if(!boatCurEl)return;
+  const cur=BOATS[state.boatLvl], nxt=BOATS[state.boatLvl+1];
+  let h=`<div class="fishrow">${pixSVG('boat',16)}
+    <span class="nm">${cur.name} <span style="color:var(--teal)">Lv.${state.boatLvl}</span>
+      <span style="color:var(--faint);font-size:11px">${cur.sub} · sea luck +${Math.round(cur.luck*100)}%</span></span>
+    <span class="rr" style="color:var(--teal)">YOUR BOAT</span></div>`;
+  if(nxt){ const can=state.coins>=nxt.cost&&haveOres(nxt.req);
+    h+=`<div class="fishrow">${pixSVG('boat',16)}
+      <span class="nm">${nxt.name} <span style="color:var(--faint);font-size:11px">${nxt.sub} · needs ${reqLabel(nxt.req)} · sea luck +${Math.round(nxt.luck*100)}%</span></span>
+      <span class="vv">◈ ${fmt(nxt.cost)}</span><button class="btn gold" data-buyboat="1" ${can?'':'disabled'}>BUILD</button></div>`; }
+  else h+=`<div class="fishrow"><span class="nm">Fleet complete — the seas bow to you, Admiral</span><span class="rr" style="color:var(--gold)">MAX</span></div>`;
+  boatCurEl.innerHTML=h;
+  let fl=''; BOATS.forEach((b,i)=>{ const st=i<=state.boatLvl?'OWNED':i===state.boatLvl+1?'NEXT':'LOCKED';
+    fl+=`<div class="fishrow" data-prevboat="${i}" style="cursor:pointer;${i===previewLvl?'border-color:rgba(57,215,196,.55);':''}${i>state.boatLvl+1?'opacity:.55;':''}">
+      ${pixSVG(i<=state.boatLvl?'boat':'lock',15)}
+      <span class="nm">${b.name} <span style="color:var(--faint);font-size:11px">${b.sub}</span></span>
+      ${b.cost?`<span class="vv">◈ ${fmt(b.cost)}</span>`:''}
+      <span class="rr" style="color:${st==='OWNED'?'var(--teal)':st==='NEXT'?'var(--gold)':'var(--faint)'}">${st}</span></div>`; });
+  boatListEl.innerHTML=fl;
+  if(sailListEl)sailListEl.innerHTML=renderWorldRows(); }
+function buyBoat(){ const nxt=state.boatLvl+1; if(nxt>=BOATS.length)return; const b=BOATS[nxt];
+  if(state.coins<b.cost||!haveOres(b.req))return;
+  state.coins-=b.cost; for(const k in b.req)state.ores[k]-=b.req[k];
+  state.boatLvl=nxt; sfx.win(); addShake(0.14);
+  toast(pixSVG('boat',13)+' '+b.name+' launched!','gold');
+  if(DOCK)fxBurst(DOCK.boat.x,WATER_TOP+0.3,DOCK.boat.z,{n:22,cols:[0x7fdcff,0xd9f6ff,0xffd24f],speed:2.8,up:3.6,size:1.1,grav:7});
+  rebuildDockBoat(); buildPreview(state.boatLvl); renderHarbor(); updateHUD(); save(); }
+function openHarbor(){ if(marketOpen||casinoOpen||invOpen)return;
+  harborOpen=true; harborEl.classList.add('on'); buildPreview(state.boatLvl); renderHarbor(); }
+function closeHarbor(){ harborOpen=false; harborEl.classList.remove('on'); save(); }
+if(harborEl){
+  document.getElementById('harborX').onclick=closeHarbor;
+  harborEl.addEventListener('click',e=>{
+    if(e.target.closest&&e.target.closest('[data-buyboat]')){ buyBoat(); return; }
+    const pv=e.target.closest?e.target.closest('[data-prevboat]'):null;
+    if(pv){ buildPreview(+pv.getAttribute('data-prevboat')); renderHarbor(); return; }
+    const wd=e.target.closest?e.target.closest('[data-world]'):null;
+    if(wd){ buyOrSail(wd.getAttribute('data-world')); renderHarbor(); return; } }); }
 
 /* ========================================================================
    11. CASINO ROULETTE — bets & spins on the real table out in the world
@@ -1576,14 +1924,17 @@ function updateSpinBtn(){ const hasStake=(stakeIdx>=0&&state.bucket[stakeIdx])||
   spinBtn.disabled=!(hasStake&&betColor&&!spinning); }
 function openCasino(){casinoOpen=true;viewMode='casino';casinoLabel.visible=false;casinoEl.classList.add('on');stakeIdx=-1;betColor=null;spinning=false;coinStake=0;spinResult.innerHTML='';
   document.querySelectorAll('.betbtn').forEach(b=>b.classList.remove('sel'));renderStakes();updateSpinBtn();}
-function closeCasino(){casinoOpen=false;viewMode='follow';casinoLabel.visible=true;spinSeq++;spinAnim=null;spinning=false;casinoEl.classList.remove('on');save();}
+function closeCasino(){
+  // closing mid-spin settles the wheel HONESTLY: no loss-dodging, no swallowed stakes
+  if(spinAnim){ const sa=spinAnim; spinAnim=null; ballLockIdx=sa.winIdx; resolveSpin(sa); }
+  casinoOpen=false;viewMode='follow';casinoLabel.visible=true;spinSeq++;spinning=false;casinoEl.classList.remove('on');save();}
 document.getElementById('casinoX').onclick=closeCasino;
 stakeListEl.addEventListener('click',e=>{if(spinning)return;
   const c=e.target.closest('[data-cstake]');
   if(c){ const amt=+c.getAttribute('data-cstake'); if(state.coins>=amt){ coinStake=(coinStake===amt?0:amt); if(coinStake)stakeIdx=-1; renderStakes(); updateSpinBtn(); } return; }
   const t=e.target.closest('[data-stake]');if(t){stakeIdx=+t.getAttribute('data-stake');coinStake=0;renderStakes();updateSpinBtn();}});
 document.querySelectorAll('.betbtn').forEach(b=>{const pick=()=>{if(spinning)return;betColor=b.getAttribute('data-bet');
-  document.querySelectorAll('.betbtn').forEach(x=>x.classList.remove('sel'));b.classList.add('sel');updateSpinBtn();};
+  document.querySelectorAll('.betbtn[data-bet]').forEach(x=>x.classList.remove('sel'));b.classList.add('sel');updateSpinBtn();};
   b.onclick=pick;b.onkeydown=e=>{if(e.code==='Enter'||e.code==='Space'){e.preventDefault();pick();}};});
 let spinSeq=0,spinAnim=null;
 spinBtn.onclick=()=>{ if(spinBtn.disabled)return;
@@ -1684,10 +2035,7 @@ function startMine(n){ initAudio(); mining.node=n; mining.t=0;
 function updateMining(dt){ const n=mining.node;
   if(!n||!n.alive){cancelMine();return;}
   if(keys.up||keys.down||keys.left||keys.right){cancelMine();return;}
-  if(keys.act){ mining.t+=dt;
-    if(Math.random()<0.12){ sfx.pick(); addShake(0.05);
-      fxBurst(n.x,n.y+0.7,n.z,{n:4,cols:[0x9aa1a8,0x747c84,0xb8bfc7],speed:2.2,up:2.4,size:0.8}); }
-    n.mesh.scale.setScalar(1+Math.sin(clock*30)*0.03); }
+  if(keys.act){ mining.t+=dt; } // impact fx/sfx fire from the swing animation, synced to the hit frame
   else { mining.t-=dt*0.6; if(mining.t<=0){ n.mesh.scale.setScalar(1); cancelMine(); return; } }
   mining.t=clamp(mining.t,0,mining.dur);
   const p=mining.t/mining.dur,k=Math.floor(p*8);
@@ -1696,7 +2044,7 @@ function updateMining(dt){ const n=mining.node;
     const bonus=Math.random()<Math.min(0.85,0.15+0.08*(state.pickLvl-1))?1:0,
       got=(1+bonus+(state.pickLvl>=6&&Math.random()<0.2?1:0))*(WORLD.oreYield||1);
     state.ores[n.type]+=got; state.stats.mined+=got; sfx.ore();
-    addPearls({coal:2,iron:3,gold:5,diamond:10}[n.type]||1);
+    addPearls({coal:1,iron:1,gold:2,diamond:5}[n.type]||1); // pearls track effort, not ore value
     // mining is the main source of share certificates ("mineral rights")
     const shC=0.06+0.015*(state.pickLvl-1);
     if(n.type==='diamond')grantShare(STOCK_KEYS[(Math.random()*STOCK_KEYS.length)|0]);
@@ -1720,9 +2068,7 @@ function cancelChop(){chopping.tree=null;hint('');}
 function updateChopping(dt){ const t=chopping.tree;
   if(!t||t.cd>clock){cancelChop();return;}
   if(keys.up||keys.down||keys.left||keys.right){cancelChop();return;}
-  if(keys.act){ chopping.t+=dt;
-    if(Math.random()<0.14){ beep(190+Math.random()*60,0.06,'square',0.05); addShake(0.04);
-      fxBurst(t.x,t.y+1.2,t.z,{n:3,cols:[0x9a6b3a,0x7d5530],speed:2,up:2.2,size:0.8}); } }
+  if(keys.act){ chopping.t+=dt; } // impact fx/sfx fire from the swing animation, synced to the hit frame
   else { chopping.t-=dt*0.6; if(chopping.t<=0){cancelChop();return;} }
   chopping.t=clamp(chopping.t,0,chopping.dur);
   const p=chopping.t/chopping.dur,k=Math.floor(p*8);
@@ -1735,15 +2081,16 @@ function updateChopping(dt){ const t=chopping.tree;
     const leafCols=t.pink?[0xec9fcb,0xf5b5d9,0x9a6b3a]:[0x3aa626,0x54cb3c,0x9a6b3a];
     fxBurst(t.x,t.y+3,t.z,{n:16,cols:leafCols,speed:2.6,up:1.6,size:1.1,grav:5});
     toast(`+${got} Wood`,'good');
-    t.cd=clock+60+rand(0,30);
+    t.cd=clock+30+rand(0,15);
     cancelChop(); updateHUD(); save(); } }
 
 /* ========================================================================
    13b. TREASURE DIGGING
    ======================================================================== */
 const digging={active:false,t:0,dur:1.5};
-function treasureDist(){ if(!state.treasure)return 1e9;
-  return Math.hypot(state.treasure.i-HALF-pWorld.x,state.treasure.j-HALF-pWorld.z); }
+function treasureDist(){ const t=state.treasure; if(!t)return 1e9;
+  if(t.w&&t.w!==worldKey)return 1e9; // the X is buried on another island
+  return Math.hypot(t.i-HALF-pWorld.x,t.j-HALF-pWorld.z); }
 function updateDigging(dt){
   if(!state.treasure){digging.active=false;hint('');return;}
   if(keys.up||keys.down||keys.left||keys.right){digging.active=false;hint('');return;}
@@ -1751,14 +2098,14 @@ function updateDigging(dt){
   digging.t=clamp(digging.t,0,digging.dur);
   const p=digging.t/digging.dur,k=Math.floor(p*8);
   hint(`${pixSVG('map',13)} Digging… <b>${'▰'.repeat(k)+'▱'.repeat(8-k)}</b> hold <span class="key">E</span>`);
-  if(Math.random()<0.1){ sfx.pick(); fxBurst(pWorld.x,pWorld.y+0.3,pWorld.z,{n:3,cols:[0x8a5a34,0x9a683e],speed:2,up:2.4,size:0.8}); }
+  // scoop fx/sfx fire from the swing animation, synced to the blade hitting the dirt
   if(digging.t>=digging.dur){ digging.active=false; state.treasure=null; addPearls(10,'treasure');
     addShake(0.25); addFreeze(0.08);
     fxBurst(pWorld.x,pWorld.y+0.5,pWorld.z,{n:20,cols:[0xffd24f,0xffefb0,0x8a5a34],speed:3.4,up:4.5,size:1.1});
     const r=Math.random();
     if(r<0.55){ const g=Math.round(rand(150,600)*(1+0.12*(state.rodLvl+state.pickLvl)));
       state.coins+=g; state.stats.earned+=g; coinFly(g); sfx.win(); toast(pixSVG('map',13)+' Buried treasure! +'+fmt(g)+' coins','gold'); }
-    else if(r<0.85){ const ks=['iron','gold','gold','diamond'],k2=ks[(Math.random()*ks.length)|0],n2=2+((Math.random()*4)|0);
+    else if(r<0.85){ const ks=['coal','coal','iron','gold','diamond'],k2=ks[(Math.random()*ks.length)|0],n2=2+((Math.random()*4)|0);
       state.ores[k2]+=n2; state.stats.mined+=n2; sfx.ore(); toast(`${pixSVG('pick',13)} Treasure! +${n2} ${ORE_INFO[k2].name}`,'gold'); }
     else if(state.bucket.length<cap()){ let f=null; for(let k3=0;k3<25;k3++){ f=rollOnce(); if(RORDER[f.rar]>=2)break; }
       onCatch(f); toast(pixSVG('fish',13)+' A rare fish was buried here?!','gold'); }
@@ -1781,14 +2128,17 @@ function updateHotbar(){ HB.rod.textContent='Lv'+state.rodLvl; HB.pick.textConte
 function renderInv(){
   const rodNext=state.rodLvl<MAXLVL?`next ◈${fmt(upCost(ROD_BASE,state.rodLvl))} + ${reqLabel(UP_REQ[state.rodLvl+1])}`:'MAX';
   const pickNext=state.pickLvl<MAXLVL?`next ◈${fmt(upCost(PICK_BASE,state.pickLvl))} + ${reqLabel(UP_REQ[state.pickLvl+1])}`:'MAX';
-  const axeNext=state.axeLvl<MAXLVL?`next ◈${fmt(upCost(AXE_BASE,state.axeLvl))} + ${reqLabel(UP_REQ[state.axeLvl+1])}`:'MAX';
+  const axeNext=state.axeLvl<MAXLVL?`next ◈${fmt(axeCost(state.axeLvl))} + ${reqLabel(AXE_REQ[state.axeLvl+1])}`:'MAX';
   invTools.innerHTML=
     `<div class="fishrow"><span class="nm">${pixSVG('rod',15)} ${ROD_NAMES[state.rodLvl]} <span style="color:var(--teal)">Lv.${state.rodLvl}</span></span>
       <span class="rr" style="color:var(--muted)">${rodNext}</span></div>
     <div class="fishrow"><span class="nm">${pixSVG('axe',15)} ${AXE_NAMES[state.axeLvl]} <span style="color:var(--teal)">Lv.${state.axeLvl}</span></span>
       <span class="rr" style="color:var(--muted)">${axeNext}</span></div>
     <div class="fishrow"><span class="nm">${pixSVG('pick',15)} ${PICK_NAMES[state.pickLvl]} <span style="color:var(--teal)">Lv.${state.pickLvl}</span></span>
-      <span class="rr" style="color:var(--muted)">${pickNext}</span></div>`;
+      <span class="rr" style="color:var(--muted)">${pickNext}</span></div>
+    <div class="fishrow"><span class="nm">${pixSVG('boat',15)} ${BOATS[state.boatLvl].name} <span style="color:var(--teal)">Lv.${state.boatLvl}</span>
+        <span style="color:var(--faint);font-size:11px">sea luck +${Math.round(BOATS[state.boatLvl].luck*100)}%</span></span>
+      <span class="rr" style="color:var(--muted)">${state.boatLvl<BOATS.length-1?'upgrade at the Harbor dock':'MAX'}</span></div>`;
   if(!state.bucket.length)invFish.innerHTML='<div class="empty">Bucket empty — go fishing!</div>';
   else{ let h='<div class="invgrid">';
     state.bucket.forEach(f=>{h+=`<div class="invcard" style="border-color:${RAR[f.rar]}55">${pixFish(RAR[f.rar],15)}
@@ -1834,7 +2184,7 @@ const invTabs=document.querySelectorAll('#inv .tabbtn');
 function setInvTab(t){ invTabs.forEach(b=>b.classList.toggle('sel',b.getAttribute('data-tab')===t));
   for(const k of ['bag','dex','stats']){ const p=document.getElementById('tab-'+k); if(p)p.style.display=k===t?'':'none'; } }
 invTabs.forEach(b=>b.addEventListener('click',()=>setInvTab(b.getAttribute('data-tab'))));
-function openInv(){ if(marketOpen||casinoOpen)return; invOpen=true; invEl.classList.add('on'); renderInv(); setInvTab('bag'); }
+function openInv(){ if(marketOpen||casinoOpen||harborOpen)return; invOpen=true; invEl.classList.add('on'); renderInv(); setInvTab('bag'); }
 function closeInv(){ invOpen=false; invEl.classList.remove('on'); }
 document.getElementById('invX').onclick=closeInv;
 document.querySelectorAll('#hotbar .slot').forEach(s=>{ s.addEventListener('click',()=>{ if(invOpen)closeInv(); else openInv(); }); });
@@ -1850,6 +2200,10 @@ const DAYKEYS=[
 const cA=new THREE.Color(),cB=new THREE.Color(),cRain=new THREE.Color(0x6b7f8a);
 let wTimer=rand(60,140),flashT=0;
 function skyUpdate(dt){
+  if(WORLD.cave){ // eternal underground gloom: no day cycle, no weather — lamps and night fish rule
+    dayT=0.02; wState='clear'; rainMesh.visible=false;
+    cA.setHex(WORLD.sky); scene.background.copy(cA); scene.fog.color.copy(cA);
+    sun.intensity=0.12; hemiL.intensity=0.34; return; }
   dayT=(dayT+dt/DAY_LEN)%1;
   let seg=null;
   for(let k=0;k<DAYKEYS.length-1;k++){ if(dayT>=DAYKEYS[k][0]&&dayT<=DAYKEYS[k+1][0]){seg=[DAYKEYS[k],DAYKEYS[k+1]];break;} }
@@ -1923,6 +2277,15 @@ function interactions(){
   const w=nearestWater(), canFish=w&&w.dist<2.4;
   if(dT<2.6){ hint('<span class="key">E</span> Trade at the Market'); if(actEdge){initAudio();openMarket();} }
   else if(dC<2.8){ hint('<span class="key">E</span> Enter the Spinning Eel'); if(actEdge){initAudio();openCasino();} }
+  else if(PORTAL_POS&&Math.hypot(pWorld.x-PORTAL_POS.x,pWorld.z-PORTAL_POS.z)<2.2){
+    const pd=portalDest();
+    if(pd){ hint(`<span class="key">E</span> Step through → <b>${WORLDS[pd].name}</b>`); if(actEdge){initAudio();buyOrSail(pd);} }
+    else hint('Portal dormant — unlock more isles at the Market'); }
+  else if(mineProps.door&&Math.hypot(pWorld.x-mineProps.door.x,pWorld.z-mineProps.door.z)<2.1){
+    hint(pixSVG('pick',13)+` <span class="key">E</span> `+(WORLD.cave?`Climb back to <b>${WORLDS[caveReturn()].name}</b>`:'Descend into <b>The Undermine</b>'));
+    if(actEdge)caveTravel(); }
+  else if(HARBOR_POS&&Math.hypot(pWorld.x-HARBOR_POS.x,pWorld.z-HARBOR_POS.z)<2.6){
+    hint(pixSVG('boat',13)+' <span class="key">E</span> The Harbor — shipwright &amp; sailings'); if(actEdge){initAudio();openHarbor();} }
   else if(treasureDist()<1.8){ hint(pixSVG('map',13)+' <span class="key">E</span> Dig here!'); if(actEdge){initAudio();digging.active=true;digging.t=0;} }
   else if(ore){ hint(`<span class="key">E</span> Mine ${ORE_INFO[ore.type].name}`); if(actEdge)startMine(ore); }
   else if((tree=nearestTree())){ hint(pixSVG('axe',13)+' <span class="key">E</span> Chop wood'); if(actEdge){initAudio();chopping.tree=tree;chopping.t=0;chopping.dur=1.4/(1+(state.axeLvl-1)*0.22);} }
@@ -1932,7 +2295,7 @@ function interactions(){
 let lastBiome='',bannerT=0,mktEpochSeen=Math.floor(Date.now()/MKT_MS);
 function biomeCheck(){ const t=cellType(heightAt(pWorld.x,pWorld.z));
   if(t!==lastBiome){ lastBiome=t;
-    if(t==='stone')setArea('The Quarry','hold E on ore to mine');
+    if(t==='stone')setArea(WORLD.cave?'The Undermine':(WORLD.oreN>0?'The Quarry':'The Rocks'),WORLD.oreN>0?'hold E on ore to mine':'find the mine shaft — ore waits below');
     else if(t==='sand')setArea('Shoreline','cast your line'); } }
 // smoothed camera state — the view flies between follow-cam and the casino table
 const CAS_CAM_OFF=new THREE.Vector3(7.5,13,7.5);           // steeper angle: look down onto the wheel face, over the decor
@@ -1941,13 +2304,14 @@ const vTargP=new THREE.Vector3(),vTargL=new THREE.Vector3();
 const vPos=new THREE.Vector3(pWorld.x+CAM_OFF.x,pWorld.y+CAM_OFF.y,pWorld.z+CAM_OFF.z),
       vLook=new THREE.Vector3(pWorld.x,pWorld.y+1,pWorld.z);
 let vSize=camSize;
+const swing={p:0,last:0}; let leanT=0,mineFlinch=0; // action-animation state (windup→strike→impact)
 function animate(now){
   let dt=Math.min(0.033,(now-last)/1000||0); last=now;
   const rdt=dt; // real dt — camera easing/shake keep moving through hit-stop
   if(freezeT>0){freezeT-=dt;dt*=0.08;} // hit-stop: world slows for a beat
   clock+=dt;
   if(running){
-    const overlay=marketOpen||casinoOpen||invOpen;
+    const overlay=marketOpen||casinoOpen||invOpen||harborOpen;
     if(!overlay){ if(fishing.state!=='idle')updateFishing(dt); else if(mining.node)updateMining(dt); else if(chopping.tree)updateChopping(dt); else if(digging.active)updateDigging(dt); else { tryMove(dt); interactions(); } } else hint('');
 
     const targetY=heightAt(pWorld.x,pWorld.z);
@@ -1957,17 +2321,51 @@ function animate(now){
     const sw=moving?Math.sin(pWorld.step)*0.5:0, pd=player.userData;
     if(pd.legL){pd.legL.rotation.x=sw;pd.legR.rotation.x=-sw;pd.armL.rotation.x=-sw*0.7;pd.armR.rotation.x=sw*0.7;}
     if(pd.scarfTail)pd.scarfTail.rotation.x=0.25+Math.sin(clock*3.2)*0.12+(moving?0.35:0);
-    // activity animations: the right arm acts, tools appear in hand
+    // activity animations: windup → strike → IMPACT (fx/sfx fire on the hit frame), whole-body language
     const act=fishing.state!=='idle'?'fish':mining.node?'mine':chopping.tree?'chop':digging.active?'dig':'';
+    let lean=moving?0.06:0; const eo=t=>1-(1-t)*(1-t);
+    pd.armL.rotation.z=0;
     if(act==='fish'){ const f=fishing;
-      if(f.state==='cast')pd.armR.rotation.x=-2.4+f.cast*1.55;
-      else if(f.state==='reel')pd.armR.rotation.x=-0.7+(keys.act?Math.sin(clock*12)*0.3:0.05);
-      else if(f.state==='bite')pd.armR.rotation.x=-0.85+Math.sin(clock*22)*0.12;
-      else pd.armR.rotation.x=-0.85+Math.sin(clock*2)*0.05; }
+      if(bobber.visible)pWorld.face=Math.atan2(bobber.position.x-pWorld.x,bobber.position.z-pWorld.z); // square up to the water
+      if(f.state==='cast'){ const c=f.cast,w=0.24;
+        if(c<w){ const q=eo(c/w); pd.armR.rotation.x=lerp(-0.9,-2.9,q); rodMesh.rotation.x=-0.7-q*0.5; lean=-0.07*q; } // snap back…
+        else{ const q=Math.min(1,(c-w)/0.34); pd.armR.rotation.x=lerp(-2.9,-0.35,q*q); rodMesh.rotation.x=-1.2+q*0.95; lean=lerp(-0.07,0.13,q); } // …whip forward
+        pd.armL.rotation.x=-0.25; }
+      else if(f.state==='wait'){ pd.armR.rotation.x=-0.95+Math.sin(clock*1.7)*0.05; pd.armL.rotation.x=-0.12+Math.sin(clock*1.7+1)*0.04;
+        rodMesh.rotation.x=-0.55; lean=0.04; }
+      else if(f.state==='bite'){ const j=Math.sin(clock*26); pd.armR.rotation.x=-0.8+j*0.15; pd.armL.rotation.x=-0.45+j*0.1;
+        rodMesh.rotation.x=-0.55+Math.max(0,j)*0.4; lean=0.1; } // the rod yanks down in sharp jerks
+      else if(f.state==='reel'){ const on=keys.act, pump=Math.sin(clock*(on?9:2.4))*(on?1:0.25);
+        pd.armR.rotation.x=-1.15+pump*0.35; rodMesh.rotation.x=-0.95+pump*0.3;
+        pd.armL.rotation.x=-0.95+Math.cos(clock*(on?15:3))*0.45; pd.armL.rotation.z=0.4; // left hand cranks the reel
+        lean=-0.09+pump*0.045; } } // leaning back against the fish
     else if(act==='mine'||act==='chop'||act==='dig'){
-      pd.armR.rotation.x=-1.15+Math.sin(clock*13)*(keys.act?0.9:0.15); }
+      const tgt=act==='mine'?mining.node:act==='chop'?chopping.tree:null;
+      if(tgt)pWorld.face=Math.atan2(tgt.x-pWorld.x,tgt.z-pWorld.z); // square up to the target
+      const HIT=0.58, rate=keys.act?(act==='dig'?1.35:1.8):0.5;
+      swing.last=swing.p; swing.p=(swing.p+dt*rate)%1;
+      const P=swing.p, hit=keys.act&&swing.last<HIT&&P>=HIT&&swing.last<=P;
+      let a,wr;
+      if(P<0.42){ const q=eo(P/0.42); a=lerp(-0.7,-2.55,q); wr=-0.4*q; lean=lerp(lean,-0.09,q); }                  // heavy windup
+      else if(P<HIT){ const q=(P-0.42)/(HIT-0.42); a=lerp(-2.55,-0.12,q*q*q); wr=lerp(-0.4,0.55,q*q); lean=lerp(-0.09,0.2,q); } // accelerating strike
+      else{ const q=eo((P-HIT)/(1-HIT)); a=lerp(-0.12,-0.7,q); wr=lerp(0.55,0,q); lean=lerp(0.2,0,q); }           // recover
+      pd.armR.rotation.x=a; pd.armL.rotation.x=a*0.8; pd.armL.rotation.z=0.28; // two-handed grip
+      (act==='chop'?axeMesh:act==='dig'?shovelMesh:pickMesh).rotation.x=-0.65+wr; // wrist: the tool head leads the arc
+      if(hit){
+        if(act==='mine'){ const n=mining.node; sfx.pick(); addShake(0.06); mineFlinch=1;
+          fxBurst(n.x,n.y+0.7,n.z,{n:6,cols:[0x9aa1a8,0x747c84,ORE_INFO[n.type].color],speed:2.6,up:2.8,size:0.9}); }
+        else if(act==='chop'){ const t2=chopping.tree; beep(170+Math.random()*50,0.07,'square',0.06); addShake(0.05);
+          fxBurst(t2.x,t2.y+1.1,t2.z,{n:5,cols:[0x9a6b3a,0x7d5530,0xc79a5e],speed:2.4,up:2.4,size:0.9});
+          fxBurst(t2.x,t2.y+2.8,t2.z,{n:3,cols:t2.pink?[0xec9fcb,0xf5b5d9]:[0x3aa626,0x54cb3c],speed:1.4,up:0.6,size:0.8,grav:3}); }
+        else{ const fx2=pWorld.x+Math.sin(pWorld.face)*0.6, fz2=pWorld.z+Math.cos(pWorld.face)*0.6;
+          beep(120,0.09,'sine',0.06); addShake(0.04);
+          fxBurst(fx2,pWorld.y+0.15,fz2,{n:7,cols:[0x8a5a34,0x9a683e,0x6d4526],speed:2.2,up:3,size:0.95,grav:8}); } }
+      if(act==='mine'&&mining.node){ mining.node.mesh.scale.setScalar(1+mineFlinch*0.09); mineFlinch*=Math.exp(-9*dt); } } // flinch on hit, then relax
+    else{ swing.p=swing.last=0; rodMesh.rotation.x=-0.7; }
+    leanT=lerp(leanT,lean,1-Math.exp(-10*dt)); player.rotation.x=leanT;
     rodMesh.visible=(act==='fish');
-    pickMesh.visible=(act==='mine'||act==='dig');
+    pickMesh.visible=(act==='mine');
+    shovelMesh.visible=(act==='dig');
     axeMesh.visible=(act==='chop');
     player.position.set(pWorld.x, pWorld.y+(moving?Math.abs(Math.sin(pWorld.step))*0.08:0), pWorld.z);
 
@@ -2002,9 +2400,17 @@ function animate(now){
   skyUpdate(dt); rainUpdate(dt);
   if((chipT+=dt)>0.5){chipT=0;chipUpdate();}
   water.position.y=WATER_TOP+Math.sin(clock*0.8)*0.03;
+  if(dockBoat){ dockBoat.position.y=WATER_TOP+0.03+Math.sin(clock*0.85+1)*0.045;
+    dockBoat.rotation.z=Math.sin(clock*0.7)*0.02; dockBoat.rotation.x=Math.sin(clock*0.55+2)*0.015;
+    animBoat(dockBoat,clock); }
+  if(harborOpen)renderDockView(dt);
   trader.rotation.y=Math.sin(clock*0.5)*0.25;
   if(mineProps.cart)mineProps.cart.position.z=mineProps.z0+(mineProps.z1-mineProps.z0)*(0.5+0.5*Math.sin(clock*0.45));
   if(mineProps.wheel)mineProps.wheel.rotation.y=clock*1.3;
+  if(portalSwirl){ portalSwirl.rotation.z=-clock*1.6; const ps=1+Math.sin(clock*2.1)*0.07; portalSwirl.scale.set(ps,ps,1);
+    portalCore.material.emissiveIntensity=0.45+Math.sin(clock*2.6)*0.18;
+    for(const b of portalBits){ const u=b.userData,a2=clock*u.sp+u.ph;
+      b.position.set(Math.cos(a2)*u.r,1.82+Math.sin(a2)*u.r*0.6,0.15); } }
   updateFishLine();
   const lampNight=isNight()?1.7:1;
   for(let k=0;k<lamps.length;k++)lamps[k].material.emissiveIntensity=(0.7+Math.sin(clock*3+k*1.7)*0.3)*lampNight;
@@ -2034,7 +2440,7 @@ const startOv=document.getElementById('start');
       const d2=document.createElement('div'); d2.className='wthumb'+(k===worldKey?' cur':'');
       d2.appendChild(c); const nm=document.createElement('span'); nm.textContent=W2.name; d2.appendChild(nm);
       rowEl.appendChild(d2); thumbs.push({el:d2,w:W2,k}); }
-    let ti=WORLD_ORDER.indexOf(worldKey);
+    let ti=Math.max(0,WORLD_ORDER.indexOf(worldKey)); // cave isn't in WORLD_ORDER — indexOf -1 would crash the cycler
     const cyc=()=>{ thumbs.forEach((t,i2)=>t.el.classList.toggle('sel',i2===ti));
       const t=thumbs[ti];
       if(capEl)capEl.textContent=t.k===worldKey?t.w.name+' · you are here':
@@ -2049,14 +2455,8 @@ document.getElementById('startBtn').onclick=start;
 // idle preview loop: the island is already alive behind the start menu
 last=performance.now(); requestAnimationFrame(animate);
 document.getElementById('wipe').onclick=()=>{try{localStorage.removeItem(SAVE);localStorage.removeItem('reelfortune3d-world');}catch(e){}
-  state.coins=0;state.bucket=[];state.ores={wood:0,coal:0,iron:0,gold:0,diamond:0};state.rodLvl=1;state.pickLvl=1;state.axeLvl=1;
-  state.dex={};state.treasure=null;state.worlds=['isle'];state.ach={};
-  state.stocks={own:{},basis:{},lastDiv:Math.floor(Date.now()/(MKT_MS*DIV_Q)),lastShareEpoch:0,gotFirst:0};
-  state.pearls=0;state.pearlsLife=0;state.wardrobe={};state.titleId='';state.ownedT={};state.ownedW={};
-  state.bucketTier=0;state.boosts={chumUntil:0};
-  state.stats={caught:0,mined:0,earned:0,bestWin:0,spins:0,winsCt:0,losses:0,divEarned:0};
-  applyTitle();toast('Save wiped');
-  updateHUD();};
+  // a fresh save deserves a fresh boot: reload resets world, hero colors, title, dock — everything
+  toast('Save wiped'); setTimeout(()=>location.reload(),500); };
 applyWardrobe(); applyTitle(); payDividends(); // welcome-back dividends + saved cosmetics
 updateHUD();
 })();

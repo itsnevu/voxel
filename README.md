@@ -1,6 +1,6 @@
 # 🎣 Reel Fortune 3D
 
-A voxel (Minecraft-style) fishing, mining & gambling adventure on one big roamable island — built with **Three.js**. Walk a vivid blocky isle, fish the shores, mine the quarry, play the market's rotating prices, upgrade your gear, then risk your catch on the roulette wheel: **double your fish or lose it.**
+A voxel (Minecraft-style) fishing, mining & gambling adventure across four themed islands — built with **Three.js**. Fish the shores, mine the quarry, chop the woods, play a living market with its own stock exchange, upgrade your gear, and gamble your best catch at a real 3D roulette table. **Double your fish or lose it.**
 
 ## ▶️ How to run
 
@@ -18,69 +18,74 @@ python3 -m http.server 8000
 
 | Key | Action |
 |-----|--------|
-| **W A S D** / arrows | walk around the isle |
-| **E** | cast your line · hook the bite · interact with Trader / Casino |
-| **hold E** | reel the fish in · mine an ore node |
-| **scroll** | zoom the camera in/out |
-| **ESC** | close a menu / cancel fishing or mining |
+| **W A S D** / arrows | walk |
+| **E** | cast · hook a bite · interact (Trader / Casino / dig) |
+| **hold E** | reel in · mine ore · chop trees · dig treasure |
+| **I** / Tab | inventory (Bag · Fishdex · Stats) |
+| **scroll** | zoom |
+| **ESC** | close / cancel |
 
-## 🐟⛏️ The loop
+## 🔁 The loop
 
-1. **Fish any shore** → press **E** to cast. On **❗ BITE**, press **E**, then **hold E** to reel it in.
-2. **Mine the quarry** — follow the dirt path to the stone mountain (see the minimap). Hold **E** on ore rocks: coal, iron, gold, diamond. Nodes respawn after a while.
-3. **Sell at the TRADER** — fish and ores. Watch the banner: every 3 minutes one category is **HOT ×1.6** and one is **SURPLUS ×0.75**. Time your sales!
-4. **Upgrade** at the Trader: a better **rod** (faster bites, rarer fish) and a better **pick** (faster mining, bonus yield).
-5. **Gamble** at the **CASINO** — walk up to the real roulette table and the camera dives onto the felt. Stake a fish, bet **RED / BLACK** (×2) or **GREEN** (jackpot ×14), and **SPIN** — the ball rattles around the wheel and drops into a pocket.
-   - **Win** → the fish is worth double. Re-spin a winner to push your luck (×4, ×8…).
-   - **Lose** → the eel eats it. Gone.
+1. **Fish** any shore — some species only bite at night 🌙, in rain 🌧 or storms ⛈; 1.8% are ✦ shiny (×5 value). Every catch logs weight records in the **Fishdex**.
+2. **Mine** the quarry (coal→diamond) and **chop** trees for wood — ore nodes sometimes drop **share certificates**.
+3. **Sell at the Trader** — every 3 minutes one category is **HOT ×1.6**, one **SURPLUS ×0.75**.
+4. **Craft** better gear (coins + ores): Rod, Pickaxe & Axe, each 10 tiers.
+5. **Invest** at the **Isle Exchange** — 5 fictional stocks with live charts and hourly dividends (paid even offline). EEL never pays a dividend; the eel eats the profits.
+6. **Spend Pearls ◉** (activity points — never convertible to coins) at the **Pearl Kiosk**: hero outfit colors, floating titles, Chum Jar, Deep Bucket, Insider Tips.
+7. **Gamble** at the Casino — walk up to the roulette table, the camera dives onto the felt, the ball rattles into a pocket. Win = fish worth double (re-spin to push ×4, ×8…). Lose = the eel eats it.
+8. **Unlock new islands** at the ⛵ Harbor and do it all again, richer.
 
-Progress **auto-saves** in your browser. There's a **wipe save** link on the start screen.
+Progress **auto-saves** in your browser. Achievements pay coin bounties. There's a **wipe save** link on the start screen.
+
+## 🗺️ Worlds
+
+| World | Cost | Theme |
+|-------|------|-------|
+| Fortune Isle | free | vivid starter island |
+| The Great Mine | ◈2,500 | grey highlands, **double ore yield** |
+| Cinder Atoll | ◈8,000 | volcanic ash & black sand, fish ×2.2 |
+| Frostbite Isle | ◈25,000 | snow & frosted pines, fish ×4 |
+
+Coins, gear, pearls, dex and your stock portfolio travel with you — sailing regenerates the island.
+
+## 📈 Isle Exchange
+
+Five tickers priced purely from the real-world clock (deterministic — reloading can't reroll them), correlated with the HOT/SURPLUS rotation:
+
+| Ticker | Company | Personality |
+|--------|---------|-------------|
+| DIGG | Deep Digg Mining Co. | high volatility, tracks ore demand |
+| REEL | Reel Fortune Fisheries | steady, tracks fish demand |
+| LUMB | Lumberline Timber | boring but pays the best regular dividend |
+| EEL | Spinning Eel Ent. | meme stock — wild swings, **never** pays |
+| HARB | Harbor Star Lines | blue-chip, highest yield |
+
+Shares drop from play (mining is the main source; a diamond guarantees one). Buy/sell at a 10% spread; dividends land hourly — including while you were away.
 
 ## 🗂️ Project structure
 
 ```
 ReelFortune3D/
-├── index.html      ← page, HUD, minimap, menus, styling  (open this)
-├── game.js         ← all the game code (world, fishing, mining, market, roulette)
+├── index.html       ← page, HUD, minimap, menus, styling  (open this)
+├── game.js          ← all game code (world, fishing, mining, market, exchange, roulette)
 ├── lib/three.min.js ← the Three.js engine (r128)
 └── README.md
 ```
 
 ## 🛠️ Editing
 
-Everything is plain JavaScript — no build step. Open `game.js` and tweak:
+Plain JavaScript — no build step. Open `game.js` and tweak:
 
-- **World** — `N` (island size), `fbm()` / falloff (terrain shape), `COLORS` in the `tex*()` functions (block textures).
-- **Fish** — the `TABLE` array (species, rarity, value, drop weight).
-- **Ores** — `ORE_INFO` (prices, colors), node counts in the quarry section.
-- **Economy** — `ROD_UP` / `PICK_UP` upgrade costs, `MKT_MS` market rotation, roulette `SEG` / payouts.
-- **Look** — `CAM_OFF` (camera angle), `camSize` (zoom), lights in section 1, water/grass animation.
+- **World** — `N`, `WORLDS` (themes/seeds/costs), `fbm()` falloff, `tex*()` palettes
+- **Fish** — `TABLE` (species, rarity, value, weight, `night/rain/storm` conditions)
+- **Economy** — `ORE_INFO`, `upCost`/`UP_REQ` crafting, `MKT_MS` rotation, `STOCKS` (bases, volatility, yields), Pearl prices in `KIOSK_TITLES`/`BUCKET_COST`
+- **Look** — `CAM_OFF`, lights, `DAYKEYS` day/night palette, glass tokens in `index.html`
 
-Save the file and refresh the browser to see changes.
+Save, refresh, play.
 
-## 🗺️ Worlds
+## ✨ Everything inside
 
-Unlock new themed islands at the **⛵ Harbor** section of the Trader's market:
+96×96 procedural islands · BFS-carved dirt paths · entrance monument gate · day/night cycle with dusk palettes · rain & thunderstorms · swaying grass, cherry trees, flowers, mushrooms · signature hero with a real pixel face, straw hat & swaying scarf (recolorable) · animated tool props (rod/pick/axe in hand) · fishing line & bobber · voxel particle bursts, screen shake & hit-stop · coin-fly & pearl toasts · glassmorphism UI with pixel-art icons · minimap with POIs & treasure X · hotbar + tabbed inventory · Fishdex with ??? silhouettes · treasure maps · achievements · procedural music & sfx (♪ to mute) · a physical 3D roulette table the camera flies onto · title screen with an orbiting camera and live map previews of all four worlds.
 
-| World | Cost | Theme |
-|-------|------|-------|
-| Fortune Isle | free | vivid starter island |
-| The Great Mine | ◈2,500 | grey highlands, **double ore yield**, 30 nodes |
-| Cinder Atoll | ◈8,000 | volcanic ash & black sand, fish worth ×2.2 |
-| Frostbite Isle | ◈25,000 | snow & frosted pines, fish worth ×4 |
-
-Your coins, gear, bucket and dex travel with you — sailing regenerates the island.
-
-## ✨ What's in it
-
-- Big 96×96 procedurally generated island with a mineable stone quarry
-- Vivid Minecraft-style palette: checkered turf, stepped voxel trees (plus pink cherry trees), flowers, mushrooms, rocks
-- Dirt paths carved from spawn to the Trader, Casino and Mine (BFS-guaranteed walkable)
-- **Flowing water** — animated waves + scrolling caustics · swaying grass tufts
-- Trader stall with a checkered market roof, a glowing casino dais with spinning ring & lamps
-- Mining: hold-E ore nodes (coal/iron/gold/diamond) with respawns
-- Rotating market demand (HOT/SURPLUS) + rod & pickaxe upgrades
-- Minimap with POI markers, resource HUD, isometric camera with scroll zoom, soft shadows
-- A real **3D roulette table in the world** — the camera flies onto it, the ball circles the rim and settles into a pocket · sound effects (toggle with ♪) and local auto-save
-
-Built with [Three.js](https://threejs.org) r128. Pure client-side, MIT-spirited — do whatever you like with it.
+Built with [Three.js](https://threejs.org) r128. Pure client-side, MIT-spirited — no wallet, no server, no blockchain: just fortune.
