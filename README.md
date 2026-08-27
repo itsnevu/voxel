@@ -49,6 +49,28 @@ Progress **auto-saves** in your browser. Achievements pay coin bounties. There's
 
 Coins, gear, pearls, dex and your stock portfolio travel with you — sailing regenerates the island.
 
+## 🚢 The fleet & crew
+
+Every hull seats a fixed number of people — **the captain included** — so the raft you start on genuinely sails alone.
+
+| Hull | Cost | Seats | Berths for crew | Sea luck |
+|------|------|-------|-----------------|----------|
+| Driftwood Raft | free | 1 | — | +0% |
+| Cork Dinghy | ◈600 | 2 | 1 | +6% |
+| Teal Sloop | ◈2,400 | 4 | 3 | +12% |
+| Storm Trawler | ◈8,000 | 6 | 5 | +20% |
+| Gilded Galleon | ◈22,000 | 10 | 9 | +30% |
+
+A berth is **granted, never taken**. At the Harbor you pick a captain and *ask to board*; the request sits at their gangway until they hit **ADMIT** or **DENY**. Captains can also put a hand ashore later, and any guest can step ashore themselves.
+
+The rules the server enforces:
+
+- one berth per sailor — you cannot be aboard two boats
+- a captain hosting crew cannot go and crew for someone else (send yours ashore first)
+- a manifest never exceeds `seats - 1`, re-checked when ADMIT is pressed, not when the button is drawn
+
+Crews live on the server (`/api/crew*`), so this part needs a sign-in — offline play still shows what each hull *could* hold.
+
 ## 📈 Isle Exchange
 
 Five tickers priced purely from the real-world clock (deterministic — reloading can't reroll them), correlated with the HOT/SURPLUS rotation:

@@ -22,8 +22,9 @@ import cors from 'cors';
 import * as DB from './db.js';
 import { requireAuth, mountAuth } from './auth.js';
 import { HANDLERS, RATE } from './game/actions.js';
-import { newState, BOATS, boatSeats, crewSlots, MAX_BOAT } from './game/rules.js';
+import { newState, normalizeState, BOATS, boatSeats, crewSlots, MAX_BOAT } from './game/rules.js';
 import { payDividends, mktEpochNow } from './game/economy.js';
+import { attach, onlineTotal, roomCount } from './realtime.js';
 
 const { initSchema, saves, sessions, actions: actionLog, deedsRepo, crews } = DB;
 
@@ -77,15 +78,136 @@ app.use(express.json({ limit: '64kb' }));
 /* ------------------------------------------------------------- helpers ---- */
 const nowMs = () => Date.now();
 
-/** Load a user's save, creating (and persisting) a fresh one on first login. */
-function loadState(userId) {
-  let state = null;
-  try { state = saves.get(userId); } catch (e) { console.error('[saves.get]', e); }
-  if (!state || typeof state !== 'object' || Array.isArray(state)) {
-    state = newState();
-    saves.put(userId, state);
+/* ============================================================================
+   SAVE LOADING
+   ----------------------------------------------------------------------------
+   Two situations look identical through db.js's saves.get(), which answers null
+   for both, and they must never be handled alike:
+
+     no row yet          -> mint a newState() and persist it (a first login)
+     row present, broken -> DO NOT WRITE. A newState() here silently replaces a
+                            player's entire history with an empty save, and the
+                            old bytes are gone for good.
+
+   So the row is read straight from the table: its bare presence is exactly the
+   signal saves.get() throws away. Rows that do parse go through normalizeState()
+   rather than being trusted or discarded, so a legacy or half-malformed save is
+   repaired in place. Anything unreadable raises SaveUnreadable, every route
+   answers 503, and the stored bytes stay on disk for a human to rescue.
+   ========================================================================== */
+
+/** A save row exists but could not be turned into a state. Never overwrite it. */
+class SaveUnreadable extends Error {
+  constructor(userId) {
+    super(`save for user ${userId} could not be read`);
+    this.name = 'SaveUnreadable';
+    this.userId = userId;
   }
-  return state;
+}
+
+// undefined = not resolved yet, null = unavailable, else (userId) => row|undefined
+let readSaveRow;
+
+/**
+ * Resolve a direct reader for the saves row. The raw better-sqlite3 handle is
+ * discovered the same way the leaderboard does it, so db.js stays untouched.
+ */
+function resolveSaveRowReader() {
+  if (readSaveRow !== undefined) return readSaveRow;
+  readSaveRow = null;
+
+  const raw = DB.db || DB.database || (DB.default && DB.default.db);
+  if (!raw || typeof raw.prepare !== 'function') {
+    console.error('[saves] no raw db handle — cannot tell a missing save from a corrupt one.');
+    return readSaveRow;
+  }
+
+  try {
+    const stmt = raw.prepare('SELECT state FROM saves WHERE user_id = ?');
+    stmt.get(0);                       // smoke test: fail here, not per-request
+    readSaveRow = (userId) => stmt.get(userId);
+  } catch (e) {
+    console.error('[saves] row reader unavailable:', e.message);
+    readSaveRow = null;
+  }
+  return readSaveRow;
+}
+
+// Resolve at boot so a broken build shouts into the log immediately instead of
+// on some unlucky player's first request.
+resolveSaveRowReader();
+
+/**
+ * Load a user's save. A fresh state is minted ONLY when the player genuinely
+ * has no row yet; every existing row is normalised, never replaced.
+ *
+ * @throws {SaveUnreadable} when a row exists but cannot be parsed — the caller
+ *         must answer 503 and leave the stored save alone.
+ */
+function loadState(userId) {
+  const readRow = resolveSaveRowReader();
+
+  if (!readRow) {
+    // Without the row probe there is no way to tell "new player" from "corrupt
+    // save", and guessing wrong destroys progress. Refuse instead: a loud
+    // outage is recoverable, a wiped save is not.
+    const state = (() => {
+      try { return saves.get(userId); } catch (e) { console.error('[saves.get]', e); return null; }
+    })();
+    if (state && typeof state === 'object' && !Array.isArray(state)) return normalizeState(state);
+    throw new SaveUnreadable(userId);
+  }
+
+  let row;
+  try {
+    row = readRow(userId);
+  } catch (e) {
+    // A failed read is not proof the save is gone. Refuse rather than reset.
+    console.error('[saves.read]', userId, e);
+    throw new SaveUnreadable(userId);
+  }
+
+  if (!row) {
+    // No row at all: this really is a first login.
+    const fresh = newState();
+    saves.put(userId, fresh);
+    return fresh;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(row.state);
+  } catch (e) {
+    console.error('[saves.corrupt] user', userId, '— unparseable save left untouched:', e.message);
+    throw new SaveUnreadable(userId);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    console.error('[saves.corrupt] user', userId, '— save row is not a state object, left untouched.');
+    throw new SaveUnreadable(userId);
+  }
+
+  return normalizeState(parsed);
+}
+
+/** 503 for a save we refused to read. Nothing has been written. */
+function refuseUnreadable(res) {
+  res.set('Retry-After', '30');
+  return res.status(503).json({
+    error: 'your save could not be read — it has been left untouched, please try again shortly'
+  });
+}
+
+/**
+ * Request-scoped loadState: answers 503 and returns null when the save is
+ * unreadable, so handlers can bail with `if (!state) return;`.
+ */
+function loadStateFor(req, res) {
+  try {
+    return loadState(req.userId);
+  } catch (e) {
+    if (e instanceof SaveUnreadable) { refuseUnreadable(res); return null; }
+    throw e;
+  }
 }
 
 /**
@@ -118,10 +240,36 @@ function syncDeeds(userId, state) {
   }
 }
 
+/* ----------------------------------------------------------------------------
+   Fields the server tracks nowhere and must therefore never echo back.
+
+   `ach` (achievements) and `deeds` (Isle Ledger trophies) are still evaluated
+   entirely in game.js. newState() seeds both empty and no handler in
+   game/actions.js ever writes to them, so what the server holds is always {}.
+   game.js's SRV.apply() copies every key of the reply over its own state — so
+   shipping those two empty objects wiped the player's achievements and deeds on
+   every single action. Saying nothing about them leaves the client holding the
+   only real copy, which is the safe answer while the evaluation lives there.
+
+   NEXT PIECE OF WORK: move achievement and deed evaluation into the server
+   (rules for both, awarded inside the action handlers), then make these fields
+   authoritative and send them again — at which point syncDeeds() below finally
+   has something to mirror into the ledger table.
+   -------------------------------------------------------------------------- */
+const CLIENT_OWNED_FIELDS = ['ach', 'deeds'];
+
+/** The state as the client may see it: everything the server actually owns. */
+function clientState(state) {
+  if (!state || typeof state !== 'object') return state;
+  const out = { ...state };
+  for (const k of CLIENT_OWNED_FIELDS) delete out[k];
+  return out;
+}
+
 /** Standard success envelope for anything that hands back a full state. */
 function stateEnvelope(state, extra) {
   return Object.assign({
-    state,
+    state: clientState(state),
     epoch: mktEpochNow(),
     serverTime: nowMs()
   }, extra || {});
@@ -136,7 +284,8 @@ mountAuth(app);
    GET /api/state — the client's only way to learn what it owns.
    ========================================================================== */
 app.get('/api/state', requireAuth, (req, res) => {
-  const state = loadState(req.userId);
+  const state = loadStateFor(req, res);
+  if (!state) return;
 
   // Dividends accrue on market epochs, not on player actions, so they are
   // settled whenever the player checks in. payDividends() is epoch-guarded and
@@ -188,7 +337,8 @@ app.post('/api/action/:name', requireAuth, (req, res) => {
     }
   } catch (e) { console.error('[actions.countSince]', e); }
 
-  const state = loadState(userId);
+  const state = loadStateFor(req, res);
+  if (!state) return;
 
   // Settle any owed dividends first so the handler sees the true balance.
   let dividends = 0;
@@ -232,7 +382,8 @@ const TITLE_MAX_LEN = 32;
 
 app.post('/api/save', requireAuth, (req, res) => {
   const body = (req.body && typeof req.body === 'object') ? req.body : {};
-  const state = loadState(req.userId);
+  const state = loadStateFor(req, res);
+  if (!state) return;
   let touched = false;
 
   // --- wardrobe colours: only after the 80-pearl wardrobe was bought here ---
@@ -432,7 +583,8 @@ function signClaim(address, deedId, userId) {
 }
 
 app.get('/api/ledger', requireAuth, (req, res) => {
-  const state = loadState(req.userId);
+  const state = loadStateFor(req, res);
+  if (!state) return;
   syncDeeds(req.userId, state);
 
   let rows = [];
@@ -471,7 +623,8 @@ app.post('/api/ledger/claim', requireAuth, (req, res) => {
   } catch (e) { console.error('[ledger.rate]', e); }
 
   // Make sure the deed exists for this player before signing anything.
-  const state = loadState(userId);
+  const state = loadStateFor(req, res);
+  if (!state) return;
   syncDeeds(userId, state);
 
   let owned = false;
@@ -593,7 +746,7 @@ function crewView(userId, username) {
 
 /* ---- GET /api/crew — everything the Harbor panel needs in one round trip -- */
 app.get('/api/crew', requireAuth, (req, res) => {
-  loadState(req.userId);                       // make sure a save (and boatLvl) exists
+  if (!loadStateFor(req, res)) return;         // make sure a save (and boatLvl) exists
   const me = DB.users.findById(req.userId);
   res.json(crewView(req.userId, me ? me.username : ''));
 });
@@ -744,6 +897,23 @@ app.post('/api/crew/leave', requireAuth, (req, res) => {
   res.json({ ok: true, left: !!left, ...crewView(req.userId, me ? me.username : '') });
 });
 
+/* ------------------------------------------------------------- online ----- */
+// Head-count per isle, straight out of the realtime layer. Deliberately
+// unauthenticated: the shell shows how busy each world is before you sign in,
+// and it leaks nothing but numbers.
+app.get('/api/online', (req, res) => {
+  res.json({
+    total: onlineTotal(),
+    rooms: {
+      isle: roomCount('isle'),
+      mine: roomCount('mine'),
+      volcano: roomCount('volcano'),
+      frost: roomCount('frost'),
+      cave: roomCount('cave')
+    }
+  });
+});
+
 /* ------------------------------------------------------------- health ----- */
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, epoch: mktEpochNow(), serverTime: nowMs(), uptime: process.uptime() });
@@ -788,6 +958,9 @@ app.use((req, res) => {
 
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
+  // Safety net for a save we refused to read: a route that forgot loadStateFor()
+  // must still answer 503, never 500 and never a silent overwrite.
+  if (err instanceof SaveUnreadable) return refuseUnreadable(res);
   // Body parser failures arrive here as well.
   if (err && err.type === 'entity.too.large') {
     return res.status(413).json({ error: 'payload too large' });
@@ -810,6 +983,10 @@ const server = app.listen(PORT, '127.0.0.1', () => {
   console.log(`  cors origin     : ${CORS_ORIGIN}`);
   console.log(`  market epoch    : ${mktEpochNow()}`);
 });
+
+// The realtime layer rides on the same HTTP server: attach() takes the socket
+// upgrades for itself and leaves every route above untouched.
+attach(server);
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {

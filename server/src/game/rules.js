@@ -11,6 +11,12 @@
 export const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 export const rand = (a, b) => a + Math.random() * (b - a);
 
+/* Own-property test. Every table lookup keyed by a string that came out of a
+   save file goes through this: a plain `WORLDS[k]` answers truthily for
+   '__proto__', 'constructor' and 'toString', which is enough to walk a bogus
+   key past an `if (WORLDS[k])` gate. */
+const has = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+
 /* ---- deterministic value noise (game.js:142-145) --------------------------
    Shared with economy.js so stock charts drawn on the client and prices
    settled on the server come from the exact same curve. Do not "improve"
@@ -40,10 +46,60 @@ export const ORE_INFO = {
 };
 export const ORE_KEYS = Object.keys(ORE_INFO);
 
+/* The quarry's node split (game.js:759): coal 40%, iron 30%, gold 20%,
+   diamond 10%. Both rollOreType() and oreTypeFor() read it from here, so a
+   random node and a keyed one can never drift apart. */
+const oreTypeAt = (r) => (r < 0.4 ? 'coal' : r < 0.7 ? 'iron' : r < 0.9 ? 'gold' : 'diamond');
+
 /** Ore node type roll used by the quarry (game.js:759). */
 export function rollOreType() {
-  const r = Math.random();
-  return r < 0.4 ? 'coal' : r < 0.7 ? 'iron' : r < 0.9 ? 'gold' : 'diamond';
+  return oreTypeAt(Math.random());
+}
+
+/* Fold an arbitrary key into a small non-negative integer. Only used to feed
+   hash(), so it needs to be stable and well-spread, not cryptographic. */
+function foldKey(v) {
+  const s = String(v ?? '');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 100003;
+  return h;
+}
+
+/* A world's lane in the ore hash. The shipped `seed` is what the client uses
+   to lay the isle out, so keyed ore types stay in the same family of numbers;
+   an unrecognised key still gets its own lane rather than colliding on isle. */
+function worldSeed(world) {
+  const w = typeof world === 'string' && has(WORLDS, world) ? WORLDS[world] : null;
+  return w && Number.isFinite(w.seed) ? w.seed : foldKey(world);
+}
+
+/**
+ * The ore type of one quarry node, derived rather than rolled.
+ *
+ * `mine` cannot trust the client to say WHICH node it just broke open — a
+ * scripted client would report `diamond` every swing. Instead the client sends
+ * the node's id and the server derives the type here, so the answer is fixed
+ * the first time a node is named and identical on every later call.
+ *
+ * Deterministic by construction: hash() is pure float math over the two
+ * integers below, so oreTypeFor(w, id) === oreTypeFor(w, id) always. The odds
+ * match rollOreType(): coal 40%, iron 30%, gold 20%, diamond 10%.
+ */
+export function oreTypeFor(world, nodeId) {
+  const n = +nodeId;
+  /* keep the hash inputs small and integral: huge or fractional ids still map
+     to a stable lane, but never to a float that sin() cannot resolve apart */
+  const id = Number.isFinite(n) ? (((Math.trunc(n) % 100003) + 100003) % 100003) : foldKey(nodeId);
+  /* the +1s keep node 0 of world `isle` (seed 0) off hash()'s sin(0) === 0 */
+  const r = hash(id + 1, worldSeed(world) + 1);
+  /* Ids at or past the world's quarry count are the grass "starter" nodes the
+     client scatters near spawn so a mine-less isle can still craft its way to
+     tier 3. They are coal/iron only — and BOTH sides must agree, or the player
+     would break open a coal rock and be handed a diamond. */
+  const w = typeof world === 'string' && has(WORLDS, world) ? WORLDS[world] : null;
+  const quarry = w && Number.isFinite(w.oreN) ? w.oreN : 0;
+  if (Number.isFinite(n) && Math.trunc(n) >= quarry) return r < 0.6 ? 'coal' : 'iron';
+  return oreTypeAt(r);
 }
 
 /* Pearls track effort, not ore value (game.js:2113 + the chop's flat +1). */
@@ -160,12 +216,14 @@ export const PICK_NAMES = ['', 'Rusty Pick', 'Stone Pick', 'Iron Pick', 'Steel P
 export const AXE_NAMES  = ['', 'Dull Axe', 'Stone Axe', 'Iron Axe', 'Steel Axe', 'Golden Axe', 'Crystal Axe', 'Obsidian Axe', 'Mythril Axe', 'Dragon Axe', 'Titan Axe'];
 
 /**
- * Rod luck. Every craft bends the fish table a little further toward the rare
- * end — Lv.1 is the shipped table (0), Lv.10 is +0.81 luck, which roughly
- * halves the commons and triples the legendary weight. This stacks on top of
- * the rod's long-standing reroll loop, so a Poseidon Rod is felt twice.
+ * Rod luck — what a craft actually buys you at the water.
+ * This REPLACES the old "reroll the draw up to 9 times at p=0.3" loop: that
+ * loop saturated near Lv.10 (almost every draw already landed epic+), which
+ * left no headroom for bait to matter. One additive dial keeps rod and bait
+ * legible together. Lv.1 = 0 (the shipped table untouched), Lv.10 = +1.62,
+ * which is a little ahead of where the old reroll ladder topped out.
  */
-export const rodLuck = (lvl) => +(0.09 * (clamp(lvl | 0 || 1, 1, MAXLVL) - 1)).toFixed(4);
+export const rodLuck = (lvl) => +(0.18 * (clamp(lvl | 0 || 1, 1, MAXLVL) - 1)).toFixed(4);
 
 /* ============================================================================
    BAIT — the consumable half of fishing luck.
@@ -177,11 +235,11 @@ export const rodLuck = (lvl) => +(0.09 * (clamp(lvl | 0 || 1, 1, MAXLVL) - 1)).t
    top two baits only turn a profit once you are fishing a high-value world.
    ============================================================================ */
 export const BAITS = {
-  worm:   { name: 'Garden Worm',   sub: 'wriggly, cheap, honest',        cost: 80,   pack: 10, luck: 0.4, min: null,       shiny: 1,   tint: '#c98b6a' },
-  shrimp: { name: 'Brine Shrimp',  sub: 'nothing small bothers with it', cost: 300,  pack: 10, luck: 0.9, min: 'uncommon', shiny: 1.2, tint: '#ff9f7a' },
-  squid:  { name: 'Squid Strip',   sub: 'the deep answers this one',     cost: 900,  pack: 10, luck: 1.6, min: 'rare',     shiny: 1.5, tint: '#c9b6ff' },
-  glow:   { name: 'Glowworm Lure', sub: 'burns cold, draws big',         cost: 2200, pack: 10, luck: 2.4, min: 'rare',     shiny: 2,   tint: '#8ef7c9' },
-  siren:  { name: "Siren's Chum",  sub: 'legends come to look',          cost: 5500, pack: 10, luck: 3.2, min: 'epic',     shiny: 3,   tint: '#ffd24f' }
+  worm:   { name: 'Garden Worm',   sub: 'wriggly, cheap, honest',        cost: 60,   pack: 10, luck: 0.4, min: null,        shiny: 1,   tint: '#c98b6a' },
+  shrimp: { name: 'Brine Shrimp',  sub: 'nothing small bothers with it', cost: 180,  pack: 10, luck: 0.9, min: 'uncommon',  shiny: 1.2, tint: '#ff9f7a' },
+  squid:  { name: 'Squid Strip',   sub: 'the deep answers this one',     cost: 400,  pack: 10, luck: 1.6, min: 'rare',      shiny: 1.5, tint: '#c9b6ff' },
+  glow:   { name: 'Glowworm Lure', sub: 'burns cold, draws big',         cost: 900,  pack: 10, luck: 2.4, min: 'epic',      shiny: 2,   tint: '#8ef7c9' },
+  siren:  { name: "Siren's Chum",  sub: 'only legends answer',           cost: 6000, pack: 10, luck: 3.2, min: 'legendary', shiny: 3,   tint: '#ffd24f' }
 };
 export const BAIT_ORDER = ['worm', 'shrimp', 'squid', 'glow', 'siren'];
 export const BAIT_MAX = 999;   // per-kind stack ceiling
@@ -254,6 +312,10 @@ export function newState() {
     stocks: { own: {}, basis: {}, lastDiv: null, lastShareEpoch: 0, gotFirst: 0 },
     pearls: 0, pearlsLife: 0,
     wardrobe: {}, titleId: '', ownedT: {}, ownedW: {},
+    /* one-off Pearl Kiosk unlocks (game.js:1604) — flags, not counters:
+       `pet` is the Spirit Fish that follows you, `charm` the Lucky Charm that
+       re-rolls one losing spin in five. Both are 0/1 and never spent. */
+    pet: 0, charm: 0,
     bucketTier: 0,
     bait: {}, baitId: '',
     boosts: { chumUntil: 0 },
@@ -273,6 +335,43 @@ export function cap(state) {
    local mirror of the set here. Must match economy.js's STOCK_KEYS. */
 const STOCK_TICKERS = new Set(['DIGG', 'REEL', 'LUMB', 'EEL', 'HARB']);
 
+/* Hard ceiling on stored bucket entries. Well above any reachable cap() — this
+   only stops a hand-edited row from carrying an unbounded array into memory. */
+const BUCKET_HARD_MAX = 64;
+
+/**
+ * Rebuild one bucket entry from scratch.
+ *
+ * Fish are the only free-form objects a save carries into the economy: `sell`
+ * reads `.val`, the roulette reads and rewrites `.wins`, and the Fishdex is
+ * keyed off `.name`. Copying the row field by field means an edited save can
+ * neither smuggle extra properties into a handler nor hand one a `.val` of
+ * `"1e9"`, `NaN` or -1.
+ *
+ * Magnitudes are floored but never capped: a fish that rode six green pockets
+ * is legitimately worth a fortune, and clamping it would rewrite the payout
+ * table. Returns null for anything too broken to keep.
+ */
+function normalizeFish(f) {
+  if (!f || typeof f !== 'object' || Array.isArray(f)) return null;
+  const name = typeof f.name === 'string' ? f.name.slice(0, 64).trim() : '';
+  if (!name) return null;
+
+  const int = (v) => (Number.isFinite(+v) ? Math.max(0, Math.floor(+v)) : 0);
+  const out = {
+    uid: typeof f.uid === 'string' && f.uid ? f.uid.slice(0, 32) : (Date.now() + Math.random()).toString(36),
+    name,
+    rar: RAR_ORDER.includes(f.rar) ? f.rar : 'common',
+    val: int(f.val),
+    kg: Number.isFinite(+f.kg) ? Math.max(0, +Math.abs(+f.kg).toFixed(1)) : 0,
+    wins: int(f.wins)
+  };
+  /* shiny is cosmetic here — the ×5 was already banked into `val` when the
+     fish was rolled, so re-reading the flag must not multiply it again */
+  if (f.shiny) out.shiny = true;
+  return out;
+}
+
 /**
  * Coerce an untrusted/legacy save row into a valid state.
  * Mirrors the client's load() clamping, but NEVER trusts a field: anything
@@ -284,18 +383,33 @@ export function normalizeState(raw) {
   const st = newState();
   const num = (v, d = 0) => (Number.isFinite(+v) ? +v : d);
   const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : null);
+  /* `x | 0` is ToInt32, so it silently WRAPS past 2^31: a hand-edited
+     `pearls: 4294967296` reads back as 0, and 2147483648 as a negative. Floor
+     the Number instead, then clamp — out-of-range values saturate, not wrap. */
+  const int0 = (v) => Math.max(0, Math.floor(num(v, 0)));
 
-  st.coins = Math.max(0, Math.floor(num(s.coins, 0)));
-  st.bucket = Array.isArray(s.bucket) ? s.bucket.filter((f) => f && typeof f === 'object').slice(0, 64) : [];
+  st.coins = int0(s.coins);
+  st.bucket = Array.isArray(s.bucket)
+    ? s.bucket.slice(0, BUCKET_HARD_MAX).map(normalizeFish).filter(Boolean)
+    : [];
   const ores = obj(s.ores);
-  if (ores) for (const k in st.ores) st.ores[k] = Math.max(0, ores[k] | 0);
+  if (ores) for (const k in st.ores) st.ores[k] = int0(ores[k]);
   const stats = obj(s.stats);
   if (stats) for (const k in st.stats) st.stats[k] = Math.max(0, num(stats[k], 0));
   if (obj(s.dex)) st.dex = s.dex;
   if (obj(s.ach)) st.ach = s.ach;
-  if (obj(s.treasure) && s.treasure.i != null) st.treasure = s.treasure;
+  /* a map is two grid cells plus the isle it was buried on; the client owns the
+     heightmap, so it re-checks the cell is diggable land before showing the X */
+  const tr = obj(s.treasure);
+  if (tr && Number.isFinite(+tr.i) && Number.isFinite(+tr.j)) {
+    st.treasure = {
+      i: int0(tr.i),
+      j: int0(tr.j),
+      w: typeof tr.w === 'string' && has(WORLDS, tr.w) ? tr.w : null
+    };
+  }
   if (Array.isArray(s.worlds) && s.worlds.length) {
-    const w = s.worlds.filter((k) => typeof k === 'string' && WORLDS[k]);
+    const w = s.worlds.filter((k) => typeof k === 'string' && has(WORLDS, k));
     if (w.length) st.worlds = [...new Set(w)];
   }
   if (!st.worlds.includes('isle')) st.worlds.unshift('isle');
@@ -303,7 +417,7 @@ export function normalizeState(raw) {
   const sk = obj(s.stocks);
   if (sk) {
     const own = obj(sk.own);
-    if (own) for (const k in own) if (STOCK_TICKERS.has(k)) st.stocks.own[k] = clamp(own[k] | 0, 0, 100);
+    if (own) for (const k in own) if (STOCK_TICKERS.has(k)) st.stocks.own[k] = clamp(int0(own[k]), 0, 100);
     const basis = obj(sk.basis);
     if (basis) for (const k in basis) {
       const b = +basis[k];
@@ -317,17 +431,22 @@ export function normalizeState(raw) {
     st.stocks.gotFirst = sk.gotFirst ? 1 : 0;
   }
 
-  st.pearls = Math.max(0, s.pearls | 0);
-  st.pearlsLife = Math.max(0, s.pearlsLife | 0);
+  st.pearls = int0(s.pearls);
+  st.pearlsLife = int0(s.pearlsLife);
+  /* lifetime pearls can only ever be >= the unspent balance */
+  if (st.pearlsLife < st.pearls) st.pearlsLife = st.pearls;
+  /* Pearl Kiosk one-offs: truthy means owned, and ownership is never a count */
+  st.pet = s.pet ? 1 : 0;
+  st.charm = s.charm ? 1 : 0;
   if (obj(s.wardrobe)) st.wardrobe = s.wardrobe;
   if (obj(s.ownedW)) st.ownedW = s.ownedW;
   if (obj(s.ownedT)) st.ownedT = s.ownedT;
   if (obj(s.deeds)) st.deeds = s.deeds;
   st.titleId = typeof s.titleId === 'string' ? s.titleId.slice(0, 40) : '';
-  st.bucketTier = clamp(s.bucketTier | 0, 0, 4);
+  st.bucketTier = clamp(int0(s.bucketTier), 0, 4);
   const bait = obj(s.bait);
   if (bait) for (const k of BAIT_ORDER) {
-    const n = clamp(bait[k] | 0, 0, BAIT_MAX);
+    const n = clamp(int0(bait[k]), 0, BAIT_MAX);
     if (n > 0) st.bait[k] = n;
   }
   /* an equipped bait you have none of is the same as no bait at all */
@@ -335,11 +454,11 @@ export function normalizeState(raw) {
   st.tipEpoch = Math.max(0, num(s.tipEpoch, 0));
   const boosts = obj(s.boosts);
   if (boosts) st.boosts.chumUntil = Math.max(0, num(boosts.chumUntil, 0));
-  st.rodLvl = clamp(s.rodLvl | 0 || 1, 1, MAXLVL);
-  st.pickLvl = clamp(s.pickLvl | 0 || 1, 1, MAXLVL);
-  st.axeLvl = clamp(s.axeLvl | 0 || 1, 1, MAXLVL);
-  st.boatLvl = clamp(s.boatLvl | 0, 0, MAX_BOAT);
-  st.world = typeof s.world === 'string' && WORLDS[s.world] ? s.world : 'isle';
+  st.rodLvl = clamp(int0(s.rodLvl) || 1, 1, MAXLVL);
+  st.pickLvl = clamp(int0(s.pickLvl) || 1, 1, MAXLVL);
+  st.axeLvl = clamp(int0(s.axeLvl) || 1, 1, MAXLVL);
+  st.boatLvl = clamp(int0(s.boatLvl), 0, MAX_BOAT);
+  st.world = typeof s.world === 'string' && has(WORLDS, s.world) ? s.world : 'isle';
   /* an unowned isle in `world` would let a client teleport by editing its save */
   if (st.world !== 'cave' && !st.worlds.includes(st.world)) st.world = 'isle';
   if (st.world === 'cave' && !st.worlds.includes('cave')) st.world = 'isle';
@@ -422,7 +541,6 @@ export function rollOnce(opts = {}) {
  * The full catch roll — the client's rollFish().
  *   - luck (rod ladder + bait) re-weights the table toward the rare end
  *   - bait's rarity floor cuts everything below it out of the pool
- *   - rod level rerolls: min(rodLvl-1, 9) tries at p=0.3, keep the rarer fish
  *   - rain/storm grants one extra reroll at p=0.12
  *   - the boat's sea luck grants one more at its own rate
  *   - 1.8% shiny mutation (× the bait's shiny bonus): ×5 value, '✦ ' prefix
@@ -439,13 +557,6 @@ export function rollFish({ rodLvl = 1, bait = null, boatLvl = 0, fishMul,
   let f = rollOnce(opts);
   if (!f) return null;
 
-  const rr = Math.min(clamp(rodLvl | 0 || 1, 1, MAXLVL) - 1, 9);
-  for (let k = 0; k < rr; k++) {
-    if (Math.random() < 0.3) {
-      const g = rollOnce(opts);
-      if (g && RORDER[g.rar] > RORDER[f.rar]) f = g;
-    }
-  }
   const e = envOf({ night, wet, storm });
   if ((e.rain || e.storm) && Math.random() < 0.12) {
     const g = rollOnce(opts);

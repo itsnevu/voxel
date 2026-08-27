@@ -12,11 +12,28 @@
    state back to the client. A handler that returns `ok:false` must not have
    changed anything the player can notice.
 
+   RESULT SHAPE — the client reads these fields by name, so they are part of
+   the wire contract. Every successful result carries:
+       message : a short, display-ready line for a toast
+   plus, per action:
+       sell   -> { gained, kept? }        coins that landed in the purse
+       stock  -> { gained }               on 'sell'; 'buy' needs only message
+       craft  -> { name, level }          the tool that came off the bench
+       mine   -> { type, got, pearls, share? }   type is decided by the SERVER
+       chop   -> { got, pearls, share? }
+       dig    -> { coins?, ... }          coins only when coins were paid
+       spin   -> { winIdx, color, won, payout }
+       catch  -> { fish, pearls, isNew, isRec, share?, treasure? }
+       travel -> { unlocked:true } when buying a charter; absent when sailing
+       boat   -> { name, level }
+   `share` is the bare ticker string the client toasts, never an object.
+
    Nothing in `body` is ever trusted for value: indices are range-checked,
    prices are recomputed from economy.js, and stake amounts must match the
    fixed ladder. The only client-supplied facts we accept are the ambient ones
-   the server has no view of (night / wet), and those can only shift WHICH fish
-   table is rolled — never how much anything is worth.
+   the server has no view of (night / weather) and the ID of the thing being
+   worked (which ore node, which tree) — and those can only shift WHICH table
+   is rolled, never how much anything is worth.
 
    Ported 1:1 from game.js; the line references below point at the original.
    ESM, Node 18+. No express, no db — pure state transitions.
@@ -28,10 +45,16 @@ import {
   RORDER, ORE_INFO, ORE_KEYS, PEARL_ORE,
   MAXLVL, WORLDS, WORLD_ORDER,
   ROD_BASE, PICK_BASE, AXE_BASE, UP_REQ, AXE_REQ,
+  ROD_NAMES, PICK_NAMES, AXE_NAMES,
+  BAITS, BAIT_ORDER, BAIT_MAX, baitOf,
+  BOATS, BOAT_REQ, MAX_BOAT, haveOres,
   upCost, axeCost,
   cap, rollFish, pearlsForFish, dexNameOf,
+  rollOreType, oreTypeFor,
   rand, clamp
 } from './rules.js';
+/* realtime.js never imports this module, so this stays a one-way dependency */
+import { nodes as sharedNodes } from '../realtime.js';
 
 import {
   STOCK_KEYS, STOCK_CAP,
@@ -53,10 +76,12 @@ export const RATE = {
   dig: 1200,
   sell: 250,
   craft: 400,
+  bait: 400,
   stock: 400,
   kiosk: 400,
   spin: 1500,
-  travel: 2000
+  travel: 2000,
+  boat: 1000
 };
 
 /* ============================================================================
@@ -71,14 +96,30 @@ const SEG = (() => {
   for (let i = 1; i < NSEG; i++) s[i] = i % 2 === 1 ? 'red' : 'black';
   return s;
 })();
-const BET_COLORS = new Set(['red', 'black', 'green']);
-const COIN_STAKES = [50, 250, 1000];          // game.js:1981
-const GREEN_MULT = 14, COLOR_MULT = 2;        // game.js:2036
+/* Must mirror game.js betWins()/betPay()/COIN_STAKES exactly, or the outside
+   bets the table renders would all bounce off the server with a 400. */
+const BET_KINDS = new Set(['red', 'black', 'green', 'odd', 'even', 'high']);
+const COIN_STAKES = [50, 250, 1000, 5000];
+function betWins(bet, idx) {
+  const col = SEG[idx];
+  if (bet === 'red' || bet === 'black' || bet === 'green') return col === bet;
+  if (idx === 0) return false;                 // the green zero eats every outside bet
+  if (bet === 'odd') return idx % 2 === 1;
+  if (bet === 'even') return idx % 2 === 0;
+  if (bet === 'high') return idx >= 8;
+  return false;
+}
+const GREEN_MULT = 14, COLOR_MULT = 2;        // game.js:2354
+const betPay = (bet) => (bet === 'green' ? GREEN_MULT : COLOR_MULT);
+/* The Lucky Charm re-rolls ONE losing spin in five (game.js:2412). It nudges
+   the odds; it does not rig them — the second pocket can lose again. */
+const CHARM_REROLL_IN = 5;
 
 /* Pearl kiosk (game.js:1806-1842) — every price here is PEARLS, never coins. */
 const BUCKET_COST = [150, 300, 600, 1000];    // game.js:1807
 const MAX_BUCKET_TIER = BUCKET_COST.length;   // tier 4 == MAX
 const WARDROBE_COST = 80, CHUM_COST = 80, TIP_COST = 30;
+const PET_COST = 400, CHARM_COST = 600;       // game.js:2030-2032
 const CHUM_MS = 600000;                       // 10 minutes (game.js:1891)
 const KIOSK_TITLES = {                        // game.js:1820
   t1: { name: 'Deckhand',       cost: 50 },
@@ -91,9 +132,9 @@ const W_COLORS = 8;                           // WPAL.length (game.js:1806)
 
 /* Tool -> (state key, coin curve, ore ladder). game.js:1863-1871 */
 const CRAFT_SPEC = {
-  rod:  { key: 'rodLvl',  base: ROD_BASE,  reqs: UP_REQ },
-  pick: { key: 'pickLvl', base: PICK_BASE, reqs: UP_REQ },
-  axe:  { key: 'axeLvl',  base: AXE_BASE,  reqs: AXE_REQ }
+  rod:  { key: 'rodLvl',  base: ROD_BASE,  reqs: UP_REQ,  names: ROD_NAMES },
+  pick: { key: 'pickLvl', base: PICK_BASE, reqs: UP_REQ,  names: PICK_NAMES },
+  axe:  { key: 'axeLvl',  base: AXE_BASE,  reqs: AXE_REQ, names: AXE_NAMES }
 };
 
 /* Quarry: `wood` comes from the axe, not the pick. */
@@ -139,6 +180,46 @@ function intOrNull(v) {
 /** The world record for `state`, falling back to the starting isle. */
 const worldOf = (state) => WORLDS[state.world] || WORLDS.isle;
 
+/** Display name for an ore key, without trusting the key to exist. */
+const oreName = (k) => (has(ORE_INFO, k) ? ORE_INFO[k].name : String(k));
+
+/** The first ingredient of `req` the player is short of, or null. */
+function shortOre(ores, req) {
+  for (const k in req) if ((ores?.[k] | 0) < req[k]) return k;
+  return null;
+}
+
+/**
+ * Put a share drop on a result in the shape the client renders: a bare ticker
+ * string it can toast ("+1 share REEL"), plus the price it fetched when the
+ * portfolio was full and economy.js liquidated the certificate instead.
+ */
+function attachShare(result, share) {
+  if (!share) return result;
+  result.share = share.ticker;
+  if (share.soldFor != null) result.shareSoldFor = share.soldFor;
+  return result;
+}
+
+/**
+ * Ambient weather out of an untrusted body, in the { wet, storm } shape that
+ * envOf() in rules.js reads.
+ *
+ * The client sends `wet` as the weather STATE ('clear' | 'rain' | 'storm' |
+ * 'snow' | 'ash'); older builds sent a bare boolean, so both are accepted.
+ * Collapsing it into one boolean is what kept every storm-gated species
+ * (Thunder Eel, Storm Marlin, Blizzard Eel, ...) permanently unspawnable:
+ * envOf only sees a storm through an explicit `storm` flag or the literal
+ * string 'storm'. Snow and ash are weather of their own — they are NOT rain,
+ * and the client's condOK() agrees (game.js:1713).
+ */
+function weatherOf(body) {
+  const w = body.wet;
+  const storm = !!body.storm || (typeof w === 'string' && w.trim().toLowerCase() === 'storm');
+  if (typeof w === 'string') return { wet: storm || w.trim().toLowerCase() === 'rain', storm };
+  return { wet: storm || !!w, storm };
+}
+
 /**
  * Defensive top-up for a state that skipped normalizeState() (a legacy row, a
  * hand-written test fixture). Never rewrites a valid field — it only fills in
@@ -172,10 +253,23 @@ function ensure(state) {
   state.rodLvl = clamp(int0(state.rodLvl) || 1, 1, MAXLVL);
   state.pickLvl = clamp(int0(state.pickLvl) || 1, 1, MAXLVL);
   state.axeLvl = clamp(int0(state.axeLvl) || 1, 1, MAXLVL);
+  /* the fleet starts on a raft at level 0, so this one is NOT `|| 1` */
+  state.boatLvl = clamp(int0(state.boatLvl), 0, MAX_BOAT);
   state.pearls = int0(state.pearls);
   state.pearlsLife = int0(state.pearlsLife);
   state.bucketTier = clamp(int0(state.bucketTier), 0, MAX_BUCKET_TIER);
   state.tipEpoch = int0(state.tipEpoch);
+  /* one-off Pearl Kiosk unlocks: flags, never counters, so an older save reads 0 */
+  state.pet = state.pet ? 1 : 0;
+  state.charm = state.charm ? 1 : 0;
+
+  if (!state.bait || typeof state.bait !== 'object') state.bait = {};
+  for (const k of BAIT_ORDER) {
+    const n = clamp(int0(state.bait[k]), 0, BAIT_MAX);
+    if (n > 0) state.bait[k] = n; else delete state.bait[k];
+  }
+  /* an equipped bait you have none of is the same as no bait at all */
+  if (typeof state.baitId !== 'string' || !(state.bait[state.baitId] > 0)) state.baitId = '';
 
   if (!state.boosts || typeof state.boosts !== 'object') state.boosts = { chumUntil: 0 };
   state.boosts.chumUntil = int0(state.boosts.chumUntil);
@@ -225,15 +319,38 @@ function tryShare(state, ticker) {
   return g.soldFor != null ? { ticker, soldFor: g.soldFor } : { ticker };
 }
 
-/** Roll one fish for the world the player is standing in. */
-function rollFor(state, body) {
+/**
+ * Roll one fish for the world the player is standing in, with whatever is on
+ * the hook. `useBait: false` for a fish that was not caught on a line at all
+ * (the buried one in a treasure chest) — no hook, no bait bonus, no bait spent.
+ */
+function rollFor(state, body, { useBait: withBait = true } = {}) {
+  const { wet, storm } = weatherOf(body);
   return rollFish({
     world: state.world,
     rodLvl: state.rodLvl,
+    bait: withBait ? state.baitId : null,
+    boatLvl: state.boatLvl,
     fishMul: worldOf(state).fishMul,
     night: !!body.night,
-    wet: !!body.wet
+    wet,
+    storm
   });
+}
+
+/**
+ * Spend one of the equipped bait. Called only once a fish is actually in the
+ * bucket — a snapped line costs the player nothing. Returns what the client
+ * needs to narrate it, or null when no bait was on the hook.
+ */
+function useBait(state) {
+  const id = state.baitId;
+  const b = baitOf(id);
+  if (!b || !(state.bait[id] > 0)) return null;
+  const left = state.bait[id] - 1;
+  if (left > 0) state.bait[id] = left;
+  else { delete state.bait[id]; state.baitId = ''; }
+  return { id, name: b.name, left, out: left === 0 };
 }
 
 /**
@@ -294,21 +411,35 @@ export const HANDLERS = {
     if (!fish) return err('Nothing is biting here');
 
     const { isNew, isRec, pearls, share, treasure } = landFish(state, fish);
+    /* spent AFTER the fish is banked, so a rejected catch never eats a bait */
+    const bait = useBait(state);
 
-    const result = { fish, pearls, isNew, isRec, bucket: state.bucket.length, cap: limit };
-    if (share) result.share = share;
+    const result = { fish, pearls, isNew, isRec, bucket: state.bucket.length, cap: limit,
+      message: `Landed ${fish.name} · ◈${fish.val}` };
+    attachShare(result, share);
     if (treasure) result.treasure = treasure;
+    if (bait) result.bait = bait;
     return ok(result);
   }),
 
   /* --------------------------------------------------------------------------
-     mine — one completed pick swing on an ore node. body: { type }
+     mine — one completed pick swing on an ore node. body: { node }
      game.js:2109-2118
      -------------------------------------------------------------------------- */
   mine: handler((state, body) => {
-    const type = String(body.type || '');
+    /* The client may NOT choose what it digs up. A node's ore is a pure function
+       of (world, node id), so the server derives it and every client agrees —
+       otherwise a script would simply mine diamond (70c) every time instead of
+       coal (5c). body.type is accepted only as a legacy hint when no id is sent. */
+    const rawId = body.node;
+    const hasId = rawId !== undefined && rawId !== null && Number.isFinite(+rawId);
+    const type = hasId ? oreTypeFor(state.world, +rawId) : rollOreType();
     if (!MINE_TYPES.includes(type)) {
       return err(`Unknown ore node — expected one of ${MINE_TYPES.join(', ')}`);
+    }
+    /* shared world: a vein someone already stripped stays stripped for everyone */
+    if (hasId && sharedNodes.isDown(state.world, 'node', +rawId)) {
+      return err('that vein is already stripped');
     }
 
     const lvl = state.pickLvl;
@@ -329,15 +460,23 @@ export const HANDLERS = {
       if (Math.random() < chance) share = tryShare(state, Math.random() < 0.5 ? 'HARB' : 'EEL');
     } else if (Math.random() < chance) share = tryShare(state, 'DIGG');
 
-    const result = { type, got, pearls, ores: state.ores[type] };
-    if (share) result.share = share;
+    if (hasId) sharedNodes.deplete(state.world, 'node', +rawId, Date.now() + 45000);
+
+    const result = { type, got, pearls, ores: state.ores[type],
+      message: `+${got} ${oreName(type)}` };
+    attachShare(result, share);
     return ok(result);
   }),
 
   /* --------------------------------------------------------------------------
      chop — one completed axe swing on a tree. game.js:2142-2145
      -------------------------------------------------------------------------- */
-  chop: handler((state) => {
+  chop: handler((state, body) => {
+    const rawTree = body && body.tree;
+    const hasTree = rawTree !== undefined && rawTree !== null && Number.isFinite(+rawTree);
+    if (hasTree && sharedNodes.isDown(state.world, 'tree', +rawTree)) {
+      return err('someone already felled that tree');
+    }
     const lvl = state.axeLvl;
     const got = 1
       + (Math.random() < Math.min(0.85, 0.35 + 0.08 * (lvl - 1)) ? 1 : 0)
@@ -349,8 +488,10 @@ export const HANDLERS = {
 
     const share = Math.random() < 0.04 ? tryShare(state, 'LUMB') : null;
 
-    const result = { got, pearls, ores: state.ores.wood };
-    if (share) result.share = share;
+    if (hasTree) sharedNodes.deplete(state.world, 'tree', +rawTree, Date.now() + 35000);
+
+    const result = { got, pearls, ores: state.ores.wood, message: `+${got} Wood` };
+    attachShare(result, share);
     return ok(result);
   }),
 
@@ -366,7 +507,7 @@ export const HANDLERS = {
     state.treasure = null;
     let pearls = addPearls(state, 10);
 
-    const result = { spot, pearls };
+    const result = { spot, pearls, message: '' };
     const r = Math.random();
 
     if (r < 0.55) {
@@ -375,6 +516,7 @@ export const HANDLERS = {
       state.stats.earned += g;
       result.kind = 'coins';
       result.coins = g;
+      result.message = `Buried treasure! +${g} coins`;
       return ok(result);
     }
 
@@ -386,6 +528,7 @@ export const HANDLERS = {
       result.kind = 'ore';
       result.ore = k;
       result.amount = n;
+      result.message = `Treasure! +${n} ${oreName(k)}`;
       return ok(result);
     }
 
@@ -393,7 +536,7 @@ export const HANDLERS = {
     if (state.bucket.length < cap(state)) {
       let fish = null;
       for (let i = 0; i < 25; i++) {
-        const f = rollFor(state, body);
+        const f = rollFor(state, body, { useBait: false });
         if (!f) break;
         fish = f;
         if ((RORDER[f.rar] | 0) >= 2) break;    // rare+ or give up after 25
@@ -407,7 +550,8 @@ export const HANDLERS = {
         result.pearls = pearls;
         result.isNew = land.isNew;
         result.isRec = land.isRec;
-        if (land.share) result.share = land.share;
+        result.message = `A rare fish was buried here?! ${fish.name}`;
+        attachShare(result, land.share);
         return ok(result);
       }
     }
@@ -418,6 +562,7 @@ export const HANDLERS = {
     state.stats.earned += g;
     result.kind = 'coins';
     result.coins = g;
+    result.message = `The chest held ◈${g}`;
     return ok(result);
   }),
 
@@ -439,7 +584,8 @@ export const HANDLERS = {
       state.bucket.splice(i, 1);
       state.coins += coins;
       state.stats.earned += coins;
-      return ok({ kind, coins, sold: 1, fish, bucket: state.bucket.length });
+      return ok({ kind, coins, gained: coins, sold: 1, fish, bucket: state.bucket.length,
+        message: `+${coins} coins` });
     }
 
     if (kind === 'ore') {
@@ -451,7 +597,8 @@ export const HANDLERS = {
       state.ores[k] = 0;
       state.coins += coins;
       state.stats.earned += coins;
-      return ok({ kind, oreKey: k, amount: n, coins });
+      return ok({ kind, oreKey: k, amount: n, coins, gained: coins,
+        message: `+${coins} coins` });
     }
 
     if (kind === 'allfish') {
@@ -471,7 +618,8 @@ export const HANDLERS = {
       }
       state.coins += coins;
       state.stats.earned += coins;
-      return ok({ kind, coins, sold, kept, bucket: state.bucket.length });
+      return ok({ kind, coins, gained: coins, sold, kept, bucket: state.bucket.length,
+        message: `+${coins} coins` + (kept ? ` (kept ${kept} ★)` : '') });
     }
 
     return err("Unknown sell kind — expected 'fish', 'ore' or 'allfish'");
@@ -504,7 +652,34 @@ export const HANDLERS = {
     for (const k in req) state.ores[k] -= req[k];
     state[spec.key] = lvl + 1;
 
-    return ok({ tool, level: lvl + 1, cost, spent: { ...req } });
+    const newName = (spec.names && spec.names[lvl + 1]) || tool;
+    return ok({ tool, level: lvl + 1, name: newName, cost, spent: { ...req },
+      message: `${newName} crafted!` });
+  }),
+
+  /* --------------------------------------------------------------------------
+     boat — the Harbor shipwright. Coins AND ore lay down the next hull, the
+     same ledger the client's buyBoat() keeps (game.js:2313). The hull is what
+     gates the long voyages (see `travel`) and the crew berths, so it is bought
+     here rather than inferred from anything the client reports.
+     -------------------------------------------------------------------------- */
+  boat: handler((state) => {
+    const level = state.boatLvl + 1;
+    if (level > MAX_BOAT) return err('Your fleet is complete — there is nothing bigger to build');
+    const b = BOATS[level];
+
+    if (state.coins < b.cost) return err(`Not enough coins — the ${b.name} costs ${b.cost}`);
+    if (!haveOres(state.ores, b.req)) {
+      const k = shortOre(state.ores, b.req);
+      return err(`Not enough ${oreName(k)} — the ${b.name} needs ${b.req[k]}`);
+    }
+
+    state.coins -= b.cost;
+    for (const k in b.req) state.ores[k] -= b.req[k];
+    state.boatLvl = level;
+
+    return ok({ name: b.name, level, cost: b.cost, spent: { ...b.req }, seats: b.seats,
+      message: `${b.name} launched!` });
   }),
 
   /* --------------------------------------------------------------------------
@@ -531,7 +706,8 @@ export const HANDLERS = {
       sk.basis[k] = (num(sk.basis[k], p) * own + p) / (own + 1);
       sk.own[k] = own + 1;
 
-      return ok({ op, ticker: k, price: ask, own: sk.own[k], basis: sk.basis[k], epoch: e });
+      return ok({ op, ticker: k, price: ask, own: sk.own[k], basis: sk.basis[k], epoch: e,
+        message: `Bought 1 ${k} for ◈${ask}` });
     }
 
     if (op === 'sell') {
@@ -544,7 +720,8 @@ export const HANDLERS = {
       const profit = Math.max(0, bid - Math.round(num(sk.basis[k], bid)));
       state.stats.earned += profit;
 
-      return ok({ op, ticker: k, price: bid, own: sk.own[k], profit, epoch: e });
+      return ok({ op, ticker: k, price: bid, own: sk.own[k], profit, epoch: e,
+        gained: bid, message: `Sold 1 ${k} for ◈${bid}` });
     }
 
     return err("Unknown stock op — expected 'buy' or 'sell'");
@@ -555,6 +732,51 @@ export const HANDLERS = {
      body: { item:'wardrobe'|'chum'|'bucket'|'tip'|'t1'..'t4'|'wcolor', slot?, color? }
      game.js:1888-1903
      -------------------------------------------------------------------------- */
+  /* --------------------------------------------------------------------------
+     bait — the Bait Shack. body: { op: 'buy'|'equip', id, packs }
+       buy   : coins -> `packs` packs of `id` (BAITS[id].pack each)
+       equip : put `id` on the hook; '' (or an id you are out of) bares it
+     -------------------------------------------------------------------------- */
+  bait: handler((state, body) => {
+    const op = String(body.op || 'buy');
+    const id = String(body.id || '');
+
+    if (op === 'equip') {
+      if (id === '') {
+        state.baitId = '';
+        return ok({ op, baitId: '', bait: state.bait, message: 'Bare hook' });
+      }
+      if (!baitOf(id)) return err('Unknown bait');
+      if (!(state.bait[id] > 0)) return err(`You are out of ${BAITS[id].name}`);
+      /* clicking the equipped bait again takes it back off the hook */
+      state.baitId = state.baitId === id ? '' : id;
+      return ok({ op, baitId: state.baitId, bait: state.bait,
+        message: state.baitId ? `${BAITS[id].name} on the hook` : 'Bare hook' });
+    }
+
+    if (op !== 'buy') return err('Unknown bait action');
+    const b = baitOf(id);
+    if (!b) return err('Unknown bait');
+
+    const packs = clamp(intOrNull(body.packs) ?? 1, 1, 20);
+    const have = int0(state.bait[id]);
+    /* buy only as many whole packs as the stack ceiling can still hold */
+    const room = Math.max(0, BAIT_MAX - have);
+    const fit = Math.min(packs, Math.floor(room / b.pack));
+    if (fit < 1) return err(`You cannot carry any more ${b.name}`);
+
+    const cost = b.cost * fit;
+    if (state.coins < cost) return err(`Not enough coins — that costs ${cost}, you have ${state.coins}`);
+
+    state.coins -= cost;
+    state.bait[id] = have + b.pack * fit;
+    if (!state.baitId) state.baitId = id;      // first bait you buy goes straight on the hook
+
+    return ok({ op, id, name: b.name, packs: fit, count: b.pack * fit, cost,
+                bait: state.bait, baitId: state.baitId, coins: state.coins,
+                message: `+${b.pack * fit} ${b.name}` });
+  }),
+
   kiosk: handler((state, body) => {
     const item = String(body.item || '');
 
@@ -566,7 +788,7 @@ export const HANDLERS = {
       const color = intOrNull(body.color);
       if (color === null || color < 0 || color >= W_COLORS) return err('Unknown wardrobe color');
       state.wardrobe[slot] = color;
-      return ok({ item, slot, color, cost: 0, pearls: state.pearls });
+      return ok({ item, slot, color, cost: 0, pearls: state.pearls, message: 'Colors updated' });
     }
 
     /* spend() only debits once every precondition above it has passed */
@@ -581,14 +803,16 @@ export const HANDLERS = {
       if (state.ownedW.wardrobe) return err('You already own the Hero Wardrobe');
       if (!spend(WARDROBE_COST)) return short(WARDROBE_COST);
       state.ownedW.wardrobe = 1;
-      return ok({ item, cost: WARDROBE_COST, pearls: state.pearls });
+      return ok({ item, cost: WARDROBE_COST, pearls: state.pearls,
+        message: 'Wardrobe unlocked — pick your colors!' });
     }
 
     if (item === 'chum') {
       if (Date.now() < state.boosts.chumUntil) return err('There is already chum in the water');
       if (!spend(CHUM_COST)) return short(CHUM_COST);
       state.boosts.chumUntil = Date.now() + CHUM_MS;
-      return ok({ item, cost: CHUM_COST, chumUntil: state.boosts.chumUntil, pearls: state.pearls });
+      return ok({ item, cost: CHUM_COST, chumUntil: state.boosts.chumUntil, pearls: state.pearls,
+        message: 'Chum in the water — bites 2× faster for 10 min' });
     }
 
     if (item === 'bucket') {
@@ -596,7 +820,8 @@ export const HANDLERS = {
       const cost = BUCKET_COST[state.bucketTier];
       if (!spend(cost)) return short(cost);
       state.bucketTier++;
-      return ok({ item, cost, bucketTier: state.bucketTier, cap: cap(state), pearls: state.pearls });
+      return ok({ item, cost, bucketTier: state.bucketTier, cap: cap(state), pearls: state.pearls,
+        message: `Deep Bucket! Capacity is now ${cap(state)}` });
     }
 
     if (item === 'tip') {
@@ -606,7 +831,26 @@ export const HANDLERS = {
       const epoch = mktEpochNow() + 1;
       state.tipEpoch = epoch;
       const m = mktModsAt(epoch);
-      return ok({ item, cost: TIP_COST, tipEpoch: epoch, hot: m.hot, cold: m.cold, pearls: state.pearls });
+      return ok({ item, cost: TIP_COST, tipEpoch: epoch, hot: m.hot, cold: m.cold, pearls: state.pearls,
+        message: `Tip: next HOT ${m.hot} · SURPLUS ${m.cold}` });
+    }
+
+    /* The Spirit Fish is pure cosmetics — the client draws the companion off
+       `state.pet`. The Lucky Charm is not: `spin` reads `state.charm`. */
+    if (item === 'pet') {
+      if (state.pet) return err('A Spirit Fish already swims at your shoulder');
+      if (!spend(PET_COST)) return short(PET_COST);
+      state.pet = 1;
+      return ok({ item, cost: PET_COST, pet: 1, pearls: state.pearls,
+        message: 'A Spirit Fish drifts to your side…' });
+    }
+
+    if (item === 'charm') {
+      if (state.charm) return err('The Lucky Charm is already on your belt');
+      if (!spend(CHARM_COST)) return short(CHARM_COST);
+      state.charm = 1;
+      return ok({ item, cost: CHARM_COST, charm: 1, pearls: state.pearls,
+        message: '🍀 Lucky Charm — the wheel likes you now' });
     }
 
     if (has(KIOSK_TITLES, item)) {
@@ -614,12 +858,14 @@ export const HANDLERS = {
       /* already owned: this is an equip/unequip toggle, and it is free */
       if (has(state.ownedT, item) && state.ownedT[item]) {
         state.titleId = state.titleId === title.name ? '' : title.name;
-        return ok({ item, cost: 0, titleId: state.titleId, owned: true, pearls: state.pearls });
+        return ok({ item, cost: 0, titleId: state.titleId, owned: true, pearls: state.pearls,
+          message: state.titleId ? `Title equipped: ${title.name}` : 'Title put away' });
       }
       if (!spend(title.cost)) return short(title.cost);
       state.ownedT[item] = 1;
       state.titleId = title.name;
-      return ok({ item, cost: title.cost, titleId: state.titleId, owned: true, pearls: state.pearls });
+      return ok({ item, cost: title.cost, titleId: state.titleId, owned: true, pearls: state.pearls,
+        message: `Title equipped: ${title.name}` });
     }
 
     return err('Unknown kiosk item');
@@ -639,7 +885,7 @@ export const HANDLERS = {
      -------------------------------------------------------------------------- */
   spin: handler((state, body) => {
     const bet = String(body.bet || '');
-    if (!BET_COLORS.has(bet)) return err("Pick a colour — 'red', 'black' or 'green'");
+    if (!BET_KINDS.has(bet)) return err("Pick a bet — red, black, green, odd, even or high");
 
     const idxRaw = intOrNull(body.stakeIdx);
     const coinRaw = intOrNull(body.coinStake);
@@ -666,12 +912,17 @@ export const HANDLERS = {
       return err('Nothing staked — bet a fish or coins');
     }
 
-    const winIdx = randomInt(0, NSEG);
+    let winIdx = randomInt(0, NSEG);
+    /* the Lucky Charm re-rolls a single losing spin in five — the second pocket
+       is drawn just as blind as the first, so it can lose again */
+    if (state.charm && !betWins(bet, winIdx) && randomInt(0, CHARM_REROLL_IN) === 0) {
+      winIdx = randomInt(0, NSEG);
+    }
     const color = SEG[winIdx];
-    const won = color === bet;
+    const won = betWins(bet, winIdx);
 
     state.stats.spins++;
-    const result = { winIdx, color, bet, won };
+    const result = { winIdx, color, bet, won, payout: 0, message: '' };
 
     if (!won) {
       state.stats.losses++;
@@ -680,22 +931,21 @@ export const HANDLERS = {
         result.fish = fish;
         result.lost = fish.name;
         result.bucket = state.bucket.length;
+        result.message = `the eel swallowed your ${fish.name}. Gone.`;
       } else {
         result.stake = stake;
+        result.message = `the eel gulped your ◈${stake}.`;
       }
       result.payout = 0;
       return ok(result);
     }
 
-    const mult = color === 'green' ? GREEN_MULT : COLOR_MULT;
+    const mult = betPay(bet);
     state.stats.winsCt++;
     result.mult = mult;
 
     /* the jackpot pocket also pays out a meme-stock certificate */
-    if (color === 'green') {
-      const share = tryShare(state, 'EEL');
-      if (share) result.share = share;
-    }
+    if (color === 'green') attachShare(result, tryShare(state, 'EEL'));
 
     if (fish) {
       const before = Math.max(0, Math.round(num(fish.val, 0)));
@@ -705,6 +955,7 @@ export const HANDLERS = {
       result.fish = fish;
       result.before = before;
       result.payout = fish.val;
+      result.message = `${fish.name} ◈${before} → ◈${fish.val}. Spin again or cash out.`;
     } else {
       const gain = stake * mult;
       state.coins += gain;
@@ -712,6 +963,7 @@ export const HANDLERS = {
       state.stats.bestWin = Math.max(state.stats.bestWin, gain);
       result.stake = stake;
       result.payout = gain;
+      result.message = `◈${stake} → ◈${gain}!`;
     }
 
     return ok(result);
@@ -730,19 +982,30 @@ export const HANDLERS = {
     const w = WORLDS[k];
 
     if (!state.worlds.includes(k)) {
+      /* a charter also needs a hull that survives the crossing — the same gate
+         the client draws its Unlock button from (game.js:1932), so both sides
+         agree on which voyages are legal */
+      const need = has(BOAT_REQ, k) ? BOAT_REQ[k] | 0 : 0;
+      if (state.boatLvl < need) {
+        return err(`Your ${BOATS[state.boatLvl].name} can't make that voyage — `
+          + `build a ${BOATS[need].name} at the Harbor dock`);
+      }
       const cost = int0(w.cost);
       if (state.coins < cost) return err(`Not enough coins — ${w.name} costs ${cost}`);
       state.coins -= cost;
       state.worlds.push(k);
       /* unlocking is not sailing: the player still has to press SAIL */
-      return ok({ world: k, name: w.name, unlocked: true, sailed: false, cost, worlds: [...state.worlds] });
+      return ok({ world: k, name: w.name, unlocked: true, sailed: false, cost,
+        worlds: [...state.worlds], message: `${w.name} unlocked!` });
     }
 
     if (state.world === k) {
-      return ok({ world: k, name: w.name, unlocked: false, sailed: false, already: true });
+      return ok({ world: k, name: w.name, unlocked: false, sailed: false, already: true,
+        message: `You are already on ${w.name}` });
     }
 
     state.world = k;
-    return ok({ world: k, name: w.name, unlocked: false, sailed: true });
+    return ok({ world: k, name: w.name, unlocked: false, sailed: true,
+      message: `Sailing to ${w.name}…` });
   })
 };
