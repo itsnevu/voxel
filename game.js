@@ -1465,7 +1465,7 @@ const SAVE='reelfortune3d-v1', CAP_BASE=12, MAXLVL=10;
 const state={coins:0,bucket:[],ores:{wood:0,coal:0,iron:0,gold:0,diamond:0},rodLvl:1,pickLvl:1,axeLvl:1,boatLvl:0,
   dex:{},treasure:null,worlds:['isle'],ach:{},
   stocks:{own:{},basis:{},lastDiv:null,lastShareEpoch:0,gotFirst:0},
-  pearls:0,pearlsLife:0,wardrobe:{},titleId:'',ownedT:{},ownedW:{},bucketTier:0,boosts:{chumUntil:0},tipEpoch:0,
+  pearls:0,pearlsLife:0,wardrobe:{},titleId:'',ownedT:{},ownedW:{},bucketTier:0,boosts:{chumUntil:0},tipEpoch:0,deeds:{},
   stats:{caught:0,mined:0,earned:0,bestWin:0,spins:0,winsCt:0,losses:0,divEarned:0}};
 const cap=()=>CAP_BASE+2*(state.bucketTier||0);
 function save(){try{localStorage.setItem(SAVE,JSON.stringify(state));}catch(e){}}
@@ -1490,6 +1490,7 @@ function load(){try{const r=localStorage.getItem(SAVE);if(r){const s=JSON.parse(
   state.titleId=typeof s.titleId==='string'?s.titleId:'';
   state.bucketTier=clamp(s.bucketTier|0,0,4);
   state.tipEpoch=+s.tipEpoch||0;
+  if(s.deeds&&typeof s.deeds==='object')state.deeds=s.deeds;
   if(state.treasure&&state.treasure.w==null)state.treasure.w=worldKey; // legacy maps: assume current isle
   if(s.boosts&&typeof s.boosts==='object')state.boosts.chumUntil=+s.boosts.chumUntil||0;
   state.rodLvl=clamp(s.rodLvl|0||1,1,MAXLVL);state.pickLvl=clamp(s.pickLvl|0||1,1,MAXLVL);
@@ -1644,6 +1645,32 @@ const ACH=[
   ['world4','Archipelago','unlock every island',5000,s=>s.worlds.length>=4],
   ['boat1','Shipwright','build your first real boat',150,s=>s.boatLvl>=1],
   ['boat4','Admiral of the Isles','launch the Gilded Galleon',2500,s=>s.boatLvl>=4]];
+/* ---- ISLE LEDGER: purely fictional blockchain-styled deeds of record.
+   No wallet, no chain, no real value — a trophy wall with hash cosplay. ---- */
+const DEEDS=[
+  ['d_arrive','Deed of Arrival','first catch or ore on the isle',s=>s.stats.caught+s.stats.mined>=1],
+  ['d_leg','Legendary Angler','land a legendary fish',s=>Object.keys(s.dex).some(n=>{const e=TABLE.find(x=>x[0].name===n);return e&&e[0].rar==='legendary';})],
+  ['d_w2','Charter · Great Mine','claim the second island',s=>s.worlds.includes('mine')],
+  ['d_w3','Charter · Cinder Atoll','claim the volcanic isle',s=>s.worlds.includes('volcano')],
+  ['d_w4','Charter · Frostbite','claim the frozen isle',s=>s.worlds.includes('frost')],
+  ['d_rod','Poseidon\'s Patent','forge the Poseidon Rod',s=>s.rodLvl>=10],
+  ['d_pick','Titan Mining Rights','forge the Titan Pick',s=>s.pickLvl>=10],
+  ['d_axe','Timber Baron\'s Seal','forge the Titan Axe',s=>s.axeLvl>=10],
+  ['d_eel','Meme Lord Certificate','hold 25+ EEL shares at once',s=>(s.stocks.own.EEL|0)>=25],
+  ['d_div','Dividend Baron','collect ◈1,000 in dividends',s=>s.stats.divEarned>=1000],
+  ['d_win','Whale of the Eel','win ◈2,500+ on a single spin',s=>s.stats.bestWin>=2500],
+  ['d_dex','Master of the Dex','complete the entire Fishdex',s=>Object.keys(s.dex).length>=TABLE.length]];
+function deedHash(id){ let seed=0; for(let i=0;i<id.length;i++)seed+=id.charCodeAt(i)*(i+7);
+  const mint=state.deeds[id]||0; let out='';
+  for(let k=0;k<20;k++)out+=((hash(seed+mint,k*13.7)*16)|0).toString(16);
+  return '0x'+out; }
+function checkDeeds(){ let minted=false;
+  for(const [id,name] of DEEDS){ if(state.deeds[id])continue;
+    const d=DEEDS.find(x=>x[0]===id);
+    if(!d[3](state))continue;
+    state.deeds[id]=mktEpochNow(); minted=true;
+    toast(`📜 Deed minted on the Isle Ledger: ${name}`,'gold'); addShake(0.12); sfx.win(); }
+  if(minted){ save(); if(invOpen)renderInv(); } }
 let achT=0;
 function checkAch(){ for(const [id,name,desc,rw,chk] of ACH){
   if(state.ach[id]||!chk(state))continue;
@@ -2179,9 +2206,17 @@ function renderInv(){
   const achEl=document.getElementById('invAch');
   if(achEl)achEl.innerHTML=ACH.map(([id,name,desc,rw])=>{ const ok=!!state.ach[id];
     return `<div class="statrow" style="${ok?'':'opacity:.55'}"><span>${pixSVG('trophy',13)} <b style="color:${ok?'var(--gold)':'var(--muted)'}">${name}</b> <span style="color:var(--faint)">· ${desc}</span></span><b style="color:${ok?'var(--teal)':'var(--faint)'}">${ok?'✓ done':'◈ '+fmt(rw)}</b></div>`; }).join('');
+  // Isle Ledger: certificate wall of minted deeds
+  const ledEl=document.getElementById('invLedger');
+  if(ledEl){ const got=DEEDS.filter(d=>state.deeds[d[0]]).length;
+    const dc=document.getElementById('deedCount'); if(dc)dc.textContent=got+'/'+DEEDS.length;
+    ledEl.innerHTML='<div class="deedgrid">'+DEEDS.map(([id,name,desc])=>{ const mint=state.deeds[id];
+      if(!mint)return `<div class="deed locked"><div class="dt">???</div><div class="dd">${desc}</div><div class="dh">— not yet minted —</div></div>`;
+      return `<div class="deed"><span class="db">BLOCK #${fmt(mint)}</span><div class="dt">📜 ${name}</div><div class="dd">${desc}</div><div class="dh">${deedHash(id)}</div></div>`; }).join('')+'</div>'; }
 }
 const invTabs=document.querySelectorAll('#inv .tabbtn');
 function setInvTab(t){ invTabs.forEach(b=>b.classList.toggle('sel',b.getAttribute('data-tab')===t));
+  { const p=document.getElementById('tab-ledger'); if(p)p.style.display=t==='ledger'?'':'none'; }
   for(const k of ['bag','dex','stats']){ const p=document.getElementById('tab-'+k); if(p)p.style.display=k===t?'':'none'; } }
 invTabs.forEach(b=>b.addEventListener('click',()=>setInvTab(b.getAttribute('data-tab'))));
 function openInv(){ if(marketOpen||casinoOpen||harborOpen)return; invOpen=true; invEl.classList.add('on'); renderInv(); setInvTab('bag'); }
@@ -2371,7 +2406,7 @@ function animate(now){
 
     for(const n of oreNodes){ if(!n.alive&&clock>=n.respawnAt&&n.respawnAt>0){n.alive=true;n.mesh.visible=true;} }
     biomeCheck();
-    if((achT+=dt)>1.4){achT=0;checkAch();payDividends();}
+    if((achT+=dt)>1.4){achT=0;checkAch();checkDeeds();payDividends();}
     if(titleSprite)titleSprite.position.set(pWorld.x,pWorld.y+2.95,pWorld.z);
     if(marketOpen===true&&clock-bannerT>0.5){bannerT=clock;renderBanner();
       const e=Math.floor(Date.now()/MKT_MS);

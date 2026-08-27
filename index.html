@@ -61,6 +61,17 @@
   .swatchrow .sl{font-size:11px;color:var(--muted);min-width:44px;}
   .sw{width:22px;height:22px;border-radius:7px;border:2px solid rgba(255,255,255,.18);cursor:pointer;padding:0;}
   .sw.sel{border-color:var(--teal);box-shadow:0 0 10px rgba(57,215,196,.4);}
+  .deedgrid{display:flex;flex-wrap:wrap;gap:10px;}
+  .deed{flex:0 0 calc(50% - 5px);min-width:240px;background:var(--glass-sheen),var(--glass-row);
+    border:1px solid rgba(57,215,196,.35);border-radius:14px;padding:13px 15px;position:relative;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 0 16px rgba(57,215,196,.08);}
+  .deed::before{content:'';position:absolute;inset:5px;border:1px dashed rgba(57,215,196,.25);border-radius:10px;pointer-events:none;}
+  .deed .dt{font-family:"Chakra Petch";font-weight:700;font-size:14px;color:var(--ink);}
+  .deed .dd{font-size:10.5px;color:var(--muted);margin:2px 0 7px;}
+  .deed .dh{font-size:9px;color:var(--teal);letter-spacing:.04em;word-break:break-all;opacity:.85;}
+  .deed .db{position:absolute;top:9px;right:12px;font-size:9px;color:var(--gold);letter-spacing:.12em;}
+  .deed.locked{opacity:.4;border-color:var(--glass-bd-soft);box-shadow:none;}
+  .deed.locked::before{border-color:rgba(255,255,255,.08);}
   #area{top:14px;left:50%;transform:translateX(-50%);z-index:5;font-family:"Chakra Petch";font-weight:600;font-size:15px;
     letter-spacing:.14em;color:#fff;text-shadow:0 2px 8px rgba(0,0,0,.7);opacity:0;transition:opacity .4s;text-transform:uppercase;position:fixed;}
   #area.on{opacity:.95;}
@@ -282,6 +293,7 @@
       <button class="tabbtn sel" data-tab="bag" type="button">BAG</button>
       <button class="tabbtn" data-tab="dex" type="button">FISHDEX</button>
       <button class="tabbtn" data-tab="stats" type="button">STATS</button>
+      <button class="tabbtn" data-tab="ledger" type="button">LEDGER</button>
     </div>
     <div class="tabpane" id="tab-bag">
       <div class="seclab">Tools</div>
@@ -298,6 +310,10 @@
       <div id="invStats"></div>
       <div class="seclab">Achievements · <span id="achCount"></span></div>
       <div id="invAch"></div>
+    </div>
+    <div class="tabpane" id="tab-ledger" style="display:none">
+      <div class="seclab">Isle Ledger — deeds of record · <span id="deedCount"></span></div>
+      <div id="invLedger"></div>
     </div>
   </div>
 </div>
