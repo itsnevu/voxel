@@ -978,7 +978,7 @@ function disposeFishModel(){ if(!fishModel)return;
   fishModel.traverse(o=>{if(o.geometry)o.geometry.dispose();if(o.material)o.material.dispose();});
   fishScene.remove(fishModel); fishModel=null; fishAnim=null; }
 function buildFishModel(f){ disposeFishModel(); fishT=0;
-  const name=(f.name||'').replace('✨ ',''),low=name.toLowerCase(),is=s=>low.includes(s);
+  const name=(f.name||'').replace('✨ ','').replace('✦ ',''),low=name.toLowerCase(),is=s=>low.includes(s);
   const base=new THREE.Color(RAR[f.rar]||'#b9c6c4');
   const g=new THREE.Group(),A={fins:[],segs:[],glows:[],tail:null,lure:null,sparks:null};
   const M=(mul,extra)=>{const m=new THREE.MeshLambertMaterial(Object.assign({color:base.clone().multiplyScalar(mul)},extra||{}));
@@ -1046,7 +1046,7 @@ function renderFishScene(dt){ if(!fishRenderer||!fishModel)return; fishT+=dt;
   if(A.sparks){A.sparks.rotation.y=fishT*2.2;A.sparks.rotation.x=Math.sin(fishT*1.7)*0.35;}
   fishRenderer.render(fishScene,fishCam); }
 function reveal(f){ const glow=f.shiny?'#ffd24f':RAR[f.rar];
-  revEl.innerHTML=`<div class="reveal-card" style="border-color:${glow};box-shadow:0 20px 60px rgba(0,0,0,.6),0 0 30px ${glow}55"><div class="r" style="color:${RAR[f.rar]}">${f.shiny?'✨ shiny ':''}${f.rar}</div><div class="f3d">${fishRenderer?'':fishSVG(f.rar)}</div><div class="nm">${f.name}</div><div class="v">◈ ${fmt(f.val)} · ${f.kg||'?'} kg</div></div>`;
+  revEl.innerHTML=`<div class="reveal-card" style="border-color:${glow};box-shadow:0 20px 60px rgba(0,0,0,.6),0 0 30px ${glow}55"><div class="r" style="color:${RAR[f.rar]}">${f.shiny?'✦ shiny ':''}${f.rar}</div><div class="f3d">${fishRenderer?'':fishSVG(f.rar)}</div><div class="nm">${f.name}</div><div class="v">◈ ${fmt(f.val)} · ${f.kg||'?'} kg</div></div>`;
   if(fishRenderer){ revEl.querySelector('.f3d').appendChild(fishRenderer.domElement); buildFishModel(f); renderFishScene(0); }
   revEl.classList.add('on'); revT=2.5; }
 
@@ -1121,12 +1121,12 @@ function rollFish(){ let f=rollOnce();
   const rr=Math.min(state.rodLvl-1,9);
   for(let k=0;k<rr;k++){ if(Math.random()<0.3){ const g=rollOnce(); if(RORDER[g.rar]>RORDER[f.rar])f=g; } }
   if((wState==='rain'||wState==='storm')&&Math.random()<0.12){ const g=rollOnce(); if(RORDER[g.rar]>RORDER[f.rar])f=g; }
-  if(Math.random()<0.018){ f.shiny=true; f.val*=5; f.name='✨ '+f.name; } // shiny mutation
+  if(Math.random()<0.018){ f.shiny=true; f.val*=5; f.name='✦ '+f.name; } // shiny mutation
   return f; }
 function biteTime(){ const wet=(wState==='rain'||wState==='storm')?0.65:1;
   return rand(1.1,3.2)*Math.max(0.35,1-0.06*(state.rodLvl-1))*wet; }
 function onCatch(fish){ state.stats.caught++; state.bucket.push(fish);
-  const dexName=fish.shiny?fish.name.replace('✨ ',''):fish.name;
+  const dexName=fish.shiny?fish.name.replace('✨ ','').replace('✦ ',''):fish.name;
   const d=state.dex[dexName]||(state.dex[dexName]={n:0,best:0});
   d.n++; const isNew=d.n===1;
   if(fish.kg>d.best){ d.best=fish.kg; if(!isNew)toast(`${pixSVG('trophy',13)} Record ${dexName}: ${fish.kg} kg!`,'good'); }
@@ -1240,9 +1240,9 @@ function renderStakes(){ if(!state.bucket.length){stakeListEl.innerHTML='<div cl
     <span class="nm">${f.name}${f.wins?` <span style="color:var(--rose)">★${f.wins}</span>`:''}</span><span class="vv">◈ ${fmt(f.val)}</span></div>`;});
   stakeListEl.innerHTML=h; }
 function updateSpinBtn(){spinBtn.disabled=!(stakeIdx>=0&&betColor&&!spinning&&state.bucket[stakeIdx]);}
-function openCasino(){casinoOpen=true;viewMode='casino';casinoEl.classList.add('on');stakeIdx=-1;betColor=null;spinning=false;spinResult.innerHTML='';
+function openCasino(){casinoOpen=true;viewMode='casino';casinoLabel.visible=false;casinoEl.classList.add('on');stakeIdx=-1;betColor=null;spinning=false;spinResult.innerHTML='';
   document.querySelectorAll('.betbtn').forEach(b=>b.classList.remove('sel'));renderStakes();updateSpinBtn();}
-function closeCasino(){casinoOpen=false;viewMode='follow';spinSeq++;spinAnim=null;spinning=false;casinoEl.classList.remove('on');save();}
+function closeCasino(){casinoOpen=false;viewMode='follow';casinoLabel.visible=true;spinSeq++;spinAnim=null;spinning=false;casinoEl.classList.remove('on');save();}
 document.getElementById('casinoX').onclick=closeCasino;
 stakeListEl.addEventListener('click',e=>{if(spinning)return;const t=e.target.closest('[data-stake]');if(t){stakeIdx=+t.getAttribute('data-stake');renderStakes();updateSpinBtn();}});
 document.querySelectorAll('.betbtn').forEach(b=>{const pick=()=>{if(spinning)return;betColor=b.getAttribute('data-bet');
@@ -1556,7 +1556,7 @@ function biomeCheck(){ const t=cellType(heightAt(pWorld.x,pWorld.z));
     if(t==='stone')setArea('The Quarry','hold E on ore to mine');
     else if(t==='sand')setArea('Shoreline','cast your line'); } }
 // smoothed camera state — the view flies between follow-cam and the casino table
-const CAS_CAM_OFF=new THREE.Vector3(6.5,9.2,6.5);          // steeper angle: look down onto the wheel face
+const CAS_CAM_OFF=new THREE.Vector3(7.5,13,7.5);           // steeper angle: look down onto the wheel face, over the decor
 const CAS_SHIFT=new THREE.Vector3(0.78,0,-0.78);           // nudge the table left of center, clear of the bet panel
 const vTargP=new THREE.Vector3(),vTargL=new THREE.Vector3();
 const vPos=new THREE.Vector3(pWorld.x+CAM_OFF.x,pWorld.y+CAM_OFF.y,pWorld.z+CAM_OFF.z),

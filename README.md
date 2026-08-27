@@ -30,7 +30,7 @@ python3 -m http.server 8000
 2. **Mine the quarry** — follow the dirt path to the stone mountain (see the minimap). Hold **E** on ore rocks: coal, iron, gold, diamond. Nodes respawn after a while.
 3. **Sell at the TRADER** — fish and ores. Watch the banner: every 3 minutes one category is **HOT ×1.6** and one is **SURPLUS ×0.75**. Time your sales!
 4. **Upgrade** at the Trader: a better **rod** (faster bites, rarer fish) and a better **pick** (faster mining, bonus yield).
-5. **Gamble** at the **CASINO** — stake a fish on the 3D roulette wheel, bet **RED / BLACK** (×2) or **GREEN** (jackpot ×14), and **SPIN**.
+5. **Gamble** at the **CASINO** — walk up to the real roulette table and the camera dives onto the felt. Stake a fish, bet **RED / BLACK** (×2) or **GREEN** (jackpot ×14), and **SPIN** — the ball rattles around the wheel and drops into a pocket.
    - **Win** → the fish is worth double. Re-spin a winner to push your luck (×4, ×8…).
    - **Lose** → the eel eats it. Gone.
 
@@ -81,6 +81,6 @@ Your coins, gear, bucket and dex travel with you — sailing regenerates the isl
 - Mining: hold-E ore nodes (coal/iron/gold/diamond) with respawns
 - Rotating market demand (HOT/SURPLUS) + rod & pickaxe upgrades
 - Minimap with POI markers, resource HUD, isometric camera with scroll zoom, soft shadows
-- A real **3D roulette wheel**, sound effects (toggle with ♪) and local auto-save
+- A real **3D roulette table in the world** — the camera flies onto it, the ball circles the rim and settles into a pocket · sound effects (toggle with ♪) and local auto-save
 
 Built with [Three.js](https://threejs.org) r128. Pure client-side, MIT-spirited — do whatever you like with it.
