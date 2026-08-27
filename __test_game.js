@@ -584,11 +584,9 @@ if(mineCell){
   const stoneOK=(i,j)=>i>=0&&j>=0&&i<N&&j<N&&heightMap[i][j]>=WORLD.stoneH;
   const steel=new THREE.MeshLambertMaterial({color:0x555b63});
   const propPts=[];
-  // the iso camera always looks from +x/+z, so the shaft mouth must face one of
-  // those two axes to ever be seen — pick whichever is closer to the arrival path
+  // shaft mouth faces spawn so you see the entrance as you arrive
   const fdx=spawnCell[0]-mi, fdz=spawnCell[1]-mj;
-  const useX=fdx>=fdz;
-  const fx2=useX?1:0, fz2=useX?0:1;
+  const fx2=Math.abs(fdx)>=Math.abs(fdz)?(Math.sign(fdx)||1):0, fz2=fx2?0:(Math.sign(fdz)||1);
   const yaw=Math.atan2(fx2,fz2);
   let ei=mi,ej=mj,eh=mh;
   if(oreNear(mi,mj,1.4)){ let bd=1e9;
@@ -1333,7 +1331,7 @@ const STOCKS={
 const STOCK_KEYS=Object.keys(STOCKS), STOCK_CAP=100, DIV_Q=20;
 function stockPrice(k,e){ const s=STOCKS[k];
   const slow=(vnoise(e*0.004,s.salt)-0.5)*2.0, mid=(vnoise(e*0.05,s.salt*1.7)-0.5)*0.8, fast=(hash(e,s.salt)-0.5)*0.15;
-  const m=mktModsAt(e), hotMul=s.cats.includes(m.hot)?1.08:s.cats.includes(m.cold)?0.94:1; // regime swing < spread: tips give an edge, not an ATM
+  const m=mktModsAt(e), hotMul=s.cats.includes(m.hot)?1.12:s.cats.includes(m.cold)?0.90:1;
   return Math.max(1,Math.round(s.base*Math.exp((slow+mid)*s.vol+fast)*hotMul)); }
 const stockAsk=(k,e)=>Math.ceil(stockPrice(k,e)*1.05)+2;   // spread + flat fee folded in
 const stockBid=(k,e)=>Math.max(1,Math.floor(stockPrice(k,e)*0.95)-2);
@@ -1815,15 +1813,7 @@ function renderInv(){
      <div class="statrow"><span>${pixSVG('pick',14)} Ores mined</span><b>${fmt(st.mined)}</b></div>
      <div class="statrow"><span>◈ Coins earned</span><b>${fmt(st.earned)}</b></div>
      <div class="statrow"><span>${pixSVG('wheel',14)} Roulette spins</span><b>${fmt(st.spins)}${wl}</b></div>
-     <div class="statrow"><span>${pixSVG('trophy',14)} Biggest win</span><b>◈ ${fmt(st.bestWin)}</b></div>
-     <div class="statrow"><span>◉ Pearls earned (lifetime)</span><b style="color:var(--teal)">◉ ${fmt(state.pearlsLife)}</b></div>
-     ${(()=>{ const e2=mktEpochNow(); let pv=0,cb=0;
-        for(const k of STOCK_KEYS){ const n=state.stocks.own[k]|0; if(!n)continue;
-          pv+=n*stockBid(k,e2); cb+=n*Math.round(state.stocks.basis[k]||stockPrice(k,e2)); }
-        const pl=pv-cb, up=pl>=0;
-        return `<div class="statrow"><span>${pixSVG('chart',14)} Portfolio value</span><b>◈ ${fmt(pv)}</b></div>
-          <div class="statrow"><span>${pixSVG('chart',14)} Unrealized P&amp;L</span><b style="color:${up?'var(--teal)':'var(--rose)'}">${up?'▲':'▼'} ◈ ${fmt(Math.abs(pl))}</b></div>
-          <div class="statrow"><span>${pixSVG('chart',14)} Dividends received</span><b>◈ ${fmt(st.divEarned||0)}</b></div>`; })()}`;
+     <div class="statrow"><span>${pixSVG('trophy',14)} Biggest win</span><b>◈ ${fmt(st.bestWin)}</b></div>`;
   const achDone=ACH.filter(a=>state.ach[a[0]]).length;
   const achC=document.getElementById('achCount'); if(achC)achC.textContent=achDone+'/'+ACH.length;
   const achEl=document.getElementById('invAch');
@@ -1973,11 +1963,10 @@ function animate(now){
 
     for(const n of oreNodes){ if(!n.alive&&clock>=n.respawnAt&&n.respawnAt>0){n.alive=true;n.mesh.visible=true;} }
     biomeCheck();
-    if((achT+=dt)>1.4){achT=0;checkAch();payDividends();}
-    if(titleSprite)titleSprite.position.set(pWorld.x,pWorld.y+2.95,pWorld.z);
+    if((achT+=dt)>1.4){achT=0;checkAch();}
     if(marketOpen===true&&clock-bannerT>0.5){bannerT=clock;renderBanner();
       const e=Math.floor(Date.now()/MKT_MS);
-      if(e!==mktEpochSeen){mktEpochSeen=e;renderMarket();renderOres();renderStocks();}}
+      if(e!==mktEpochSeen){mktEpochSeen=e;renderMarket();renderOres();}}
     if(areaT>0){areaT-=dt;if(areaT<=0)H.area.classList.remove('on');}
     if(revT>0){renderFishScene(dt);revT-=dt;if(revT<=0){revEl.classList.remove('on');disposeFishModel();}}
   }
@@ -2051,12 +2040,8 @@ last=performance.now(); requestAnimationFrame(animate);
 document.getElementById('wipe').onclick=()=>{try{localStorage.removeItem(SAVE);localStorage.removeItem('reelfortune3d-world');}catch(e){}
   state.coins=0;state.bucket=[];state.ores={wood:0,coal:0,iron:0,gold:0,diamond:0};state.rodLvl=1;state.pickLvl=1;state.axeLvl=1;
   state.dex={};state.treasure=null;state.worlds=['isle'];state.ach={};
-  state.stocks={own:{},basis:{},lastDiv:Math.floor(Date.now()/(MKT_MS*DIV_Q)),lastShareEpoch:0,gotFirst:0};
-  state.pearls=0;state.pearlsLife=0;state.wardrobe={};state.titleId='';state.ownedT={};state.ownedW={};
-  state.bucketTier=0;state.boosts={chumUntil:0};
-  state.stats={caught:0,mined:0,earned:0,bestWin:0,spins:0,winsCt:0,losses:0,divEarned:0};
-  applyTitle();toast('Save wiped');
-  updateHUD();};
-applyWardrobe(); applyTitle(); payDividends(); // welcome-back dividends + saved cosmetics
+  state.stats={caught:0,mined:0,earned:0,bestWin:0,spins:0,winsCt:0,losses:0};
+  updateHUD();toast('Save wiped');};
 updateHUD();
+window.__rf={tp:()=>{pWorld.x=mineCell[0]-HALF;pWorld.z=mineCell[1]-HALF;pWorld.y=heightMap[mineCell[0]][mineCell[1]];}};
 })();
