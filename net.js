@@ -78,8 +78,57 @@ const Net={
   /* Only cosmetics/preferences — the server ignores anything that touches the economy. */
   saveCosmetics(patch){ return req('/api/save',{method:'POST',body:patch}); },
   leaderboard(){ return req('/api/leaderboard',{auth:false}); },
+
+  /* ---- CREW: a berth on someone's boat is granted by its captain, never
+     taken. request() only knocks; admit()/deny() are the captain's call. ---- */
+  crew(){ return req('/api/crew'); },
+  crewCaptains(){ return req('/api/crew/captains'); },
+  crewRequest(captain){ return req('/api/crew/request',{method:'POST',body:{captain}}); },
+  crewCancel(captain){ return req('/api/crew/cancel',{method:'POST',body:{captain}}); },
+  crewAdmit(user){ return req('/api/crew/admit',{method:'POST',body:{user}}); },
+  crewDeny(user){ return req('/api/crew/deny',{method:'POST',body:{user}}); },
+  crewKick(user){ return req('/api/crew/kick',{method:'POST',body:{user}}); },
+  crewLeave(){ return req('/api/crew/leave',{method:'POST'}); },
   ledger(){ return req('/api/ledger'); },
   claimDeed(deedId,address){ return req('/api/ledger/claim',{method:'POST',body:{deedId,address}}); },
+  online_(){ return req('/api/online',{auth:false}); },
+
+  /* ======================= REALTIME MULTIPLAYER =======================
+     A thin event bus over one WebSocket. The socket carries only presence,
+     chat and shared-resource news — never money. Anything that moves a coin
+     still goes through the authenticated HTTP actions above, so a forged
+     socket frame cannot make anyone richer. */
+  ws:null, wsReady:false, _h:{}, _retry:0, _tmr:null, _world:'', _meta:null,
+  on(evt,fn){ (this._h[evt]||(this._h[evt]=[])).push(fn); return this; },
+  _emit(evt,d){ const l=this._h[evt]; if(l)for(const f of l){ try{ f(d); }catch(e){ console.warn('RFNet handler',evt,e); } } },
+
+  connectWS(world,meta){
+    if(!this.online)return;
+    this._world=world; this._meta=meta||{};
+    if(this.ws&&(this.ws.readyState===0||this.ws.readyState===1))return;   // already connecting/open
+    let url;
+    try{ url=new URL(base); }catch(e){ return; }
+    url.protocol=url.protocol==='https:'?'wss:':'ws:';
+    url.pathname=(url.pathname.replace(/\/+$/,''))+'/ws';
+    url.search='?token='+encodeURIComponent(token);
+    let s; try{ s=new WebSocket(url.toString()); }catch(e){ return; }
+    this.ws=s;
+    s.onopen=()=>{ this.wsReady=true; this._retry=0;
+      this.send({t:'hello',world:this._world,title:this._meta.title||'',wardrobe:this._meta.wardrobe||{}});
+      this._emit('open'); };
+    s.onmessage=ev=>{ let d; try{ d=JSON.parse(ev.data); }catch(e){ return; }
+      if(!d||typeof d.t!=='string')return;
+      if(d.t==='pong')return;
+      this._emit(d.t,d); };
+    s.onclose=()=>{ this.wsReady=false; this.ws=null; this._emit('close');
+      if(!this.online)return;                     // signed out on purpose
+      const wait=Math.min(30000,1000*Math.pow(2,this._retry++));
+      clearTimeout(this._tmr); this._tmr=setTimeout(()=>this.connectWS(this._world,this._meta),wait); };
+    s.onerror=()=>{ try{ s.close(); }catch(e){} };
+  },
+  send(obj){ if(this.ws&&this.ws.readyState===1){ try{ this.ws.send(JSON.stringify(obj)); }catch(e){} } },
+  disconnectWS(){ clearTimeout(this._tmr); this._retry=0;
+    if(this.ws){ try{ this.ws.close(1000,'bye'); }catch(e){} this.ws=null; } this.wsReady=false; },
 };
 
 window.RFNet=Net;

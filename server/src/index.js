@@ -22,10 +22,10 @@ import cors from 'cors';
 import * as DB from './db.js';
 import { requireAuth, mountAuth } from './auth.js';
 import { HANDLERS, RATE } from './game/actions.js';
-import { newState } from './game/rules.js';
+import { newState, BOATS, boatSeats, crewSlots, MAX_BOAT } from './game/rules.js';
 import { payDividends, mktEpochNow } from './game/economy.js';
 
-const { initSchema, saves, sessions, actions: actionLog, deedsRepo } = DB;
+const { initSchema, saves, sessions, actions: actionLog, deedsRepo, crews } = DB;
 
 /* ---------------------------------------------------------------- paths ---- */
 const HERE = path.dirname(fileURLToPath(import.meta.url));   // <root>/server/src
@@ -40,10 +40,13 @@ const IS_PROD = process.env.NODE_ENV === 'production';
 /* --------------------------------------------------------------- boot ----- */
 initSchema();
 
+const CREW_REQUEST_TTL = 24 * 60 * 60 * 1000;   // unanswered boarding knocks expire after a day
+
 // Drop expired sessions every 10 minutes. unref() so the timer never keeps a
 // shutting-down process alive.
 const sweepTimer = setInterval(() => {
   try { sessions.sweep(); } catch (e) { console.error('[sessions.sweep]', e); }
+  try { crews.sweep(CREW_REQUEST_TTL); } catch (e) { console.error('[crews.sweep]', e); }
 }, 10 * 60 * 1000);
 if (typeof sweepTimer.unref === 'function') sweepTimer.unref();
 
@@ -498,6 +501,247 @@ app.post('/api/ledger/claim', requireAuth, (req, res) => {
     scheme: 'hmac-sha256-placeholder',
     onChainReady: false
   });
+});
+
+/* ============================================================================
+   CREW — who may ride on whose boat.
+   ----------------------------------------------------------------------------
+   A hull seats a fixed number of people INCLUDING its captain, so the raft
+   (1 seat) can never take anyone and a Gilded Galleon carries nine guests.
+   Boarding is two-sided: the sailor knocks (POST /request), the captain decides
+   (POST /admit | /deny). Nobody is ever seated by their own say-so.
+
+   Invariants, all re-checked inside crews.admit()'s transaction:
+     - a player is aboard at most one boat  (crew_members.member_id is the PK)
+     - a captain with crew aboard cannot themselves board someone else
+     - a manifest never exceeds seats-1
+   ========================================================================== */
+const CREW_LIST_LIMIT = 40;
+const CREW_MAX_OUTGOING = 5;                    // knock on at most five hulls at once
+const CREW_RATE = 1500;                         // ms between crew writes, per user
+const CREW_ACTION = 'crew_write';
+
+const boatOf = (lvl) => BOATS[Math.min(Math.max(lvl | 0, 0), MAX_BOAT)] || BOATS[0];
+
+/** Public shape of a hull — never leaks costs or requirements the client has. */
+const hullInfo = (lvl) => {
+  const b = boatOf(lvl);
+  return { lvl: Math.min(Math.max(lvl | 0, 0), MAX_BOAT), name: b.name, sub: b.sub, seats: b.seats };
+};
+
+/** One shared cooldown across every crew write; admitting is not a hot path. */
+function crewRateLimited(userId, res) {
+  let last = 0;
+  try { last = actionLog.last(userId, CREW_ACTION) || 0; } catch (e) { console.error('[crew.rate]', e); }
+  const gap = nowMs() - last;
+  if (last > 0 && gap < CREW_RATE) {
+    res.set('Retry-After', '1');
+    res.status(429).json({ error: 'too fast', retryAfter: CREW_RATE - gap });
+    return true;
+  }
+  return false;
+}
+const markCrew = (userId) => {
+  try { actionLog.mark(userId, CREW_ACTION); } catch (e) { console.error('[crew.mark]', e); }
+};
+
+/** Resolve a username from the body to a real account, or null. */
+function lookupUser(body, field) {
+  const raw = body && body[field];
+  if (typeof raw !== 'string') return null;
+  const name = raw.trim();
+  if (!name || name.length > 32) return null;
+  return DB.users.findByName(name);
+}
+
+/** The full crew picture for one player: their deck, their berth, their knocks. */
+function crewView(userId, username) {
+  const lvl = saves.boatLvl(userId);
+  const berth = crews.berthOf(userId);
+  const manifest = crews.manifest(userId);
+
+  let berthOut = null;
+  if (berth) {
+    const capLvl = saves.boatLvl(berth.ownerId);
+    berthOut = {
+      captain: berth.captain,
+      joinedAt: berth.joinedAt,
+      boat: hullInfo(capLvl),
+      // Shipmates, the captain included, so a guest can see who else is aboard.
+      crew: crews.manifest(berth.ownerId).map(m => ({ username: m.username, joinedAt: m.joinedAt }))
+    };
+  }
+
+  return {
+    you: {
+      username,
+      boat: hullInfo(lvl),
+      slots: crewSlots(lvl),          // berths this captain can hand out
+      aboard: manifest.length,
+      // A guest's own hull is moored: you cannot host while you are a passenger.
+      hosting: !berth
+    },
+    manifest: manifest.map(m => ({ username: m.username, joinedAt: m.joinedAt })),
+    requests: berth ? [] : crews.requestsFor(userId).map(r => ({
+      username: r.username, at: r.at, boat: hullInfo(r.boatLvl)
+    })),
+    berth: berthOut,
+    outgoing: crews.requestsBy(userId).map(r => ({ captain: r.captain, at: r.at })),
+    serverTime: nowMs()
+  };
+}
+
+/* ---- GET /api/crew — everything the Harbor panel needs in one round trip -- */
+app.get('/api/crew', requireAuth, (req, res) => {
+  loadState(req.userId);                       // make sure a save (and boatLvl) exists
+  const me = DB.users.findById(req.userId);
+  res.json(crewView(req.userId, me ? me.username : ''));
+});
+
+/* ---- GET /api/crew/captains — hulls with a free berth, most recent first -- */
+app.get('/api/crew/captains', requireAuth, (req, res) => {
+  let rows = [];
+  try { rows = saves.captains(CREW_LIST_LIMIT * 2, 1) || []; }
+  catch (e) { console.error('[crew.captains]', e); return res.status(500).json({ error: 'unavailable' }); }
+
+  const mine = new Set(crews.requestsBy(req.userId).map(r => r.ownerId));
+  const berth = crews.berthOf(req.userId);
+
+  const captains = rows
+    .filter(r => r.userId !== req.userId)
+    .map(r => {
+      const hull = hullInfo(r.boatLvl);
+      const slots = crewSlots(r.boatLvl);
+      return {
+        username: r.username,
+        boat: hull,
+        slots,
+        aboard: r.aboard | 0,
+        free: Math.max(0, slots - (r.aboard | 0)),
+        pending: mine.has(r.userId),
+        seenAt: r.seenAt
+      };
+    })
+    .filter(c => c.slots > 0)
+    .slice(0, CREW_LIST_LIMIT);
+
+  res.json({ captains, aboard: !!berth, serverTime: nowMs() });
+});
+
+/* ---- POST /api/crew/request { captain } — knock on a hull ----------------- */
+app.post('/api/crew/request', requireAuth, (req, res) => {
+  if (crewRateLimited(req.userId, res)) return;
+
+  const target = lookupUser(req.body, 'captain');
+  if (!target) return res.status(404).json({ error: 'no such captain' });
+  if (target.id === req.userId) return res.status(400).json({ error: 'that is your own boat' });
+
+  if (crews.berthOf(req.userId)) {
+    return res.status(409).json({ error: 'you are already aboard a boat — leave it first' });
+  }
+  if (crews.count(req.userId) > 0) {
+    return res.status(409).json({ error: 'send your own crew ashore before boarding another boat' });
+  }
+  if (crews.berthOf(target.id)) {
+    return res.status(409).json({ error: 'that captain is sailing as a guest right now' });
+  }
+
+  const slots = crewSlots(saves.boatLvl(target.id));
+  if (slots <= 0) return res.status(409).json({ error: 'that hull has no room for crew' });
+  if (crews.count(target.id) >= slots) return res.status(409).json({ error: 'that crew is full' });
+
+  if (crews.hasRequest(target.id, req.userId)) {
+    return res.status(409).json({ error: 'already waiting on that captain' });
+  }
+  if (crews.requestsBy(req.userId).length >= CREW_MAX_OUTGOING) {
+    return res.status(429).json({ error: `you may only await ${CREW_MAX_OUTGOING} captains at once` });
+  }
+
+  crews.addRequest(target.id, req.userId);
+  markCrew(req.userId);
+  const me = DB.users.findById(req.userId);
+  res.json({ ok: true, ...crewView(req.userId, me ? me.username : '') });
+});
+
+/* ---- POST /api/crew/cancel { captain } — withdraw your own knock ---------- */
+app.post('/api/crew/cancel', requireAuth, (req, res) => {
+  if (crewRateLimited(req.userId, res)) return;
+  const target = lookupUser(req.body, 'captain');
+  if (!target) return res.status(404).json({ error: 'no such captain' });
+
+  crews.dropRequest(target.id, req.userId);
+  markCrew(req.userId);
+  const me = DB.users.findById(req.userId);
+  res.json({ ok: true, ...crewView(req.userId, me ? me.username : '') });
+});
+
+/* ---- POST /api/crew/admit { user } — the captain's yes -------------------- */
+app.post('/api/crew/admit', requireAuth, (req, res) => {
+  if (crewRateLimited(req.userId, res)) return;
+
+  const target = lookupUser(req.body, 'user');
+  if (!target) return res.status(404).json({ error: 'no such sailor' });
+  if (target.id === req.userId) return res.status(400).json({ error: 'you already crew your own boat' });
+  if (crews.berthOf(req.userId)) {
+    return res.status(409).json({ error: 'you are a guest aboard another boat — step ashore to captain your own' });
+  }
+
+  const seats = boatSeats(saves.boatLvl(req.userId));
+  let outcome;
+  try { outcome = crews.admit(req.userId, target.id, seats); }
+  catch (e) { console.error('[crew.admit]', e); return res.status(500).json({ error: 'could not admit' }); }
+
+  const MSG = {
+    'no-request': [404, 'that sailor is not waiting to board'],
+    'aboard':     [409, 'that sailor already boarded another boat'],
+    'captain':    [409, 'that sailor has their own crew aboard'],
+    'full':       [409, 'your boat is full — a bigger hull seats more']
+  };
+  if (outcome !== 'ok') {
+    const [code, error] = MSG[outcome] || [400, 'could not admit'];
+    return res.status(code).json({ error });
+  }
+
+  markCrew(req.userId);
+  const me = DB.users.findById(req.userId);
+  res.json({ ok: true, admitted: target.username, ...crewView(req.userId, me ? me.username : '') });
+});
+
+/* ---- POST /api/crew/deny { user } — the captain's no ---------------------- */
+app.post('/api/crew/deny', requireAuth, (req, res) => {
+  if (crewRateLimited(req.userId, res)) return;
+  const target = lookupUser(req.body, 'user');
+  if (!target) return res.status(404).json({ error: 'no such sailor' });
+
+  if (!crews.dropRequest(req.userId, target.id)) {
+    return res.status(404).json({ error: 'that sailor is not waiting to board' });
+  }
+  markCrew(req.userId);
+  const me = DB.users.findById(req.userId);
+  res.json({ ok: true, denied: target.username, ...crewView(req.userId, me ? me.username : '') });
+});
+
+/* ---- POST /api/crew/kick { user } — put a shipmate ashore ----------------- */
+app.post('/api/crew/kick', requireAuth, (req, res) => {
+  if (crewRateLimited(req.userId, res)) return;
+  const target = lookupUser(req.body, 'user');
+  if (!target) return res.status(404).json({ error: 'no such sailor' });
+
+  if (!crews.removeMember(req.userId, target.id)) {
+    return res.status(404).json({ error: 'that sailor is not on your boat' });
+  }
+  markCrew(req.userId);
+  const me = DB.users.findById(req.userId);
+  res.json({ ok: true, removed: target.username, ...crewView(req.userId, me ? me.username : '') });
+});
+
+/* ---- POST /api/crew/leave — step ashore under your own steam ------------- */
+app.post('/api/crew/leave', requireAuth, (req, res) => {
+  if (crewRateLimited(req.userId, res)) return;
+  const left = crews.leave(req.userId);
+  markCrew(req.userId);
+  const me = DB.users.findById(req.userId);
+  res.json({ ok: true, left: !!left, ...crewView(req.userId, me ? me.username : '') });
 });
 
 /* ------------------------------------------------------------- health ----- */

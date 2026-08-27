@@ -54,7 +54,18 @@ export const PEARL_ORE = { wood: 1, coal: 1, iron: 1, gold: 2, diamond: 5 };
    entries: [species, weight, cond?] — cond gates when the species can bite.
    ============================================================================ */
 export const RORDER = { common: 0, uncommon: 1, rare: 2, epic: 3, legendary: 4 };
+export const RAR_ORDER = ['common', 'uncommon', 'rare', 'epic', 'legendary'];
 export const PEARL_RARITY = { common: 1, uncommon: 2, rare: 4, epic: 8, legendary: 16 };
+
+/* ---- LUCK ---------------------------------------------------------------
+   One number bends the whole draw. `luck` scales every entry's weight by
+   rarity: commons thin out, the top of the table swells. At luck 0 the table
+   is exactly the shipped one, so a bare Lv.1 rod with no bait plays as before.
+   Weights never go below 5% of base, so no species is ever impossible.
+   ------------------------------------------------------------------------ */
+export const LUCK_W = { common: -0.55, uncommon: -0.15, rare: 0.9, epic: 1.7, legendary: 2.6 };
+export const luckWeight = (rar, luck) =>
+  (luck > 0 ? Math.max(0.05, 1 + luck * (LUCK_W[rar] || 0)) : 1);
 
 const F = (name, rar, val) => ({ name, rar, val });
 
@@ -148,6 +159,44 @@ export const ROD_NAMES  = ['', 'Old Rod', 'Birch Rod', 'Lucky Rod', 'Fiber Rod',
 export const PICK_NAMES = ['', 'Rusty Pick', 'Stone Pick', 'Iron Pick', 'Steel Pick', 'Golden Pick', 'Crystal Pick', 'Obsidian Pick', 'Mythril Pick', 'Dragon Pick', 'Titan Pick'];
 export const AXE_NAMES  = ['', 'Dull Axe', 'Stone Axe', 'Iron Axe', 'Steel Axe', 'Golden Axe', 'Crystal Axe', 'Obsidian Axe', 'Mythril Axe', 'Dragon Axe', 'Titan Axe'];
 
+/**
+ * Rod luck. Every craft bends the fish table a little further toward the rare
+ * end — Lv.1 is the shipped table (0), Lv.10 is +0.81 luck, which roughly
+ * halves the commons and triples the legendary weight. This stacks on top of
+ * the rod's long-standing reroll loop, so a Poseidon Rod is felt twice.
+ */
+export const rodLuck = (lvl) => +(0.09 * (clamp(lvl | 0 || 1, 1, MAXLVL) - 1)).toFixed(4);
+
+/* ============================================================================
+   BAIT — the consumable half of fishing luck.
+   Bought by the pack with COINS at the Bait Shack, spent one per fish landed
+   (a snapped line costs you nothing). `min` is a hard floor: the pool is
+   filtered to that rarity and up, so Siren's Chum literally cannot hook a
+   sardine. `shiny` scales the 1.8% mutation roll.
+   The ladder is deliberately priced against Fortune Isle's cheap fish: the
+   top two baits only turn a profit once you are fishing a high-value world.
+   ============================================================================ */
+export const BAITS = {
+  worm:   { name: 'Garden Worm',   sub: 'wriggly, cheap, honest',        cost: 80,   pack: 10, luck: 0.4, min: null,       shiny: 1,   tint: '#c98b6a' },
+  shrimp: { name: 'Brine Shrimp',  sub: 'nothing small bothers with it', cost: 300,  pack: 10, luck: 0.9, min: 'uncommon', shiny: 1.2, tint: '#ff9f7a' },
+  squid:  { name: 'Squid Strip',   sub: 'the deep answers this one',     cost: 900,  pack: 10, luck: 1.6, min: 'rare',     shiny: 1.5, tint: '#c9b6ff' },
+  glow:   { name: 'Glowworm Lure', sub: 'burns cold, draws big',         cost: 2200, pack: 10, luck: 2.4, min: 'rare',     shiny: 2,   tint: '#8ef7c9' },
+  siren:  { name: "Siren's Chum",  sub: 'legends come to look',          cost: 5500, pack: 10, luck: 3.2, min: 'epic',     shiny: 3,   tint: '#ffd24f' }
+};
+export const BAIT_ORDER = ['worm', 'shrimp', 'squid', 'glow', 'siren'];
+export const BAIT_MAX = 999;   // per-kind stack ceiling
+
+/** The bait record for an id, or null for '' / an unknown id. */
+export function baitOf(id) {
+  return typeof id === 'string' && Object.prototype.hasOwnProperty.call(BAITS, id) ? BAITS[id] : null;
+}
+
+/** Total luck going into one draw: the rod's ladder plus whatever is on the hook. */
+export function fishLuck({ rodLvl = 1, bait = null } = {}) {
+  const b = baitOf(bait);
+  return rodLuck(rodLvl) + (b ? b.luck : 0);
+}
+
 /** Coin cost to go from `lvl` -> `lvl+1`. */
 export const upCost = (base, lvl) => Math.round(base * Math.pow(1.75, lvl - 1));
 /** The axe has its own gentler ladder — wood is a 6-coin commodity. */
@@ -159,13 +208,21 @@ export const AXE_REQ = [null, null, { wood: 5 }, { wood: 10, coal: 3 }, { iron: 
 
 /* ---- the fleet: coins + ores buy the next hull at the Harbor dock ---- */
 export const BOATS = [
-  { name: 'Driftwood Raft', sub: 'lashed logs & a prayer',     cost: 0,     req: {},                      luck: 0 },
-  { name: 'Cork Dinghy',    sub: 'a real hull at last',        cost: 600,   req: { wood: 12 },            luck: 0.06 },
-  { name: 'Teal Sloop',     sub: 'painted hull · single sail', cost: 2400,  req: { wood: 20, iron: 8 },   luck: 0.12 },
-  { name: 'Storm Trawler',  sub: 'iron-clad workhorse',        cost: 8000,  req: { iron: 14, gold: 8 },   luck: 0.2 },
-  { name: 'Gilded Galleon', sub: 'pride of the archipelago',   cost: 22000, req: { gold: 14, diamond: 6 }, luck: 0.3 }
+  { name: 'Driftwood Raft', sub: 'lashed logs & a prayer',     cost: 0,     req: {},                      luck: 0,    seats: 1 },
+  { name: 'Cork Dinghy',    sub: 'a real hull at last',        cost: 600,   req: { wood: 12 },            luck: 0.06, seats: 2 },
+  { name: 'Teal Sloop',     sub: 'painted hull · single sail', cost: 2400,  req: { wood: 20, iron: 8 },   luck: 0.12, seats: 4 },
+  { name: 'Storm Trawler',  sub: 'iron-clad workhorse',        cost: 8000,  req: { iron: 14, gold: 8 },   luck: 0.2,  seats: 6 },
+  { name: 'Gilded Galleon', sub: 'pride of the archipelago',   cost: 22000, req: { gold: 14, diamond: 6 }, luck: 0.3,  seats: 10 }
 ];
 export const MAX_BOAT = BOATS.length - 1;
+
+/** Seats INCLUDING the captain. A raft seats one, so it can never take crew. */
+export function boatSeats(lvl) {
+  const b = BOATS[clamp(lvl | 0, 0, MAX_BOAT)];
+  return b ? b.seats : 1;
+}
+/** Berths a captain of `lvl` can hand out — seats minus their own. */
+export const crewSlots = (lvl) => Math.max(0, boatSeats(lvl) - 1);
 /** Boat level needed to UNLOCK each isle. */
 export const BOAT_REQ = { isle: 0, mine: 1, volcano: 2, frost: 3 };
 
@@ -198,6 +255,7 @@ export function newState() {
     pearls: 0, pearlsLife: 0,
     wardrobe: {}, titleId: '', ownedT: {}, ownedW: {},
     bucketTier: 0,
+    bait: {}, baitId: '',
     boosts: { chumUntil: 0 },
     tipEpoch: 0,
     deeds: {},
@@ -267,6 +325,13 @@ export function normalizeState(raw) {
   if (obj(s.deeds)) st.deeds = s.deeds;
   st.titleId = typeof s.titleId === 'string' ? s.titleId.slice(0, 40) : '';
   st.bucketTier = clamp(s.bucketTier | 0, 0, 4);
+  const bait = obj(s.bait);
+  if (bait) for (const k of BAIT_ORDER) {
+    const n = clamp(bait[k] | 0, 0, BAIT_MAX);
+    if (n > 0) st.bait[k] = n;
+  }
+  /* an equipped bait you have none of is the same as no bait at all */
+  st.baitId = typeof s.baitId === 'string' && st.bait[s.baitId] > 0 ? s.baitId : '';
   st.tipEpoch = Math.max(0, num(s.tipEpoch, 0));
   const boosts = obj(s.boosts);
   if (boosts) st.boosts.chumUntil = Math.max(0, num(boosts.chumUntil, 0));
@@ -302,47 +367,28 @@ function envOf({ night = false, wet = false, storm = false } = {}) {
   return { night: !!night, rain: !!wet || isStorm, storm: isStorm };
 }
 
-/** The condition-filtered table for a world. */
-export function fishPool(world = 'isle', env = {}) {
+/**
+ * The condition-filtered table for a world. `minRar` is bait's rarity floor:
+ * anything below it is cut from the pool outright. A floor that would empty
+ * the pool is ignored rather than obeyed — no world can be made unfishable.
+ */
+export function fishPool(world = 'isle', env = {}, minRar = null) {
   const w = WORLDS[world];
   const table = (w && w.fish) || TABLE;
   const e = envOf(env);
-  return table.filter((entry) => condOK(entry[2], e));
+  const pool = table.filter((entry) => condOK(entry[2], e));
+  const floor = RORDER[minRar];
+  if (floor == null) return pool;
+  const up = pool.filter((entry) => (RORDER[entry[0].rar] | 0) >= floor);
+  return up.length ? up : pool;
 }
 
-/**
- * One weighted draw from a world's pool — the client's rollOnce().
- * Returns null only if the pool is somehow empty (never, for shipped tables).
- */
-export function rollOnce(opts = {}) {
-  const { world = 'isle', fishMul } = opts;
-  const mul = Number.isFinite(+fishMul) ? +fishMul : (WORLDS[world]?.fishMul || 1);
-  const pool = fishPool(world, opts);
-  if (!pool.length) return null;
-
-  let tot = 0;
-  for (const e of pool) tot += e[1];
-  let r = Math.random() * tot;
-  for (const e of pool) {
-    r -= e[1];
-    if (r <= 0) {
-      const t = e[0];
-      const val = Math.round(t.val * mul * rand(0.85, 1.18));
-      return {
-        uid: (Date.now() + Math.random()).toString(36),
-        name: t.name,
-        rar: t.rar,
-        val,
-        kg: +(t.val / 9 * rand(0.5, 1.6) + 0.2).toFixed(1),
-        wins: 0
-      };
-    }
-  }
-  /* floating-point tail: the last entry is the correct answer */
-  const t = pool[pool.length - 1][0];
+/** Materialize a table entry into a caught-fish object. */
+function makeFish(t, mul) {
   return {
     uid: (Date.now() + Math.random()).toString(36),
-    name: t.name, rar: t.rar,
+    name: t.name,
+    rar: t.rar,
     val: Math.round(t.val * mul * rand(0.85, 1.18)),
     kg: +(t.val / 9 * rand(0.5, 1.6) + 0.2).toFixed(1),
     wins: 0
@@ -350,14 +396,46 @@ export function rollOnce(opts = {}) {
 }
 
 /**
+ * One weighted draw from a world's pool — the client's rollOnce().
+ * `luck` re-weights the table by rarity, `minRar` floors it.
+ * Returns null only if the pool is somehow empty (never, for shipped tables).
+ */
+export function rollOnce(opts = {}) {
+  const { world = 'isle', fishMul, luck = 0, minRar = null } = opts;
+  const mul = Number.isFinite(+fishMul) ? +fishMul : (WORLDS[world]?.fishMul || 1);
+  const pool = fishPool(world, opts, minRar);
+  if (!pool.length) return null;
+
+  const wt = pool.map((e) => e[1] * luckWeight(e[0].rar, luck));
+  let tot = 0;
+  for (const x of wt) tot += x;
+  let r = Math.random() * tot;
+  for (let i = 0; i < pool.length; i++) {
+    r -= wt[i];
+    if (r <= 0) return makeFish(pool[i][0], mul);
+  }
+  /* floating-point tail: the last entry is the correct answer */
+  return makeFish(pool[pool.length - 1][0], mul);
+}
+
+/**
  * The full catch roll — the client's rollFish().
+ *   - luck (rod ladder + bait) re-weights the table toward the rare end
+ *   - bait's rarity floor cuts everything below it out of the pool
  *   - rod level rerolls: min(rodLvl-1, 9) tries at p=0.3, keep the rarer fish
  *   - rain/storm grants one extra reroll at p=0.12
- *   - 1.8% shiny mutation: ×5 value and a '✦ ' name prefix
+ *   - the boat's sea luck grants one more at its own rate
+ *   - 1.8% shiny mutation (× the bait's shiny bonus): ×5 value, '✦ ' prefix
  * `fishMul` defaults to the world's multiplier when omitted.
  */
-export function rollFish({ rodLvl = 1, fishMul, night = false, wet = false, storm = false, world = 'isle' } = {}) {
-  const opts = { world, fishMul, night, wet, storm };
+export function rollFish({ rodLvl = 1, bait = null, boatLvl = 0, fishMul,
+                           night = false, wet = false, storm = false, world = 'isle' } = {}) {
+  const b = baitOf(bait);
+  const opts = {
+    world, fishMul, night, wet, storm,
+    luck: fishLuck({ rodLvl, bait }),
+    minRar: b ? b.min : null
+  };
   let f = rollOnce(opts);
   if (!f) return null;
 
@@ -373,7 +451,13 @@ export function rollFish({ rodLvl = 1, fishMul, night = false, wet = false, stor
     const g = rollOnce(opts);
     if (g && RORDER[g.rar] > RORDER[f.rar]) f = g;
   }
-  if (Math.random() < 0.018) { f.shiny = true; f.val *= 5; f.name = '✦ ' + f.name; }
+  /* a finer ship stirs finer fish (game.js:1726) */
+  const bl = (BOATS[clamp(boatLvl | 0, 0, MAX_BOAT)] || BOATS[0]).luck;
+  if (bl && Math.random() < bl) {
+    const g = rollOnce(opts);
+    if (g && RORDER[g.rar] > RORDER[f.rar]) f = g;
+  }
+  if (Math.random() < 0.018 * (b ? b.shiny : 1)) { f.shiny = true; f.val *= 5; f.name = '✦ ' + f.name; }
   return f;
 }
 

@@ -72,21 +72,6 @@
   .deed .db{position:absolute;top:9px;right:12px;font-size:9px;color:var(--gold);letter-spacing:.12em;}
   .deed.locked{opacity:.4;border-color:var(--glass-bd-soft);box-shadow:none;}
   .deed.locked::before{border-color:rgba(255,255,255,.08);}
-  #chat{position:fixed;left:12px;bottom:14px;z-index:6;width:min(330px,42vw);opacity:0;transition:opacity .3s;pointer-events:none;}
-  #chat.show{opacity:1;}
-  #chat.open{pointer-events:auto;}
-  #chatLog{max-height:150px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;margin-bottom:6px;}
-  #chatLog::-webkit-scrollbar{width:0;}
-  .cmsg{font-size:11.5px;line-height:1.45;color:var(--ink);background:var(--glass-hud);
-    backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
-    border:1px solid var(--glass-bd-soft);border-radius:9px;padding:5px 9px;align-self:flex-start;max-width:100%;
-    word-break:break-word;box-shadow:0 3px 10px rgba(2,8,10,.3);}
-  .cmsg b{color:var(--teal);font-weight:600;}
-  .cmsg.sys{color:var(--muted);font-style:italic;}
-  #chatIn{width:100%;font-family:"IBM Plex Mono";font-size:12px;color:var(--ink);background:var(--glass-hud);
-    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
-    border:1px solid rgba(57,215,196,.55);border-radius:10px;padding:9px 12px;outline:none;
-    box-shadow:0 0 14px rgba(57,215,196,.2);}
   #area{top:14px;left:50%;transform:translateX(-50%);z-index:5;font-family:"Chakra Petch";font-weight:600;font-size:15px;
     letter-spacing:.14em;color:#fff;text-shadow:0 2px 8px rgba(0,0,0,.7);opacity:0;transition:opacity .4s;text-transform:uppercase;position:fixed;}
   #area.on{opacity:.95;}
@@ -108,7 +93,6 @@
   .nm .pix,.statrow .pix,.seclab .pix{vertical-align:-3px;margin-right:2px;}
   .fishrow>.pix,.stake>.pix,.invcard>.pix{flex:0 0 auto;}
   #timeChip .pix{vertical-align:-3px;}
-  #skyDial{width:66px;height:20px;border-radius:5px;display:block;image-rendering:auto;}
   #hotbar .slot .sb{font-family:"Chakra Petch";font-weight:700;font-size:10px;color:var(--gold);font-variant-numeric:tabular-nums;}
   /* photo mode: every HUD layer drops away, leaving just the world */
   body.photo #hotbar,body.photo #hud,body.photo #minimap,body.photo #hint,body.photo #toasts,
@@ -289,14 +273,14 @@
     font-family:"IBM Plex Mono";font-size:14px;text-align:center;padding:40px;line-height:1.7;}
   a:focus-visible,button:focus-visible{outline:2px solid var(--teal);outline-offset:2px;}
 </style>
-</head>
+<style>*{animation:none!important;transition:none!important}#winFlash.on{opacity:1!important}</style></head>
 <body>
 <div id="scene"></div>
 <div id="vig"></div>
 
 <div id="hud-bucket" class="hud"><span class="ic" data-pix="bucket" data-pix-size="18"></span><span class="n">0/12</span></div>
 <div id="hud-ores" class="hud">
-  <div class="orechip" id="timeChip"><canvas id="skyDial" width="132" height="40"></canvas><span id="timeIco" data-pix="sun" data-pix-size="14"></span><span id="wIco"></span></div>
+  <div class="orechip" id="timeChip"><span id="timeIco" data-pix="sun" data-pix-size="14"></span><span id="wIco"></span></div>
   <div class="orechip"><span class="od" style="background:#9a6b3a;color:#9a6b3a"></span><span id="oreW">0</span></div>
   <div class="orechip"><span class="od" style="background:#565e66;color:#565e66"></span><span id="oreC">0</span></div>
   <div class="orechip"><span class="od" style="background:#d8cfc4;color:#d8cfc4"></span><span id="oreI">0</span></div>
@@ -315,10 +299,6 @@
   <div class="slot" data-slot="3" title="Fish Bucket (4)"><span class="sk">4</span><span class="sic" data-pix="bucket" data-pix-size="26"></span><span class="sb" id="hbBucket">0/12</span></div>
   <div class="slot" data-slot="4" title="Ore Pouch (5)"><span class="sk">5</span><span class="sic" data-pix="gem" data-pix-size="26"></span><span class="sb" id="hbPouch">0</span></div>
   <div class="invkey"><b>I</b> inventory</div>
-</div>
-<div id="chat">
-  <div id="chatLog"></div>
-  <input id="chatIn" type="text" maxlength="200" placeholder="say something… (Enter to send, Esc to cancel)" style="display:none">
 </div>
 <div id="toasts"></div>
 <div id="reveal"></div>
@@ -451,6 +431,6 @@
 
 <script src="lib/three.min.js"></script>
 <script src="net.js"></script>
-<script src="game.js"></script>
-</body>
+<script src="__test_game.js"></script>
+<script>try{window.__rf.winshot(0.34,false,4);}catch(e){document.title="ERR:"+e.message+" | "+e.stack}</script></body>
 </html>

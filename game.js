@@ -555,12 +555,12 @@ const R_TRACK=1.44,R_POCK=0.82,Y_TRACK=1.36,Y_POCK=1.31; // ball path, local to 
 function wedgeGeo(r,thetaStart,thetaLength,h){
   const shape=new THREE.Shape(); shape.moveTo(0,0); shape.absarc(0,0,r,thetaStart,thetaStart+thetaLength,false); shape.lineTo(0,0);
   const g=new THREE.ExtrudeGeometry(shape,{depth:h,bevelEnabled:false}); g.rotateX(-Math.PI/2); return g; }
-const casino=new THREE.Group(); const lamps=[];
+const casino=new THREE.Group(); const lamps=[], casinoLamps=[]; // casinoLamps flare on a roulette win
 { const cbase=texturedBox(4.2,0.5,4.2,TEX.stone); cbase.position.y=0.25; cbase.castShadow=true; cbase.receiveShadow=true; casino.add(cbase);
   for(const [lx,lz] of [[-1.85,-1.85],[1.85,-1.85],[-1.85,1.85],[1.85,1.85]]){
     const post=texturedBox(0.18,2.4,0.18,TEX.bark); post.position.set(lx,1.55,lz); post.castShadow=true; casino.add(post);
     const lamp=new THREE.Mesh(new THREE.BoxGeometry(0.34,0.34,0.34), new THREE.MeshLambertMaterial({color:0xffd24f,emissive:0xffb320,emissiveIntensity:0.85}));
-    lamp.position.set(lx,2.95,lz); casino.add(lamp); lamps.push(lamp); } }
+    lamp.position.set(lx,2.95,lz); casino.add(lamp); lamps.push(lamp); casinoLamps.push(lamp); } }
 const tableG=new THREE.Group(); tableG.position.y=0.5; casino.add(tableG);
 { // wooden legs + top + green felt + raised rim: an actual roulette table
   for(const [lx,lz] of [[-0.95,-0.95],[0.95,-0.95],[-0.95,0.95],[0.95,0.95]]){
@@ -576,8 +576,9 @@ const tableG=new THREE.Group(); tableG.position.y=0.5; casino.add(tableG);
     const m=new THREE.Mesh(plankGeo,new THREE.MeshLambertMaterial({color:k%2?0x9a6b3a:0x7d5530}));
     m.position.set(Math.cos(a)*1.86,1.06,Math.sin(a)*1.86); m.rotation.y=-a; m.castShadow=true; tableG.add(m); } }
 const wheelDisc=new THREE.Group(); wheelDisc.position.y=1.12; tableG.add(wheelDisc);
+const wedges=[];  // kept around so the winning pocket can be lit up on a win
 for(let i=0;i<NSEG;i++){ const w=new THREE.Mesh(wedgeGeo(WR,i*SEGA,SEGA,0.14),new THREE.MeshLambertMaterial({color:SEGCOL[SEG[i]]}));
-  w.castShadow=true; wheelDisc.add(w); }
+  w.castShadow=true; wheelDisc.add(w); wedges.push(w); }
 { // pocket pins on the wedge borders — they spin with the wheel
   const pinGeo=new THREE.BoxGeometry(0.06,0.14,0.06), pinMat=new THREE.MeshLambertMaterial({color:0xd9b45c,emissive:0x604a17,emissiveIntensity:0.3});
   for(let i=0;i<NSEG;i++){ const a=-(i*SEGA), pin=new THREE.Mesh(pinGeo,pinMat);
@@ -605,6 +606,58 @@ let wheelAngle=0, ballA=0, ballLockIdx=0;
 function setBall(b,r,y){ ballA=b; ball.position.set(Math.cos(b)*r,y,Math.sin(b)*r); }
 function setBallPocket(i){ const phi=i*SEGA+SEGA/2; setBall(-phi-wheelAngle,R_POCK,Y_POCK); }
 setBallPocket(0);
+
+/* --- win celebration rig ---------------------------------------------------
+   Three cheap layers that read instantly from the casino camera: two shockwave
+   rings pushing out across the felt, a light shaft standing in the winning
+   pocket (parented to the disc so it rides the wheel), and the wedge itself
+   breathing gold. Everything decays on its own — nothing to clean up. */
+const winRings=[];
+for(let k=0;k<2;k++){
+  const rg=new THREE.Mesh(new THREE.RingGeometry(0.88,1.0,44),
+    new THREE.MeshBasicMaterial({color:0xffd24f,transparent:true,opacity:0,side:THREE.DoubleSide,
+      depthWrite:false,blending:THREE.AdditiveBlending}));
+  rg.rotation.x=-Math.PI/2; rg.position.y=1.30; rg.visible=false; tableG.add(rg); winRings.push(rg); }
+const BEAM_H=3.2;
+const winBeam=new THREE.Mesh(new THREE.CylinderGeometry(0.30,0.15,BEAM_H,10,1,true),
+  new THREE.MeshBasicMaterial({color:0xffd24f,transparent:true,opacity:0,side:THREE.DoubleSide,
+    depthWrite:false,blending:THREE.AdditiveBlending}));
+winBeam.visible=false; wheelDisc.add(winBeam);
+const winFx={t:0,dur:0,idx:-1,big:false};
+let camPunch=0, casinoFlare=0;
+// fired the instant the ball locks into a winning pocket
+function triggerWinFx(idx,big){
+  const prev=wedges[winFx.idx]; if(prev)prev.material.emissiveIntensity=0;   // a fast re-spin must not leave two wedges lit
+  winFx.t=0; winFx.dur=big?2.1:1.35; winFx.idx=idx; winFx.big=!!big;
+  camPunch=big?0.58:0.32; casinoFlare=big?1:0.6;
+  const phi=idx*SEGA+SEGA/2;
+  winBeam.position.set(Math.cos(-phi)*R_POCK,0.16,Math.sin(-phi)*R_POCK); }
+function updateWinFx(dt,rdt){
+  camPunch*=Math.exp(-6*rdt); casinoFlare*=Math.exp(-2.6*rdt);   // camera + lamps ride real time, they ignore hit-stop
+  if(winFx.dur<=0)return;
+  const prev=winFx.t; winFx.t+=dt; const T=winFx.t, big=winFx.big, hue=big?0x74e08a:0xffd24f;
+  for(let k=0;k<winRings.length;k++){ const rg=winRings[k], s=(T-k*0.17)/(big?0.8:0.62);
+    if(s<0||s>1){ rg.visible=false; continue; }
+    rg.visible=true; const sc=0.55+s*(big?1.55:1.2);
+    rg.scale.set(sc,sc,1); rg.material.color.setHex(hue);
+    rg.material.opacity=(1-s)*(1-s)*(big?0.9:0.6); }
+  { const gr=Math.min(1,T/0.16), fade=Math.max(0,1-T/(big?1.6:1.05));   // the shaft snaps up, then bleeds away
+    winBeam.visible=fade>0; winBeam.scale.set(1,gr,1); winBeam.position.y=0.16+BEAM_H*gr*0.5;
+    winBeam.material.color.setHex(hue); winBeam.material.opacity=fade*(big?0.5:0.32); }
+  const w=wedges[winFx.idx];
+  if(w){ const fall=Math.max(0,1-T/winFx.dur);
+    w.material.emissive.setHex(big?0x2fae5e:0xffd24f);
+    w.material.emissiveIntensity=fall*(0.6+0.4*Math.sin(T*15))*(big?1.15:0.85); }
+  // confetti falls over the table in short bursts rather than one big blob
+  const SHOWERS=big?[0.18,0.46,0.8,1.15]:[0.2,0.5];
+  for(const s of SHOWERS) if(prev<s&&T>=s){
+    fxBurst(WHEEL_CENTER.x+rand(-1,1),WHEEL_CENTER.y+2.7,WHEEL_CENTER.z+rand(-1,1),
+      {n:big?11:7,cols:big?[0x74e08a,0xffd24f,0xffefb0]:[0xffd24f,0xffefb0,0xfff2cc],
+       speed:1.4,up:0.5,size:0.95,grav:5,ttl:1.6});
+    sfx.sparkle(); }
+  if(T>=winFx.dur){ winFx.dur=0;
+    for(const rg of winRings)rg.visible=false;
+    winBeam.visible=false; if(w)w.material.emissiveIntensity=0; } }
 
 // --- entrance monument: a grand voxel gate greeting new arrivals at spawn ---
 { const gate=new THREE.Group();
@@ -1055,6 +1108,7 @@ addEventListener('keydown',e=>{
   if(onUI&&(e.code==='Space'||e.code==='Enter'))return;
   const m=KMAP[e.code]; if(m){e.preventDefault(); if(!keys[m]&&m==='act')actEdge=true; keys[m]=true;}
   if(e.code==='KeyI'||e.code==='Tab'){ e.preventDefault(); if(invOpen)closeInv(); else if(running)openInv(); }
+  if(e.code==='KeyT'&&running&&!chatOpen&&!marketOpen&&!casinoOpen&&!invOpen){ e.preventDefault(); openChat(); }
   if(e.code>='Digit1'&&e.code<='Digit5'&&running&&!marketOpen&&!casinoOpen&&!harborOpen){ setHotSlot(+e.code.slice(5)-1); }
   if(e.code==='KeyP'&&running){ e.preventDefault(); togglePhoto(); }
   if(e.code==='Escape'){ if(marketOpen)closeMarket(); else if(casinoOpen)closeCasino(); else if(harborOpen)closeHarbor(); else if(invOpen)closeInv(); else if(fishing.state!=='idle')cancelFish(); else if(mining.node)cancelMine(); else if(chopping.tree)cancelChop(); else if(digging.active){digging.active=false;hint('');} }},{passive:false});
@@ -1069,7 +1123,15 @@ function beep(f,d,t,v){if(!AC||muted)return;const o=AC.createOscillator(),g=AC.c
 const sfx={cast:()=>beep(300,.15,'sine',.05),bite:()=>{beep(880,.08,'square',.06);setTimeout(()=>beep(1100,.08,'square',.06),90);},
   reel:()=>beep(200+Math.random()*80,.05,'sawtooth',.03),catch:()=>{beep(523,.1,'triangle',.06);setTimeout(()=>beep(784,.14,'triangle',.06),90);},
   miss:()=>beep(160,.2,'sawtooth',.05),sell:()=>{beep(660,.08,'sine',.06);setTimeout(()=>beep(990,.1,'sine',.06),70);},
-  spin:(f)=>beep(f||120,.05,'square',.02),win:()=>{[523,659,784,1046].forEach((f,i)=>setTimeout(()=>beep(f,.16,'triangle',.06),i*90));},
+  spin:(f)=>beep(f||120,.05,'square',.02),
+  sparkle:()=>beep(1500+Math.random()*600,.06,'triangle',.025),
+  // a rising arpeggio that lands on a held chord — bright, and over inside a second
+  win:()=>{[523,659,784,1046].forEach((f,i)=>setTimeout(()=>{beep(f,.14,'triangle',.06);beep(f*2,.07,'sine',.02);},i*70));
+    setTimeout(()=>{beep(784,.42,'triangle',.05);beep(1046,.42,'triangle',.04);beep(1318,.42,'sine',.03);},300);},
+  // green pays 14× — it earns a fanfare a bar longer than an ordinary win
+  jackpot:()=>{[523,659,784,1046,1318].forEach((f,i)=>setTimeout(()=>{beep(f,.13,'square',.05);beep(f*2,.09,'triangle',.025);},i*62));
+    setTimeout(()=>{[1046,1318,1568].forEach((f,i)=>setTimeout(()=>beep(f,.55,'triangle',.05),i*55));},340);
+    setTimeout(()=>{for(let i=0;i<5;i++)setTimeout(()=>beep(1760+Math.random()*900,.07,'triangle',.028),i*95);},430);},
   lose:()=>{beep(200,.3,'sawtooth',.07);setTimeout(()=>beep(130,.4,'sawtooth',.07),160);},
   pick:()=>beep(340+Math.random()*120,.05,'square',.04),
   ore:()=>{beep(620,.09,'triangle',.06);setTimeout(()=>beep(930,.12,'triangle',.06),80);}};
@@ -1263,6 +1325,19 @@ boat:{p:{m:'#6b421f',s:'#f2ede2',h:'#8a5a2c'},g:[
 '.hhhhhhhhhh.',
 '..hhhhhhhh..',
 '...hhhhhh...',
+'............']},
+crew:{p:{h:'#e8c9a0',b:'#39d7c4',B:'#ffcf5c'},g:[
+'............',
+'..hh....hh..',
+'..hh....hh..',
+'............',
+'.bbbb..BBBB.',
+'bbbbbb.BBBBB',
+'.bbbb..BBBB.',
+'.bbbb..BBBB.',
+'..b.b...B.B.',
+'..b.b...B.B.',
+'............',
 '............']},
 island:{p:{t:'#8a5a2c',L:'#74e08a',s:'#e8d8a8',w:'#4fc3e8'},g:[
 '............',
@@ -1527,7 +1602,7 @@ const state={coins:0,bucket:[],ores:{wood:0,coal:0,iron:0,gold:0,diamond:0},rodL
   stocks:{own:{},basis:{},lastDiv:null,lastShareEpoch:0,gotFirst:0},
   pearls:0,pearlsLife:0,wardrobe:{},titleId:'',ownedT:{},ownedW:{},bucketTier:0,boosts:{chumUntil:0},tipEpoch:0,deeds:{},
   pet:0,charm:0,jackpot:0,bounty:null,bountyEpoch:0,
-  stats:{caught:0,mined:0,earned:0,bestWin:0,spins:0,winsCt:0,losses:0,divEarned:0}};
+  stats:{caught:0,mined:0,wood:0,earned:0,bestWin:0,spins:0,winsCt:0,losses:0,divEarned:0}};
 const cap=()=>CAP_BASE+2*(state.bucketTier||0);
 /* ---- server bridge: when signed in, the SERVER owns the economy ----
    Offline play is unchanged. Online, every action below is decided server-side and
@@ -1656,6 +1731,7 @@ function biteTime(){ const wet=(wState==='rain'||wState==='storm')?0.65:1;
   const chum=Date.now()<state.boosts.chumUntil?0.5:1; // Chum Jar boost
   return rand(1.1,3.2)*Math.max(0.35,1-0.06*(state.rodLvl-1))*wet*chum; }
 function onCatch(fish){ state.stats.caught++; state.bucket.push(fish);
+  if(RORDER[fish.rar]>=2)rareCaught++; // feeds the "land N rare-or-better" bounty
   const dexName=fish.shiny?fish.name.replace('✨ ','').replace('✦ ',''):fish.name;
   const d=state.dex[dexName]||(state.dex[dexName]={n:0,best:0});
   d.n++; const isNew=d.n===1; let isRec=false;
@@ -1738,11 +1814,15 @@ function addPearls(n,why){ if(n<=0)return; state.pearls+=n; state.pearlsLife+=n;
 const catLabel=c=>c==='fish'?'Fish':ORE_INFO[c].name;
 /* ---- the fleet: coins + ores buy the next hull at the Harbor dock ---- */
 const BOATS=[
-  {name:'Driftwood Raft', sub:'lashed logs & a prayer',      cost:0,     req:{},                  luck:0},
-  {name:'Cork Dinghy',    sub:'a real hull at last',         cost:600,   req:{wood:12},           luck:0.06},
-  {name:'Teal Sloop',     sub:'painted hull · single sail',  cost:2400,  req:{wood:20,iron:8},    luck:0.12},
-  {name:'Storm Trawler',  sub:'iron-clad workhorse',         cost:8000,  req:{iron:14,gold:8},    luck:0.2},
-  {name:'Gilded Galleon', sub:'pride of the archipelago',    cost:22000, req:{gold:14,diamond:6}, luck:0.3}];
+  {name:'Driftwood Raft', sub:'lashed logs & a prayer',      cost:0,     req:{},                  luck:0,    seats:1},
+  {name:'Cork Dinghy',    sub:'a real hull at last',         cost:600,   req:{wood:12},           luck:0.06, seats:2},
+  {name:'Teal Sloop',     sub:'painted hull · single sail',  cost:2400,  req:{wood:20,iron:8},    luck:0.12, seats:4},
+  {name:'Storm Trawler',  sub:'iron-clad workhorse',         cost:8000,  req:{iron:14,gold:8},    luck:0.2,  seats:6},
+  {name:'Gilded Galleon', sub:'pride of the archipelago',    cost:22000, req:{gold:14,diamond:6}, luck:0.3,  seats:10}];
+// seats count the captain, so crewSlots(raft)=0: you need a real hull to carry anyone
+const boatSeats=lvl=>(BOATS[clamp(lvl|0,0,BOATS.length-1)]||BOATS[0]).seats;
+const crewSlots=lvl=>Math.max(0,boatSeats(lvl)-1);
+const seatLabel=lvl=>{ const n=boatSeats(lvl); return n===1?'sails alone · 1 seat':`seats ${n} · ${n-1} crew`; };
 const BOAT_REQ={isle:0,mine:1,volcano:2,frost:3}; // boat level needed to UNLOCK each isle
 const ROD_BASE=250, PICK_BASE=200, AXE_BASE=180;
 const AXE_NAMES=['','Dull Axe','Stone Axe','Iron Axe','Steel Axe','Golden Axe','Crystal Axe','Obsidian Axe','Mythril Axe','Dragon Axe','Titan Axe'];
@@ -1833,7 +1913,7 @@ function renderOres(){ const any=Object.values(state.ores).some(v=>v>0);
   let h=''; for(const k in ORE_INFO){ const n=state.ores[k]; if(!n)continue; const info=ORE_INFO[k];
     h+=`<div class="fishrow">${oreIcon(k,16)}
       <span class="nm">${info.name} <span style="color:var(--muted)">×${n}</span></span>
-      <span class="vv">◈ ${fmt(info.price*n*priceMult(k))}</span><button class="btn" data-sellore="${k}">Sell all</button></div>`; }
+      <span class="vv">◈ ${fmt(Math.round(info.price*n*priceMult(k)*(n>=100?1.15:n>=50?1.1:n>=20?1.05:1)))}${n>=20?`<small style="color:var(--teal)"> bulk +${n>=100?15:n>=50?10:5}%</small>`:''}</span><button class="btn" data-sellore="${k}">Sell all</button></div>`; }
   oreList.innerHTML=h; }
 function renderUpg(){
   const row=(kind,lvl,base,names)=>{ const nxt=lvl+1,
@@ -1952,7 +2032,40 @@ function renderKiosk(){ if(!kioskList)return; let h='';
     :`<div class="fishrow"><span class="nm">Lucky Charm <span style="color:var(--faint);font-size:10px">the wheel re-rolls one losing spin in five</span></span>
       <span class="vv" style="color:var(--teal)">◉ 600</span><button class="btn" data-kiosk="charm" ${state.pearls<600?'disabled':''}>Buy</button></div>`;
   kioskList.innerHTML=h; }
-function renderMarketAll(){ renderMarket(); renderOres(); renderUpg(); renderStocks(); renderKiosk(); }
+/* --- BOUNTY BOARD: three objectives that reroll every market epoch ---------- */
+const BOUNTY_POOL=[
+  ['catch','Land {n} fish',       [6,10,16],   [400,700,1200]],
+  ['mine', 'Mine {n} ore',        [8,14,22],   [450,800,1400]],
+  ['wood', 'Chop {n} wood',       [6,12,20],   [350,650,1100]],
+  ['spin', 'Take {n} spins',      [3,6,10],    [500,900,1500]],
+  ['rare', 'Land {n} rare-or-better', [2,4,7], [700,1300,2200]],
+];
+// bounties key off lifetime counters, so progress is just "counter now − counter when issued"
+function bountyCounter(kind){ const st=state.stats;
+  return kind==='catch'?st.caught:kind==='mine'?st.mined:kind==='wood'?(st.wood||0):kind==='spin'?st.spins:rareCaught; }
+let rareCaught=0;
+function rollBounties(){ const epoch=mktEpochNow();
+  const pool=BOUNTY_POOL.slice().sort(()=>Math.random()-0.5).slice(0,3);
+  state.bounty={epoch,list:pool.map(([kind,label,ns,rw])=>{ const t=(Math.random()*3)|0;
+    return {kind,label:label.replace('{n}',ns[t]),need:ns[t],reward:rw[t],base:bountyCounter(kind),done:0}; })};
+  state.bountyEpoch=epoch; }
+function checkBounties(){
+  if(!state.bounty||state.bounty.epoch!==mktEpochNow())rollBounties();
+  let changed=false;
+  for(const b of state.bounty.list){ if(b.done)continue;
+    if(bountyCounter(b.kind)-b.base>=b.need){ b.done=1; changed=true;
+      state.coins+=b.reward; state.stats.earned+=b.reward; addPearls(5,'bounty'); coinFly(b.reward); sfx.win();
+      toast(`${pixSVG('trophy',13)} Bounty complete — ◈${fmt(b.reward)}`,'gold'); } }
+  if(changed){ updateHUD(); save(); if(marketOpen)renderBounties(); } }
+function renderBounties(){ const el=document.getElementById('bountyList'); if(!el)return;
+  if(!state.bounty)rollBounties();
+  el.innerHTML=state.bounty.list.map(b=>{ const have=clamp(bountyCounter(b.kind)-b.base,0,b.need),
+      k=Math.round(have/b.need*8);
+    return `<div class="fishrow" style="${b.done?'opacity:.6':''}">${pixSVG('trophy',15)}
+      <span class="nm">${b.label} <span style="color:var(--faint);font-size:10px">${have}/${b.need}</span></span>
+      <span class="rr" style="color:var(--muted)"><b>${'▰'.repeat(k)+'▱'.repeat(8-k)}</b></span>
+      <span class="vv" style="color:${b.done?'var(--teal)':'var(--gold)'}">${b.done?'✓ paid':'◈ '+fmt(b.reward)}</span></div>`; }).join(''); }
+function renderMarketAll(){ renderMarket(); renderOres(); renderUpg(); renderStocks(); renderKiosk(); renderBounties(); }
 function openMarket(){marketOpen=true;marketEl.classList.add('on');renderBanner();renderMarketAll();}
 function closeMarket(){marketOpen=false;marketEl.classList.remove('on');save();}
 document.getElementById('marketX').onclick=closeMarket;
@@ -1972,7 +2085,9 @@ marketEl.addEventListener('click',e=>{
   const t2=e.target.closest?e.target.closest('[data-sellore]'):null;
   if(t2){const k=t2.getAttribute('data-sellore'),n=state.ores[k];
     if(SRV.on){ SRV.act('sell',{kind:'ore',oreKey:k}).then(r=>{ if(r&&r.gained){coinFly(r.gained);sfx.sell();toast('+'+fmt(r.gained)+' coins','gold');} }); return; }
-    if(n>0){const g=Math.round(n*ORE_INFO[k].price*priceMult(k));state.coins+=g;state.stats.earned+=g;state.ores[k]=0;sfx.sell();toast('+'+fmt(g)+' coins','gold');updateHUD();renderMarketAll();save();} return;}
+    if(n>0){const bulk=n>=100?1.15:n>=50?1.1:n>=20?1.05:1;   // big hauls beat trickle-trading
+      const g=Math.round(n*ORE_INFO[k].price*priceMult(k)*bulk);state.coins+=g;state.stats.earned+=g;state.ores[k]=0;sfx.sell();
+      toast('+'+fmt(g)+' coins'+(bulk>1?` · bulk +${Math.round((bulk-1)*100)}%`:''),'gold');updateHUD();renderMarketAll();save();} return;}
   const t3=e.target.closest?e.target.closest('[data-buy]'):null;
   if(t3){const kind=t3.getAttribute('data-buy');
     if(SRV.on){ SRV.act('craft',{tool:kind}).then(r=>{ if(r&&r.name){sfx.ore();addShake(0.1);
@@ -2031,7 +2146,8 @@ marketEl.addEventListener('click',e=>{
 let harborOpen=false,previewLvl=0;
 const harborEl=document.getElementById('harbor'),boatCurEl=document.getElementById('boatCur'),
   boatListEl=document.getElementById('boatList'),sailListEl=document.getElementById('sailList'),
-  dockViewEl=document.getElementById('dockView'),dockCapEl=document.getElementById('dockCap');
+  dockViewEl=document.getElementById('dockView'),dockCapEl=document.getElementById('dockCap'),
+  crewPanelEl=document.getElementById('crewPanel');
 const dockScene=new THREE.Scene();
 const dockCam=new THREE.PerspectiveCamera(30,320/180,0.1,40); dockCam.position.set(4.6,3.1,6.2); dockCam.lookAt(0,0.8,0);
 dockScene.add(new THREE.HemisphereLight(0xffffff,0x1c3038,1.0));
@@ -2049,31 +2165,150 @@ const BOAT_VIEW=[1.5,1.4,1.12,0.95,0.78]; // per-tier zoom so every hull fills t
 function buildPreview(lvl){ previewLvl=lvl;
   if(previewBoat){ previewBoat.traverse(o=>{if(o.geometry)o.geometry.dispose();if(o.material&&o.material.dispose)o.material.dispose();}); dockScene.remove(previewBoat); }
   previewBoat=makeBoat(lvl); previewBoat.scale.setScalar(BOAT_VIEW[lvl]||1); dockScene.add(previewBoat);
-  if(dockCapEl)dockCapEl.innerHTML=`${BOATS[lvl].name} — <span style="color:var(--muted)">${BOATS[lvl].sub}</span>${lvl>state.boatLvl?' <span style="color:var(--faint)">· preview</span>':''}`; }
+  if(dockCapEl)dockCapEl.innerHTML=`${BOATS[lvl].name} — <span style="color:var(--muted)">${BOATS[lvl].sub}</span>`+
+    ` <span style="color:var(--teal)">· ${seatLabel(lvl)}</span>${lvl>state.boatLvl?' <span style="color:var(--faint)">· preview</span>':''}`; }
 function renderDockView(dt){ if(!dockRenderer||!previewBoat)return; dockT+=dt;
   previewBoat.rotation.y=dockT*0.45; previewBoat.position.y=Math.sin(dockT*1.4)*0.045;
   previewBoat.rotation.z=Math.sin(dockT*0.9)*0.02;
   animBoat(previewBoat,dockT);
   dockRenderer.render(dockScene,dockCam); }
+/* ========================================================================
+   CREW — a hull seats a fixed number of hands, the captain included, so a
+   Driftwood Raft (1 seat) sails alone and a Gilded Galleon carries nine
+   guests. Berths are GRANTED, never taken: a sailor knocks with "ask to
+   board" and only the captain's ADMIT seats them.
+
+   The server owns the manifest — this panel is a view over /api/crew plus
+   six intents. Offline it degrades to a note about what the hull could hold.
+   ======================================================================== */
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+let crewInfo=null,     // last /api/crew payload
+    crewCaps=null,     // last /api/crew/captains list
+    crewBusy=false,    // one intent in flight at a time
+    crewNote='',       // last error, shown above the rows
+    crewTimer=0;
+const crewOnline=()=>!!(window.RFNet&&RFNet.online);
+
+// captain's berth first (gold), then the berths in use, then the empty ones
+function seatPips(seats,taken){ let h=`<span class="seats" title="${seats} seats">`;
+  for(let i=0;i<Math.min(seats,12);i++)h+=`<i class="${i===0?'cap':i<=taken?'on':''}"></i>`;
+  return h+'</span>'; }
+
+function renderCrew(){ if(!crewPanelEl)return;
+  let h='<div class="seclab" style="margin-top:14px">'+pixSVG('crew',12)+' Crew — the captain admits every hand aboard</div>';
+
+  if(!crewOnline()){
+    const lvl=state.boatLvl;
+    h+=`<div class="crewnote">Your ${BOATS[lvl].name} ${seatPips(boatSeats(lvl),0)} — ${seatLabel(lvl)}.
+      Crews are kept on the server: sign in from the title screen to ask for a berth or take hands aboard.</div>`;
+    crewPanelEl.innerHTML=h; return; }
+
+  if(crewNote)h+=`<div class="crewnote" style="color:var(--rose)">${esc(crewNote)}</div>`;
+  const v=crewInfo;
+  if(!v){ h+='<div class="crewnote">Reading the harbour register…</div>'; crewPanelEl.innerHTML=h; return; }
+
+  if(v.berth){
+    // --- sailing as someone else's guest: your own hull stays moored --------
+    const b=v.berth, mates=b.crew.filter(m=>m.username!==v.you.username);
+    h+=`<div class="fishrow" style="border-color:rgba(57,215,196,.45)">${pixSVG('boat',16)}
+      <span class="nm">Aboard ${esc(b.captain)}'s ${esc(b.boat.name)} ${seatPips(b.boat.seats,b.crew.length)}
+        <span style="color:var(--faint);font-size:11px">${b.crew.length+1}/${b.boat.seats} aboard · your own hull is moored while you sail as a guest</span></span>
+      <span class="btns"><button class="btn rose" data-crew="leave">STEP ASHORE</button></span></div>`;
+    h+=`<div class="fishrow">${pixSVG('crew',15)}<span class="nm">${esc(b.captain)}
+        <span style="color:var(--gold);font-size:11px">captain</span></span></div>`;
+    for(const m of mates)
+      h+=`<div class="fishrow">${pixSVG('crew',15)}<span class="nm">${esc(m.username)}
+        <span style="color:var(--faint);font-size:11px">shipmate</span></span></div>`;
+  } else {
+    // --- your own deck ------------------------------------------------------
+    const seats=v.you.boat.seats, slots=v.you.slots, aboard=v.manifest.length;
+    const line=slots
+      ? `${aboard}/${slots} berths filled · you hold the wheel`
+      : `a ${v.you.boat.name} seats one — build a Cork Dinghy to take a hand aboard`;
+    h+=`<div class="fishrow" style="border-color:rgba(57,215,196,.45)">${pixSVG('boat',16)}
+      <span class="nm">${esc(v.you.boat.name)} ${seatPips(seats,aboard)}
+        <span style="color:var(--faint);font-size:11px">${line}</span></span>
+      <span class="rr" style="color:var(--teal)">${aboard+1}/${seats}</span></div>`;
+
+    for(const m of v.manifest)
+      h+=`<div class="fishrow">${pixSVG('crew',15)}
+        <span class="nm">${esc(m.username)} <span style="color:var(--faint);font-size:11px">crew</span></span>
+        <span class="btns"><button class="btn rose" data-crew="kick" data-crewuser="${esc(m.username)}">PUT ASHORE</button></span></div>`;
+
+    if(v.requests.length){
+      const full=aboard>=slots;
+      h+=`<div class="crewnote" style="color:var(--gold)">${v.requests.length} waiting at the gangway${full?' — no berth free until someone steps ashore':''}</div>`;
+      for(const r of v.requests)
+        h+=`<div class="fishrow" style="border-color:rgba(255,207,92,.45)">${pixSVG('crew',15)}
+          <span class="nm">${esc(r.username)} <span style="color:var(--faint);font-size:11px">asks to board · sails a ${esc(r.boat.name)}</span></span>
+          <span class="btns">
+            <button class="btn gold" data-crew="admit" data-crewuser="${esc(r.username)}" ${full?'disabled':''}>ADMIT</button>
+            <button class="btn rose" data-crew="deny" data-crewuser="${esc(r.username)}">DENY</button></span></div>`;
+    }
+  }
+
+  // --- who else is moored here --------------------------------------------
+  h+='<div class="seclab" style="margin-top:12px">Other captains — ask for a berth</div>';
+  const blocked=v.berth?'You are already aboard a boat'
+    :v.manifest.length?'Send your own crew ashore first'
+    :'';
+  if(blocked)h+=`<div class="crewnote">${blocked} — one berth per sailor.</div>`;
+  if(!crewCaps||!crewCaps.length)h+='<div class="crewnote">No other captains have moored here yet.</div>';
+  else for(const c of crewCaps){ const full=c.free<=0;
+    h+=`<div class="fishrow">${pixSVG('boat',15)}
+      <span class="nm">${esc(c.username)} ${seatPips(c.boat.seats,c.aboard)}
+        <span style="color:var(--faint);font-size:11px">${esc(c.boat.name)} · ${c.aboard}/${c.slots} berths taken</span></span>
+      <span class="btns">${c.pending
+        ? `<button class="btn" data-crew="cancel" data-crewuser="${esc(c.username)}">WAITING · CANCEL</button>`
+        : `<button class="btn" data-crew="request" data-crewuser="${esc(c.username)}" ${blocked||full?'disabled':''}>${full?'FULL':'ASK TO BOARD'}</button>`}</span></div>`; }
+
+  crewPanelEl.innerHTML=h; }
+
+/** Pull manifest + captain list together; the panel is useless with only one. */
+async function crewRefresh(){
+  if(!crewOnline()){ crewInfo=null; crewCaps=null; renderCrew(); return; }
+  try{ const [v,c]=await Promise.all([RFNet.crew(),RFNet.crewCaptains()]);
+    crewInfo=v; crewCaps=c.captains||[]; crewNote=''; }
+  catch(e){ crewNote=e.message||'the harbour register is unreachable'; }
+  if(harborOpen)renderCrew(); }
+
+const CREW_SAID={admit:n=>`${n} is aboard`, deny:n=>`${n} turned away`, kick:n=>`${n} put ashore`,
+  leave:()=>'Back on your own deck', request:n=>`Asked ${n} for a berth`, cancel:n=>`Withdrew your ask to ${n}`};
+
+async function crewAct(kind,who){
+  if(crewBusy||!crewOnline())return;
+  const call={admit:()=>RFNet.crewAdmit(who), deny:()=>RFNet.crewDeny(who), kick:()=>RFNet.crewKick(who),
+    leave:()=>RFNet.crewLeave(), request:()=>RFNet.crewRequest(who), cancel:()=>RFNet.crewCancel(who)}[kind];
+  if(!call)return;
+  crewBusy=true;
+  try{
+    crewInfo=await call(); crewNote='';
+    toast(pixSVG('crew',13)+' '+esc(CREW_SAID[kind](who)), kind==='deny'||kind==='kick'?'bad':'good');
+    if(kind==='admit'||kind==='leave'){ sfx.win(); addShake(0.08); }
+    // the roster the buttons were drawn from is now stale
+    try{ const c=await RFNet.crewCaptains(); crewCaps=c.captains||[]; }catch(e){}
+  }catch(e){ crewNote=e.message||'that did not take'; toast(esc(crewNote),'bad'); }
+  crewBusy=false; renderCrew(); }
 function renderHarbor(){ if(!boatCurEl)return;
   const cur=BOATS[state.boatLvl], nxt=BOATS[state.boatLvl+1];
   let h=`<div class="fishrow">${pixSVG('boat',16)}
-    <span class="nm">${cur.name} <span style="color:var(--teal)">Lv.${state.boatLvl}</span>
-      <span style="color:var(--faint);font-size:11px">${cur.sub} · sea luck +${Math.round(cur.luck*100)}%</span></span>
+    <span class="nm">${cur.name} <span style="color:var(--teal)">Lv.${state.boatLvl}</span> ${seatPips(cur.seats,0)}
+      <span style="color:var(--faint);font-size:11px">${cur.sub} · ${seatLabel(state.boatLvl)} · sea luck +${Math.round(cur.luck*100)}%</span></span>
     <span class="rr" style="color:var(--teal)">YOUR BOAT</span></div>`;
   if(nxt){ const can=state.coins>=nxt.cost&&haveOres(nxt.req);
     h+=`<div class="fishrow">${pixSVG('boat',16)}
-      <span class="nm">${nxt.name} <span style="color:var(--faint);font-size:11px">${nxt.sub} · needs ${reqLabel(nxt.req)} · sea luck +${Math.round(nxt.luck*100)}%</span></span>
+      <span class="nm">${nxt.name} ${seatPips(nxt.seats,0)} <span style="color:var(--faint);font-size:11px">${nxt.sub} · ${seatLabel(state.boatLvl+1)} · needs ${reqLabel(nxt.req)} · sea luck +${Math.round(nxt.luck*100)}%</span></span>
       <span class="vv">◈ ${fmt(nxt.cost)}</span><button class="btn gold" data-buyboat="1" ${can?'':'disabled'}>BUILD</button></div>`; }
   else h+=`<div class="fishrow"><span class="nm">Fleet complete — the seas bow to you, Admiral</span><span class="rr" style="color:var(--gold)">MAX</span></div>`;
   boatCurEl.innerHTML=h;
   let fl=''; BOATS.forEach((b,i)=>{ const st=i<=state.boatLvl?'OWNED':i===state.boatLvl+1?'NEXT':'LOCKED';
     fl+=`<div class="fishrow" data-prevboat="${i}" style="cursor:pointer;${i===previewLvl?'border-color:rgba(57,215,196,.55);':''}${i>state.boatLvl+1?'opacity:.55;':''}">
       ${pixSVG(i<=state.boatLvl?'boat':'lock',15)}
-      <span class="nm">${b.name} <span style="color:var(--faint);font-size:11px">${b.sub}</span></span>
+      <span class="nm">${b.name} ${seatPips(b.seats,0)} <span style="color:var(--faint);font-size:11px">${b.sub} · ${seatLabel(i)}</span></span>
       ${b.cost?`<span class="vv">◈ ${fmt(b.cost)}</span>`:''}
       <span class="rr" style="color:${st==='OWNED'?'var(--teal)':st==='NEXT'?'var(--gold)':'var(--faint)'}">${st}</span></div>`; });
   boatListEl.innerHTML=fl;
+  renderCrew();
   if(sailListEl)sailListEl.innerHTML=renderWorldRows(); }
 function buyBoat(){ const nxt=state.boatLvl+1; if(nxt>=BOATS.length)return; const b=BOATS[nxt];
   if(state.coins<b.cost||!haveOres(b.req))return;
@@ -2081,16 +2316,23 @@ function buyBoat(){ const nxt=state.boatLvl+1; if(nxt>=BOATS.length)return; cons
   state.boatLvl=nxt; sfx.win(); addShake(0.14);
   toast(pixSVG('boat',13)+' '+b.name+' launched!','gold');
   if(DOCK)fxBurst(DOCK.boat.x,WATER_TOP+0.3,DOCK.boat.z,{n:22,cols:[0x7fdcff,0xd9f6ff,0xffd24f],speed:2.8,up:3.6,size:1.1,grav:7});
-  rebuildDockBoat(); buildPreview(state.boatLvl); renderHarbor(); updateHUD(); save(); }
+  rebuildDockBoat(); buildPreview(state.boatLvl); renderHarbor(); updateHUD(); save();
+  if(crewOnline())crewRefresh(); }
 function openHarbor(){ if(marketOpen||casinoOpen||invOpen)return;
-  harborOpen=true; harborEl.classList.add('on'); buildPreview(state.boatLvl); renderHarbor(); }
-function closeHarbor(){ harborOpen=false; harborEl.classList.remove('on'); save(); }
+  harborOpen=true; harborEl.classList.add('on'); buildPreview(state.boatLvl); renderHarbor();
+  // a knock can arrive while the captain is standing at the dock
+  crewRefresh(); if(crewTimer)clearInterval(crewTimer);
+  crewTimer=setInterval(()=>{ if(harborOpen&&!crewBusy)crewRefresh(); },6000); }
+function closeHarbor(){ harborOpen=false; harborEl.classList.remove('on');
+  if(crewTimer){ clearInterval(crewTimer); crewTimer=0; } save(); }
 if(harborEl){
   document.getElementById('harborX').onclick=closeHarbor;
   harborEl.addEventListener('click',e=>{
     if(e.target.closest&&e.target.closest('[data-buyboat]')){ buyBoat(); return; }
     const pv=e.target.closest?e.target.closest('[data-prevboat]'):null;
     if(pv){ buildPreview(+pv.getAttribute('data-prevboat')); renderHarbor(); return; }
+    const cw=e.target.closest?e.target.closest('[data-crew]'):null;
+    if(cw){ crewAct(cw.getAttribute('data-crew'),cw.getAttribute('data-crewuser')||''); return; }
     const wd=e.target.closest?e.target.closest('[data-world]'):null;
     if(wd){ buyOrSail(wd.getAttribute('data-world')); renderHarbor(); return; } }); }
 
@@ -2187,16 +2429,22 @@ function updateRoulette(dt){ // every frame from the main loop — the table is 
   if(!spinAnim){ wheelAngle-=dt*(casinoOpen?0.4:0.7); setBallPocket(ballLockIdx); } // idle attract spin
   wheelDisc.rotation.y=wheelAngle; }
 const ballWP=new THREE.Vector3();
+const winFlashEl=document.getElementById('winFlash');
+// re-arm the CSS animations by dropping the class and forcing a reflow before re-adding it
+function popWin(big){
+  spinResult.classList.remove('pop'); void spinResult.offsetWidth; spinResult.classList.add('pop');
+  if(winFlashEl){ winFlashEl.className=''; void winFlashEl.offsetWidth; winFlashEl.className=big?'on big':'on'; } }
 function resolveSpin(sa){ const idx=sa.winIdx,fish=sa.fish,coins=sa.coins||0,color=SEG[idx],won=betWins(sa.bet,idx);
   const PL=color.toUpperCase()+' '+idx; // parity/high bets need the pocket NUMBER, not just its colour
   ball.getWorldPosition(ballWP);
   if(sa.srv){ // server already settled the books — show the outcome only
     const r=sa.srv;
-    if(r.won){ addShake(color==='green'?0.45:0.25); if(color==='green')addFreeze(0.15);
-      fxBurst(ballWP.x,ballWP.y+0.2,ballWP.z,{n:color==='green'?34:16,cols:[0xffd24f,0xffefb0,0x74e08a],speed:2.6,up:3.6,size:1.1,grav:7});
+    if(r.won){ const big=color==='green';
+      addShake(big?0.45:0.25); addFreeze(big?0.22:0.1); triggerWinFx(idx,big);   // beat of hit-stop, then the celebration lands
+      fxBurst(ballWP.x,ballWP.y+0.2,ballWP.z,{n:big?34:16,cols:[0xffd24f,0xffefb0,0x74e08a],speed:2.6,up:3.6,size:1.1,grav:7});
       if(r.payout)coinFly(r.payout);
       spinResult.innerHTML=`<span class="win">▲ ${PL} — WON! ${r.message||''}</span>`;
-      toast(r.message||'You won!','gold'); sfx.win(); }
+      popWin(big); toast(r.message||'You won!','gold'); (big?sfx.jackpot:sfx.win)(); }
     else{ addShake(0.2);
       fxBurst(ballWP.x,ballWP.y+0.15,ballWP.z,{n:14,cols:[0xff5d7a,0x8a2033,0x242a30],speed:2.2,up:2.6,size:1,grav:8});
       spinResult.innerHTML=`<span class="lose">▼ ${PL} — ${r.message||'the eel swallowed it.'}</span>`;
@@ -2212,8 +2460,9 @@ function resolveSpin(sa){ const idx=sa.winIdx,fish=sa.fish,coins=sa.coins||0,col
     if(sa.bet==='green'&&state.jackpot>0){ const pot=state.jackpot; state.jackpot=0;
       state.coins+=pot; state.stats.earned+=pot; coinFly(pot); addFreeze(0.2);
       toast(`★ PROGRESSIVE POT — ◈${fmt(pot)}!`,'gold'); renderJackpot(); }
-    addShake(color==='green'?0.45:0.25); if(color==='green')addFreeze(0.15);
-    fxBurst(ballWP.x,ballWP.y+0.2,ballWP.z,{n:color==='green'?34:16,cols:[0xffd24f,0xffefb0,0x74e08a],speed:2.6,up:3.6,size:1.1,grav:7});
+    const big=color==='green';
+    addShake(big?0.45:0.25); addFreeze(big?0.22:0.1); triggerWinFx(idx,big); popWin(big);
+    fxBurst(ballWP.x,ballWP.y+0.2,ballWP.z,{n:big?34:16,cols:[0xffd24f,0xffefb0,0x74e08a],speed:2.6,up:3.6,size:1.1,grav:7});
     if(fish){ const before=fish.val; fish.val=Math.round(fish.val*mult); fish.wins++;
       state.stats.bestWin=Math.max(state.stats.bestWin,fish.val);
       spinResult.innerHTML=`<span class="win">▲ ${PL} — WON! ${fish.name} ◈${fmt(before)} → <b>◈${fmt(fish.val)}</b>. Spin again or cash out.</span>`;
@@ -2222,7 +2471,7 @@ function resolveSpin(sa){ const idx=sa.winIdx,fish=sa.fish,coins=sa.coins||0,col
       state.stats.bestWin=Math.max(state.stats.bestWin,gain); coinFly(gain);
       spinResult.innerHTML=`<span class="win">▲ ${PL} — WON! ◈${fmt(coins)} → <b>◈${fmt(gain)}</b>. Again?</span>`;
       toast(`◈${fmt(coins)} → ◈${fmt(gain)}!`,'gold'); }
-    sfx.win(); }
+    (big?sfx.jackpot:sfx.win)(); }
   else { state.stats.losses++; addShake(0.2);
     fxBurst(ballWP.x,ballWP.y+0.15,ballWP.z,{n:14,cols:[0xff5d7a,0x8a2033,0x242a30],speed:2.2,up:2.6,size:1,grav:8});
     if(fish){ const lost=fish.name,li=state.bucket.indexOf(fish); if(li>=0)state.bucket.splice(li,1); stakeIdx=-1;
@@ -2262,7 +2511,7 @@ function updateFishing(dt){ const f=fishing;
       // hook the fish NOW so the fight has real weight behind it — the one you fight is the one you land
       f.hooked=SRV.on?null:rollFish();
       f.fight=f.hooked?FIGHT[f.hooked.rar]:0.7; }
-    else if(f.t>0.85){cancelFish();sfx.miss();toast('It got away…');} }
+    else if(f.t>0.85){cancelFish();sfx.miss();catchStreak=0;toast('It got away…');} }
   else if(f.state==='reel'){ f.reelT+=dt;
     // the fish fights in waves: during a SURGE the line loads up nearly 3× faster and you must give slack
     f.surgeT-=dt;
@@ -2288,7 +2537,7 @@ function updateFishing(dt){ const f=fishing;
         addShake(fish.rar==='legendary'||fish.rar==='epic'?0.25:0.1);
         if(fish.rar==='legendary')addFreeze(0.14); };
       if(SRV.on){ // the server rolls the fish and banks it
-        SRV.act('catch',{night:isNight(),wet:wState==='rain'||wState==='storm'}).then(r=>{
+        SRV.act('catch',{night:isNight(),wet:wState,storm:wState==='storm'}).then(r=>{
           if(!r||!r.fish)return; land(r.fish); revealServerCatch(r); });
       } else { const fish=f.hooked||rollFish(); land(fish);
         catchStreak++;
@@ -2327,7 +2576,7 @@ function updateMining(dt){ const n=mining.node;
     fxBurst(n.x,n.y+0.6,n.z,{n:n.geode?40:18,cols:[ORE_INFO[n.type].color,0x9aa1a8,0x747c84],speed:n.geode?4.4:3.2,up:n.geode?5.5:4.2,size:1.1});
     n.alive=false; n.mesh.visible=false; n.respawnAt=clock+40+rand(0,25);
     if(SRV.on){ sfx.ore();
-      SRV.act('mine',{type:n.type}).then(r=>{ if(r&&r.got)toast(`+${r.got} ${ORE_INFO[n.type].name}`,'good'); });
+      SRV.act('mine',{type:n.type,node:n.id}).then(r=>{ if(r&&r.got)toast(`+${r.got} ${ORE_INFO[r.type||n.type].name}`,'good'); });
       cancelMine(); return; }
     const bonus=Math.random()<Math.min(0.85,0.15+0.08*(state.pickLvl-1))?1:0;
     // a storm loosens the rock — bad weather actually pays at the quarry
@@ -2348,10 +2597,11 @@ function updateMining(dt){ const n=mining.node;
 /* ========================================================================
    13e. PHOTO MODE — hide the whole UI and orbit the hero (P)
    ======================================================================== */
-let photoMode=false,photoAng=0;
+let photoMode=false,photoAng=0,photoPitch=0.72; // pitch 0 = eye level (sky fills the top), 1 = the usual iso look-down
 function togglePhoto(){ photoMode=!photoMode;
   document.body.classList.toggle('photo',photoMode);
-  if(photoMode){ photoAng=0; toast('📷 Photo mode — ←/→ orbit · scroll zoom · P to exit','gold'); } }
+  if(photoMode){ photoAng=0; photoPitch=0.72;
+    toast('📷 Photo mode — ←/→ orbit · ↑/↓ tilt to the horizon · scroll zoom · P exits','gold'); } }
 
 /* ========================================================================
    13c. METEOR STRIKES — rare sky event that plants a rich, short-lived node
@@ -2438,12 +2688,12 @@ function updatePet(dt){
    ======================================================================== */
 const chopping={tree:null,t:0,dur:1.4};
 function nearestTree(){ let bestT=null,bd=1e9;
-  for(const t of treeData){ if(t.cd>clock)continue;
+  for(const t of treeData){ if(t.srvUntil?Date.now()<t.srvUntil:t.cd>clock)continue;
     const d=Math.hypot(t.x-pWorld.x,t.z-pWorld.z); if(d<bd){bd=d;bestT=t;} }
   return bestT&&bd<1.9?bestT:null; }
 function cancelChop(){chopping.tree=null;hint('');}
 function updateChopping(dt){ const t=chopping.tree;
-  if(!t||t.cd>clock){cancelChop();return;}
+  if(!t||(t.srvUntil?Date.now()<t.srvUntil:t.cd>clock)){cancelChop();return;}
   if(keys.up||keys.down||keys.left||keys.right){cancelChop();return;}
   if(keys.act){ chopping.t+=dt; } // impact fx/sfx fire from the swing animation, synced to the hit frame
   else { chopping.t-=dt*0.6; if(chopping.t<=0){cancelChop();return;} }
@@ -2459,7 +2709,7 @@ function updateChopping(dt){ const t=chopping.tree;
       cancelChop(); return; }
     const wWood=(wState==='storm'?1.5:wState==='rain'||wState==='snow'||wState==='ash'?1.2:1); // wind brings the limbs down
     const got=Math.round((1+(Math.random()<Math.min(0.85,0.35+0.08*(state.axeLvl-1))?1:0)+(state.axeLvl>=6&&Math.random()<0.2?1:0))*wWood);
-    state.ores.wood+=got; state.stats.mined+=got;
+    state.ores.wood+=got; state.stats.mined+=got; state.stats.wood=(state.stats.wood||0)+got;
     addPearls(1); if(Math.random()<0.04)grantShare('LUMB');
     toast(`+${got} Wood`,'good');
     cancelChop(); updateHUD(); save(); } }
@@ -2522,7 +2772,7 @@ function renderInv(){
     <div class="fishrow"><span class="nm">${pixSVG('pick',15)} ${PICK_NAMES[state.pickLvl]} <span style="color:var(--teal)">Lv.${state.pickLvl}</span></span>
       <span class="rr" style="color:var(--muted)">${pickNext}</span></div>
     <div class="fishrow"><span class="nm">${pixSVG('boat',15)} ${BOATS[state.boatLvl].name} <span style="color:var(--teal)">Lv.${state.boatLvl}</span>
-        <span style="color:var(--faint);font-size:11px">sea luck +${Math.round(BOATS[state.boatLvl].luck*100)}%</span></span>
+        <span style="color:var(--faint);font-size:11px">${seatLabel(state.boatLvl)} · sea luck +${Math.round(BOATS[state.boatLvl].luck*100)}%</span></span>
       <span class="rr" style="color:var(--muted)">${state.boatLvl<BOATS.length-1?'upgrade at the Harbor dock':'MAX'}</span></div>`;
   if(!state.bucket.length)invFish.innerHTML='<div class="empty">Bucket empty — go fishing!</div>';
   else{ let h='<div class="invgrid">';
@@ -2843,9 +3093,12 @@ function animate(now){
     axeMesh.visible=(act==='chop'||carry==='chop');
     player.position.set(pWorld.x, pWorld.y+(moving?Math.abs(Math.sin(pWorld.step))*0.08:0), pWorld.z);
 
-    for(const n of oreNodes){ if(!n.alive&&clock>=n.respawnAt&&n.respawnAt>0){n.alive=true;n.mesh.visible=true;} }
+    // respawn: online the server's clock rules (so every player sees the same node return)
+    for(const n of oreNodes){ if(n.alive)continue;
+      const back=n.srvUntil?Date.now()>=n.srvUntil:(n.respawnAt>0&&clock>=n.respawnAt);
+      if(back){n.alive=true;n.mesh.visible=true;n.srvUntil=0;} }
     biomeCheck();
-    if((achT+=dt)>1.4){achT=0;checkAch();checkDeeds();payDividends();}
+    if((achT+=dt)>1.4){achT=0;checkAch();checkDeeds();payDividends();checkBounties();}
     if(oreComboT>0&&(oreComboT-=dt)<=0)oreCombo=0;   // the vein goes cold if you dawdle
     updateMeteors(dt); updatePet(dt);
     if(titleSprite)titleSprite.position.set(pWorld.x,pWorld.y+2.95,pWorld.z);
@@ -2859,22 +3112,24 @@ function animate(now){
   // camera: smooth fly between the follow-cam and a close-up over the roulette table
   if(!running){ const ta=clock*0.05; vTargL.set(0,5,0); vTargP.set(Math.cos(ta)*62,50,Math.sin(ta)*62); } // title: slow cinematic orbit of the isle
   else if(viewMode==='casino'){ vTargL.copy(WHEEL_CENTER).addScaledVector(CAS_SHIFT,1); vTargP.copy(vTargL).add(CAS_CAM_OFF); }
-  else if(photoMode){ // free orbit around the hero, arrow keys steer it
+  else if(photoMode){ // free orbit around the hero; tilting down to the horizon is what finally reveals the sky
     photoAng+=((keys.right?1:0)-(keys.left?1:0))*rdt*1.1;
-    const r=camSize*1.5, ey=camSize*1.15;
-    vTargP.set(pWorld.x+Math.cos(photoAng)*r,pWorld.y+ey,pWorld.z+Math.sin(photoAng)*r);
+    photoPitch=clamp(photoPitch+((keys.up?1:0)-(keys.down?1:0))*rdt*0.7,0.02,1.25);
+    const r=camSize*1.5, ey=camSize*1.5*photoPitch;
+    vTargP.set(pWorld.x+Math.cos(photoAng)*r,pWorld.y+1.1+ey,pWorld.z+Math.sin(photoAng)*r);
     vTargL.set(pWorld.x,pWorld.y+1.1,pWorld.z); }
   else{ vTargP.set(pWorld.x+CAM_OFF.x,pWorld.y+CAM_OFF.y,pWorld.z+CAM_OFF.z); vTargL.set(pWorld.x,pWorld.y+1,pWorld.z); }
   const vTargS=!running?15:viewMode==='casino'?3.2:camSize, vk=1-Math.exp(-4.5*rdt);
   vPos.lerp(vTargP,vk); vLook.lerp(vTargL,vk); vSize+=(vTargS-vSize)*vk;
-  { const a=window.innerWidth/window.innerHeight;
-    camera.left=-vSize*a;camera.right=vSize*a;camera.top=vSize;camera.bottom=-vSize;camera.updateProjectionMatrix(); }
+  { const a=window.innerWidth/window.innerHeight, zs=Math.max(0.5,vSize-camPunch); // camPunch: a quick shove in on a win
+    camera.left=-zs*a;camera.right=zs*a;camera.top=zs;camera.bottom=-zs;camera.updateProjectionMatrix(); }
   camera.position.copy(vPos);
   camera.lookAt(vLook);
   if(trauma>0){ const sh=trauma*trauma*(viewMode==='casino'?0.22:0.55);
     camera.position.x+=rand(-sh,sh); camera.position.y+=rand(-sh,sh)*0.5; camera.position.z+=rand(-sh,sh);
     trauma=Math.max(0,trauma-rdt*2.4); }
   updateRoulette(dt);
+  updateWinFx(dt,rdt);
   fxUpdate(dt);
 
   animWater(clock); animGrass(clock);
@@ -2893,8 +3148,10 @@ function animate(now){
     for(const b of portalBits){ const u=b.userData,a2=clock*u.sp+u.ph;
       b.position.set(Math.cos(a2)*u.r,1.82+Math.sin(a2)*u.r*0.6,0.15); } }
   updateFishLine();
+  updatePeers(dt); streamPos(dt);
   const lampNight=isNight()?1.7:1;
   for(let k=0;k<lamps.length;k++)lamps[k].material.emissiveIntensity=(0.7+Math.sin(clock*3+k*1.7)*0.3)*lampNight;
+  if(casinoFlare>0.01)for(const l of casinoLamps)l.material.emissiveIntensity+=casinoFlare*1.7; // the house lamps flare when you win
   drawMinimap();
 
   actEdge=false;
@@ -2936,6 +3193,102 @@ function start(){ initAudio(); if(AC&&AC.state==='suspended')AC.resume(); startM
   if(state.stats.caught===0&&state.stats.mined===0)toast(pixSVG('island',13)+' Welcome to '+WORLD.name+'! Walk through the gate','gold'); }
 document.getElementById('startBtn').onclick=start;
 
+/* ========================================================================
+   16. MULTIPLAYER — other anglers on the same isle
+   The socket carries presence, chat and shared-node news only. Positions are
+   interpolated toward the last snapshot so 10Hz updates still look smooth.
+   ======================================================================== */
+const peers=new Map();
+function peerColors(g,w){ const m=g.userData.mats; if(!m||!w)return;
+  for(const slot of ['band','scarf','vest']){ const i=w[slot];
+    m[slot].color.setHex(i!=null&&WPAL[i]!=null?WPAL[i]:WDEF[slot]); } }
+function addPeer(p){ if(!p||p.id==null||peers.has(p.id))return;
+  const g=makeHero(); g.rotation.order='YXZ'; peerColors(g,p.wardrobe);
+  g.position.set(p.x||0,p.y||0,p.z||0); scene.add(g);
+  const tag=makeLabel(p.name||'angler','#bfe8e2'); tag.scale.set(2.1,0.53,1); scene.add(tag);
+  const sub=p.title?makeLabel(p.title,'#7fdcff'):null;
+  if(sub){ sub.scale.set(1.8,0.45,1); scene.add(sub); }
+  peers.set(p.id,{g,tag,sub,name:p.name||'angler',
+    x:p.x||0,y:p.y||0,z:p.z||0,tx:p.x||0,ty:p.y||0,tz:p.z||0,
+    face:p.face||0,tface:p.face||0,act:p.act||'',step:0});
+  toast(`${p.name} is on the isle`,'good'); }
+function dropPeer(id){ const q=peers.get(id); if(!q)return;
+  scene.remove(q.g); scene.remove(q.tag); if(q.sub)scene.remove(q.sub);
+  q.tag.material.map.dispose(); q.tag.material.dispose();
+  if(q.sub){ q.sub.material.map.dispose(); q.sub.material.dispose(); }
+  peers.delete(id); }
+function clearPeers(){ for(const id of Array.from(peers.keys()))dropPeer(id); }
+function updatePeers(dt){ if(!peers.size)return;
+  const k=1-Math.exp(-9*dt);
+  for(const q of peers.values()){
+    const moved=Math.hypot(q.tx-q.x,q.tz-q.z)>0.02;
+    q.x=lerp(q.x,q.tx,k); q.y=lerp(q.y,q.ty,k); q.z=lerp(q.z,q.tz,k);
+    q.face=lerpAngle(q.face,q.tface,k);
+    q.g.position.set(q.x,q.y,q.z); q.g.rotation.y=q.face;
+    const pd=q.g.userData;
+    if(moved){ q.step+=dt*9;
+      const sw=Math.sin(q.step)*0.5;
+      if(pd.legL){pd.legL.rotation.x=sw;pd.legR.rotation.x=-sw;pd.armL.rotation.x=-sw*0.7;pd.armR.rotation.x=sw*0.7;} }
+    else if(pd.armR){ // idle or working: same arm poses the local hero uses
+      pd.armR.rotation.x=q.act==='fish'?-0.85+Math.sin(clock*2)*0.05
+        :(q.act==='mine'||q.act==='chop'||q.act==='dig')?-1.15+Math.sin(clock*13)*0.6:0;
+      if(pd.legL){pd.legL.rotation.x=0;pd.legR.rotation.x=0;} }
+    q.tag.position.set(q.x,q.y+2.75,q.z);
+    if(q.sub)q.sub.position.set(q.x,q.y+3.15,q.z); } }
+
+/* chat */
+const chatLog=document.getElementById('chatLog'),chatIn=document.getElementById('chatIn'),chatBox=document.getElementById('chat');
+let chatOpen=false;
+function chatPush(name,msg,cls){ if(!chatLog)return;
+  const d=document.createElement('div'); d.className='cmsg '+(cls||'');
+  const who=document.createElement('b'); who.textContent=name?name+': ':'';
+  d.appendChild(who); d.appendChild(document.createTextNode(msg));  // textContent → no HTML injection
+  chatLog.appendChild(d); while(chatLog.children.length>60)chatLog.removeChild(chatLog.firstChild);
+  chatLog.scrollTop=chatLog.scrollHeight;
+  if(chatBox){ chatBox.classList.add('show'); clearTimeout(chatBox._t);
+    chatBox._t=setTimeout(()=>{ if(!chatOpen)chatBox.classList.remove('show'); },7000); } }
+function openChat(){ if(!chatIn||!RFNet||!RFNet.wsReady)return;
+  chatOpen=true; chatBox.classList.add('show','open'); chatIn.style.display='block'; chatIn.focus(); }
+function closeChat(){ chatOpen=false; if(chatIn){chatIn.blur();chatIn.style.display='none';chatIn.value='';}
+  if(chatBox)chatBox.classList.remove('open'); }
+if(chatIn)chatIn.addEventListener('keydown',e=>{ e.stopPropagation();
+  if(e.code==='Escape'){ closeChat(); return; }
+  if(e.code==='Enter'){ const m=chatIn.value.trim();
+    if(m){ RFNet.send({t:'chat',m:m.slice(0,200)}); } closeChat(); } });
+
+/* wire the socket once we are signed in */
+function startRealtime(){
+  if(!window.RFNet||!RFNet.online)return;
+  RFNet.on('welcome',d=>{ clearPeers();
+    (d.peers||[]).forEach(addPeer);
+    applyNodeSnapshot(d);
+    chatPush('','— connected to '+(WORLD.name)+' · press T to chat —','sys'); })
+  .on('join',d=>addPeer(d.p))
+  .on('leave',d=>{ const q=peers.get(d.id); if(q)toast(q.name+' sailed off'); dropPeer(d.id); })
+  .on('snap',d=>{ for(const a of d.a||[]){ const q=peers.get(a[0]); if(!q)continue;
+      q.tx=a[1]; q.ty=a[2]; q.tz=a[3]; q.tface=a[4]; q.act=a[5]||''; } })
+  .on('chat',d=>chatPush(d.name,d.m))
+  .on('node',d=>{ const n=oreNodes[d.i]; if(!n)return;
+      if(d.until>Date.now()){ n.alive=false; n.mesh.visible=false; n.srvUntil=d.until; }
+      else { n.alive=true; n.mesh.visible=true; n.srvUntil=0; } })
+  .on('tree',d=>{ const t=treeData[d.i]; if(t)t.srvUntil=d.until; })
+  .on('close',()=>{ clearPeers(); chatPush('','— disconnected, retrying… —','sys'); });
+  RFNet.connectWS(worldKey,{title:state.titleId,wardrobe:state.wardrobe});
+}
+function applyNodeSnapshot(d){
+  for(const [i,until] of d.nodes||[]){ const n=oreNodes[i];
+    if(n&&until>Date.now()){ n.alive=false; n.mesh.visible=false; n.srvUntil=until; } }
+  for(const [i,until] of d.trees||[]){ const t=treeData[i]; if(t)t.srvUntil=until; } }
+/* stream our own position at 10Hz, but only when it actually changed */
+let posT=0,lastSent={x:1e9,z:1e9,f:0,a:''};
+function streamPos(dt){ if(!window.RFNet||!RFNet.wsReady)return;
+  if((posT-=dt)>0)return; posT=0.1;
+  const act=fishing.state!=='idle'?'fish':mining.node?'mine':chopping.tree?'chop':digging.active?'dig':'';
+  if(Math.abs(pWorld.x-lastSent.x)<0.02&&Math.abs(pWorld.z-lastSent.z)<0.02
+     &&Math.abs(pWorld.face-lastSent.f)<0.02&&act===lastSent.a)return;
+  lastSent={x:pWorld.x,z:pWorld.z,f:pWorld.face,a:act};
+  RFNet.send({t:'pos',x:pWorld.x,y:pWorld.y,z:pWorld.z,face:pWorld.face,act}); }
+
 /* ---- account panel: offline by default, sign in to hand the economy to the server ---- */
 { const $=id=>document.getElementById(id);
   const statusEl=$('acctStatus'),formEl=$('acctForm'),msgEl=$('acctMsg'),toggleEl=$('acctToggle');
@@ -2970,14 +3323,14 @@ document.getElementById('startBtn').onclick=start;
   const doAuth=async(fn,label)=>{ const [u,p]=creds();
     if(u.length<3||p.length<8){ msg('Username ≥3 chars, password ≥8.','bad'); return; }
     msg(label+'…');
-    try{ await fn(u,p); msg('Welcome, '+RFNet.user+'!','good'); paint(); await adopt(); }
+    try{ await fn(u,p); msg('Welcome, '+RFNet.user+'!','good'); paint(); await adopt(); startRealtime(); }
     catch(e){ msg(e.message||'failed','bad'); } };
   if($('acctLogin'))$('acctLogin').onclick=()=>doAuth((u,p)=>RFNet.login(u,p),'Signing in');
   if($('acctReg'))$('acctReg').onclick=()=>doAuth((u,p)=>RFNet.register(u,p),'Creating account');
   // boot: is a backend reachable, and is our token still good?
   (async()=>{ if(!window.RFNet)return;
     await RFNet.probe();
-    if(RFNet.reachable&&await RFNet.resume())await adopt();
+    if(RFNet.reachable&&await RFNet.resume()){ await adopt(); startRealtime(); }
     paint(); })();
 }
 
