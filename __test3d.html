@@ -128,7 +128,7 @@
   .betbtn.red{color:#ff6a6a;}.betbtn.black{color:#cfd8d6;}.betbtn.green{color:#63e58a;}
   .betbtn.sel{box-shadow:0 0 0 2px currentColor inset;border-color:currentColor;}
   .betbtn:active{transform:translateY(2px);}
-  #spinBtn{width:100%;margin-top:6px;}
+  #spinBtn{margin-top:auto;}
   #spinResult{min-height:38px;margin-top:10px;font-size:13px;font-weight:600;line-height:1.4;}
   #spinResult .win{color:var(--gold);}#spinResult .lose{color:var(--rose);}
   .overlay-start{background:radial-gradient(120% 90% at 50% 78%,rgba(3,8,10,.12),rgba(3,8,10,.55));backdrop-filter:none;align-items:flex-end;padding-bottom:6vh;}
@@ -206,20 +206,27 @@
   </div>
 </div>
 
-<div id="casino">
-  <div class="card-c">
-    <div class="card-head"><div><div class="sub" style="color:var(--rose)">Gamble a fish · double or nothing</div><h2>THE SPINNING EEL</h2></div><button class="x" id="casinoX" type="button">ESC</button></div>
-    <div class="bet-lab">1 · Pick a fish to stake</div>
-    <div class="stake-list" id="stakeList"></div>
-    <div class="bet-lab">2 · Place your bet</div>
-    <div class="bets">
-      <div class="betbtn red" data-bet="red" role="button" tabindex="0">RED<small>pays ×2</small></div>
-      <div class="betbtn black" data-bet="black" role="button" tabindex="0">BLACK<small>pays ×2</small></div>
-      <div class="betbtn green" data-bet="green" role="button" tabindex="0">GREEN<small>jackpot ×14</small></div>
+<div class="overlay" id="casino">
+  <div class="card">
+    <div class="card-head"><div><div class="sub" style="color:var(--rose)">Gamble a fish · double or nothing</div><h2>THE SPINNING EEL</h2></div><button class="x" id="casinoX" type="button">CLOSE · ESC</button></div>
+    <div class="casino-body">
+      <div class="wheel-wrap">
+        <canvas id="wheel" width="260" height="260"></canvas>
+        <div style="font-size:10px;color:var(--faint);letter-spacing:.1em;text-align:center;max-width:240px;">Win → your fish is worth double. Lose → the eel eats it.<br>Re-spin a winner to push your luck.</div>
+      </div>
+      <div class="bet-side">
+        <div class="bet-lab">1 · Pick a fish to stake</div>
+        <div class="stake-list" id="stakeList"></div>
+        <div class="bet-lab">2 · Place your bet</div>
+        <div class="bets">
+          <div class="betbtn red" data-bet="red" role="button" tabindex="0">RED<small>pays ×2</small></div>
+          <div class="betbtn black" data-bet="black" role="button" tabindex="0">BLACK<small>pays ×2</small></div>
+          <div class="betbtn green" data-bet="green" role="button" tabindex="0">GREEN<small>jackpot ×14</small></div>
+        </div>
+        <button class="btn rose" id="spinBtn" type="button" disabled>SPIN THE WHEEL</button>
+        <div id="spinResult"></div>
+      </div>
     </div>
-    <button class="btn rose" id="spinBtn" type="button" disabled>SPIN THE WHEEL</button>
-    <div id="spinResult"></div>
-    <div class="eelnote">Win → your fish is worth double · Lose → the eel eats it<br>Re-spin a winner to push your luck</div>
   </div>
 </div>
 
@@ -243,6 +250,12 @@
 <div id="err"></div>
 
 <script src="lib/three.min.js"></script>
-<script src="game.js"></script>
+<script src="game.js"></script><script>
+window.addEventListener('load',()=>{setTimeout(()=>{
+  try{document.getElementById('startBtn').click();}catch(e){}
+  setTimeout(()=>{try{reveal({name:'Bass',rar:'uncommon',val:21,kg:3.2});}catch(e){document.title='REVEAL-ERR:'+e.message;}},700);
+  setTimeout(()=>{try{reveal({name:'Thunder Eel',rar:'epic',val:260,kg:8.1});}catch(e){document.title='REVEAL-ERR:'+e.message;}},2600);
+},300);});
+</script>
 </body>
 </html>

@@ -567,7 +567,7 @@ function beep(f,d,t,v){if(!AC||muted)return;const o=AC.createOscillator(),g=AC.c
 const sfx={cast:()=>beep(300,.15,'sine',.05),bite:()=>{beep(880,.08,'square',.06);setTimeout(()=>beep(1100,.08,'square',.06),90);},
   reel:()=>beep(200+Math.random()*80,.05,'sawtooth',.03),catch:()=>{beep(523,.1,'triangle',.06);setTimeout(()=>beep(784,.14,'triangle',.06),90);},
   miss:()=>beep(160,.2,'sawtooth',.05),sell:()=>{beep(660,.08,'sine',.06);setTimeout(()=>beep(990,.1,'sine',.06),70);},
-  spin:()=>beep(120,.05,'square',.02),win:()=>{[523,659,784,1046].forEach((f,i)=>setTimeout(()=>beep(f,.16,'triangle',.06),i*90));},
+  spin:(f)=>beep(f||120,.05,'square',.02),win:()=>{[523,659,784,1046].forEach((f,i)=>setTimeout(()=>beep(f,.16,'triangle',.06),i*90));},
   lose:()=>{beep(200,.3,'sawtooth',.07);setTimeout(()=>beep(130,.4,'sawtooth',.07),160);},
   pick:()=>beep(340+Math.random()*120,.05,'square',.04),
   ore:()=>{beep(620,.09,'triangle',.06);setTimeout(()=>beep(930,.12,'triangle',.06),80);}};
@@ -917,16 +917,18 @@ spinBtn.onclick=()=>{ if(spinBtn.disabled)return; const fish=state.bucket[stakeI
   function tick(ts){ if(mySpin!==spinSeq||!casinoOpen)return; // spin cancelled (ESC/close) — fish untouched
     if(t0==null)t0=ts; const el=(ts-t0)/1000,p=Math.min(1,el/dur),e=1-Math.pow(1-p,3);
     wheelAngle=startA+(finalA-startA)*e; renderWheelScene();
-    if(el-lastBeep>0.09+0.4*p){lastBeep=el;sfx.spin();}
+    if(el-lastBeep>0.09+0.4*p){lastBeep=el;sfx.spin(420-280*p);} // tick pitch falls as the wheel settles
     if(p<1)requestAnimationFrame(tick); else resolveSpin(winIdx,fish,myBet); }
   requestAnimationFrame(tick); };
 function resolveSpin(idx,fish,myBet){ const color=SEG[idx],won=(color===myBet);
   state.stats.spins++;
   if(won){ const mult=(color==='green')?14:2,before=fish.val; fish.val=Math.round(fish.val*mult); fish.wins++;
     state.stats.winsCt++; state.stats.bestWin=Math.max(state.stats.bestWin,fish.val);
+    addShake(color==='green'?0.45:0.25); if(color==='green')addFreeze(0.15);
+    fxBurst(pWorld.x,pWorld.y+1.5,pWorld.z,{n:color==='green'?26:14,cols:[0xffd24f,0xffefb0,0xff5d7a],speed:3,up:4.5,size:1.1});
     spinResult.innerHTML=`<span class="win">▲ ${color.toUpperCase()} — WON! ${fish.name} ◈${fmt(before)} → <b>◈${fmt(fish.val)}</b>. Spin again or cash out.</span>`;
     sfx.win();toast(`${fish.name} doubled → ◈${fmt(fish.val)}`,'gold'); }
-  else { state.stats.losses++; const lost=fish.name,li=state.bucket.indexOf(fish); if(li>=0)state.bucket.splice(li,1); stakeIdx=-1;
+  else { state.stats.losses++; addShake(0.14); const lost=fish.name,li=state.bucket.indexOf(fish); if(li>=0)state.bucket.splice(li,1); stakeIdx=-1;
     spinResult.innerHTML=`<span class="lose">▼ ${color.toUpperCase()} — the eel swallowed your ${lost}. Gone.</span>`; sfx.lose();toast('Lost your '+lost,'bad'); }
   spinning=false;betColor=null;document.querySelectorAll('.betbtn').forEach(b=>b.classList.remove('sel'));
   renderStakes();updateHUD();updateSpinBtn();save(); }
