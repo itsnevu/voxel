@@ -94,6 +94,14 @@
   .fishrow>.pix,.stake>.pix,.invcard>.pix{flex:0 0 auto;}
   #timeChip .pix{vertical-align:-3px;}
   #hotbar .slot .sb{font-family:"Chakra Petch";font-weight:700;font-size:10px;color:var(--gold);font-variant-numeric:tabular-nums;}
+  /* photo mode: every HUD layer drops away, leaving just the world */
+  body.photo #hotbar,body.photo #hud,body.photo #minimap,body.photo #hint,body.photo #toasts,
+  body.photo #area,body.photo #mute,body.photo #timeChip,body.photo #title3d{opacity:0!important;pointer-events:none!important;}
+  #hotbar .slot .sk{position:absolute;top:3px;left:6px;font-size:9px;color:var(--faint);font-weight:700;}
+  #hotbar .slot{position:relative;}
+  #hotbar .slot.sel{border-color:rgba(57,215,196,.95);box-shadow:0 0 0 2px rgba(57,215,196,.35),0 8px 20px rgba(0,0,0,.4);
+    transform:translateY(-5px);}
+  #hotbar .slot.sel .sk{color:var(--teal);}
   #hotbar .invkey{align-self:center;margin-left:4px;font-size:10px;color:var(--muted);background:var(--glass);
     backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
     border:1px solid var(--glass-bd-soft);border-radius:8px;padding:5px 8px;pointer-events:none;}
@@ -230,6 +238,16 @@
   .controls .c b{color:var(--teal);font-family:"Chakra Petch";}
   .cta{font-family:"Chakra Petch";font-weight:700;font-size:16px;letter-spacing:.06em;text-transform:uppercase;color:var(--teal-ink);background:var(--teal);border:none;border-radius:10px;padding:15px 42px;cursor:pointer;box-shadow:0 4px 0 #1c9c8c,0 0 26px rgba(57,215,196,.4);}
   .cta:active{transform:translateY(3px);box-shadow:0 1px 0 #1c9c8c;}
+  #acct{margin-top:14px;}
+  #acctStatus{font-size:11px;color:var(--muted);letter-spacing:.06em;}
+  #acctStatus.on{color:var(--teal);}
+  #acctForm{display:flex;gap:7px;justify-content:center;flex-wrap:wrap;margin-top:10px;}
+  #acctForm input{font-family:"IBM Plex Mono";font-size:12px;color:var(--ink);background:var(--glass-row);
+    border:1px solid var(--glass-bd-soft);border-radius:9px;padding:9px 12px;width:150px;outline:none;}
+  #acctForm input:focus{border-color:rgba(57,215,196,.6);}
+  #acctForm .btn{padding:8px 13px;font-size:12px;}
+  #acctMsg{font-size:11px;margin-top:8px;min-height:14px;color:var(--muted);}
+  #acctMsg.bad{color:var(--rose);}#acctMsg.good{color:var(--teal);}
   .loadnote{margin-top:16px;font-size:11px;color:var(--faint);}
   .loadnote button{background:none;border:none;color:var(--faint);text-decoration:underline;cursor:pointer;font:inherit;font-size:11px;}
   .loadnote button:hover{color:var(--rose);}
@@ -257,11 +275,11 @@
 <div id="area"></div>
 <div id="hint"></div>
 <div id="hotbar">
-  <div class="slot" title="Fishing Rod"><span class="sic" data-pix="rod" data-pix-size="26"></span><span class="sb" id="hbRod">Lv1</span></div>
-  <div class="slot" title="Pickaxe"><span class="sic" data-pix="pick" data-pix-size="26"></span><span class="sb" id="hbPick">Lv1</span></div>
-  <div class="slot" title="Axe"><span class="sic" data-pix="axe" data-pix-size="26"></span><span class="sb" id="hbAxe">Lv1</span></div>
-  <div class="slot" title="Fish Bucket"><span class="sic" data-pix="bucket" data-pix-size="26"></span><span class="sb" id="hbBucket">0/12</span></div>
-  <div class="slot" title="Ore Pouch"><span class="sic" data-pix="gem" data-pix-size="26"></span><span class="sb" id="hbPouch">0</span></div>
+  <div class="slot" data-slot="0" title="Fishing Rod (1)"><span class="sk">1</span><span class="sic" data-pix="rod" data-pix-size="26"></span><span class="sb" id="hbRod">Lv1</span></div>
+  <div class="slot" data-slot="1" title="Pickaxe (2)"><span class="sk">2</span><span class="sic" data-pix="pick" data-pix-size="26"></span><span class="sb" id="hbPick">Lv1</span></div>
+  <div class="slot" data-slot="2" title="Axe (3)"><span class="sk">3</span><span class="sic" data-pix="axe" data-pix-size="26"></span><span class="sb" id="hbAxe">Lv1</span></div>
+  <div class="slot" data-slot="3" title="Fish Bucket (4)"><span class="sk">4</span><span class="sic" data-pix="bucket" data-pix-size="26"></span><span class="sb" id="hbBucket">0/12</span></div>
+  <div class="slot" data-slot="4" title="Ore Pouch (5)"><span class="sk">5</span><span class="sic" data-pix="gem" data-pix-size="26"></span><span class="sb" id="hbPouch">0</span></div>
   <div class="invkey"><b>I</b> inventory</div>
 </div>
 <div id="toasts"></div>
@@ -329,8 +347,14 @@
       <div class="betbtn black" data-bet="black" role="button" tabindex="0">BLACK<small>pays ×2</small></div>
       <div class="betbtn green" data-bet="green" role="button" tabindex="0">GREEN<small>jackpot ×14</small></div>
     </div>
+    <div class="bets" style="margin-top:6px">
+      <div class="betbtn" data-bet="odd" role="button" tabindex="0">ODD<small>pays ×2</small></div>
+      <div class="betbtn" data-bet="even" role="button" tabindex="0">EVEN<small>pays ×2</small></div>
+      <div class="betbtn" data-bet="high" role="button" tabindex="0">HIGH 8-14<small>pays ×2</small></div>
+    </div>
     <button class="btn rose" id="spinBtn" type="button" disabled>SPIN THE WHEEL</button>
     <div id="spinResult"></div>
+    <div id="jackpotBar"></div>
     <div class="eelnote">Win → your fish is worth double · Lose → the eel eats it<br>Re-spin a winner to push your luck</div>
   </div>
 </div>
@@ -363,13 +387,27 @@
       <div class="c"><b>ESC</b> — cancel</div>
     </div>
     <button class="cta" id="startBtn" type="button">Set sail</button>
-    <div class="loadnote">progress auto-saves in this browser · <button id="wipe" type="button">wipe save</button></div>
+    <div id="acct">
+      <div id="acctStatus">playing offline · progress saved in this browser</div>
+      <div id="acctForm" style="display:none">
+        <input id="acctUser" type="text" placeholder="username" autocomplete="username" maxlength="20">
+        <input id="acctPass" type="password" placeholder="password" autocomplete="current-password" maxlength="72">
+        <button class="btn" id="acctLogin" type="button">SIGN IN</button>
+        <button class="btn" id="acctReg" type="button">REGISTER</button>
+      </div>
+      <div id="acctMsg"></div>
+      <div class="loadnote">
+        <button id="acctToggle" type="button">sign in to play online</button> ·
+        <button id="wipe" type="button">wipe save</button>
+      </div>
+    </div>
   </div>
 </div>
 
 <div id="err"></div>
 
 <script src="lib/three.min.js"></script>
+<script src="net.js"></script>
 <script src="game.js"></script>
 </body>
 </html>

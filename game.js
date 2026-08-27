@@ -26,14 +26,42 @@ const MAXANISO = renderer.capabilities.getMaxAnisotropy ? renderer.capabilities.
 
 let SKY=0x6fd6f6;
 const scene=new THREE.Scene();
-scene.background=new THREE.Color(SKY);
+scene.background=null;                 // the sky is its own render pass (see skyScene) so sun/moon/stars can live behind the world
 scene.fog=new THREE.Fog(SKY,150,255);
+
+/* --- CELESTIAL PASS ---------------------------------------------------------
+   The world camera is orthographic and zoomed to ~10 units, so a real sky dome
+   out at radius 170 would sit far outside its frustum and never be visible.
+   Instead the sky is a separate scene drawn first, in normalised screen space:
+   a vertical gradient quad, then a sun and moon that arc across it, then stars.
+   -------------------------------------------------------------------------- */
+const skyScene=new THREE.Scene();
+const skyCam=new THREE.OrthographicCamera(-1,1,1,-1,0,10); skyCam.position.z=5;
+const skyGeo=new THREE.PlaneGeometry(2,2);
+skyGeo.setAttribute('color',new THREE.BufferAttribute(new Float32Array(12),3)); // 4 verts: TL TR BL BR
+const skyQuad=new THREE.Mesh(skyGeo,new THREE.MeshBasicMaterial({vertexColors:true,depthWrite:false,depthTest:false}));
+skyQuad.renderOrder=-10; skyScene.add(skyQuad);
+const STARN=110;
+const starGeo=new THREE.BufferGeometry(); { const sp=new Float32Array(STARN*3);
+  for(let k=0;k<STARN;k++){ sp[k*3]=rand(-1.9,1.9); sp[k*3+1]=rand(-0.35,1.0); sp[k*3+2]=0.1; }
+  starGeo.setAttribute('position',new THREE.BufferAttribute(sp,3)); }
+const starMat=new THREE.PointsMaterial({color:0xffffff,size:0.013,transparent:true,opacity:0,depthTest:false,sizeAttenuation:false});
+const stars=new THREE.Points(starGeo,starMat); stars.renderOrder=-9; skyScene.add(stars);
+function skyBody(size,col,op){ const m=new THREE.Mesh(new THREE.PlaneGeometry(size,size),
+    new THREE.MeshBasicMaterial({color:col,transparent:op<1,opacity:op,depthTest:false,depthWrite:false}));
+  m.renderOrder=-8; skyScene.add(m); return m; }
+const sunGlow=skyBody(0.42,0xffd98a,0.22), sunDisc=skyBody(0.19,0xfff3c4,1);
+const moonGlow=skyBody(0.30,0xbfd4ff,0.16), moonDisc=skyBody(0.135,0xf2f6ff,1);
+const moonShade=skyBody(0.135,0x101c38,1); moonShade.renderOrder=-7; // slid across the moon to carve its phase
+function fitSky(){ const a=window.innerWidth/window.innerHeight;
+  skyCam.left=-a; skyCam.right=a; skyCam.updateProjectionMatrix();
+  skyQuad.scale.set(a,1,1); }
 
 let camSize=10.5;
 const camera=new THREE.OrthographicCamera(-1,1,1,-1,0.1,600);
 const CAM_OFF=new THREE.Vector3(48,58,48);
 function fitCamera(){ const a=window.innerWidth/window.innerHeight;
-  camera.left=-camSize*a;camera.right=camSize*a;camera.top=camSize;camera.bottom=-camSize;camera.updateProjectionMatrix(); }
+  camera.left=-camSize*a;camera.right=camSize*a;camera.top=camSize;camera.bottom=-camSize;camera.updateProjectionMatrix(); fitSky(); }
 fitCamera();
 addEventListener('wheel',e=>{ if(typeof marketOpen!=='undefined'&&(marketOpen||casinoOpen||invOpen||harborOpen))return;
   camSize=clamp(camSize+Math.sign(e.deltaY)*1.1,7,17); fitCamera(); },{passive:true});
@@ -76,7 +104,7 @@ const WORLDS={
     leaf:['#9fd0c8',['#8fc2ba','#b2ded6','#7fb3ab']],
     sand:['#d8e4e8',['#cbd9de','#e6eff2','#bccdd3']],
     stone:['#a8b4bc',['#98a4ac','#b6c2ca','#8a969e']]},
-  cave:{name:'The Undermine',sub:'the mining cave',cost:0,seed:777,hMul:1.15,stoneH:5,fishMul:2,oreN:40,oreYield:1,cave:true,
+  cave:{name:'The Undermine',sub:'the mining cave',cost:750,seed:777,hMul:1.15,stoneH:5,fishMul:2,oreN:40,oreYield:1,cave:true,
     sky:0x0b0e14,water:0x1e6f7a,pink:0,treeMax:16,
     grass:['#3f5a4c','#37503f',['#4a685a','#2f4638','#557767','#283d30']],
     leaf:['#3fae9c',['#35998a','#4cc4b0','#2b8578','#5cd8c4']],
@@ -85,7 +113,22 @@ const WORLDS={
 const WORLD_ORDER=['isle','mine','volcano','frost'];
 let worldKey='isle'; try{ const wk=localStorage.getItem('reelfortune3d-world'); if(wk&&WORLDS[wk])worldKey=wk; }catch(e){}
 const WORLD=WORLDS[worldKey];
-SKY=WORLD.sky; scene.background.setHex(SKY); scene.fog.color.setHex(SKY);
+SKY=WORLD.sky; scene.fog.color.setHex(SKY);
+{ const c0=new THREE.Color(SKY); paintSky(c0,c0); } // seed the gradient before the first skyUpdate
+
+/* ------------------------------------------------------------------------
+   DETERMINISTIC WORLDGEN — required for multiplayer.
+   Everything the world is made of (textures, decor, ore-node positions) must be
+   identical on every client, or two players standing in the same place would see
+   different trees and mine ore the other cannot see. So for the construction
+   phase only, Math.random is swapped for a seeded PRNG derived from the world's
+   seed; it is restored before any gameplay rolls happen.
+   ------------------------------------------------------------------------ */
+function mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0;
+  let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t;
+  return ((t^t>>>14)>>>0)/4294967296; }; }
+const REAL_RANDOM=Math.random;
+Math.random=mulberry32((WORLD.seed*7919+1013)|0);   // ← restored after section 6
 
 /* ========================================================================
    2. PROCEDURAL PIXEL TEXTURES (Minecraft-style, generated on <canvas>)
@@ -757,7 +800,7 @@ const ORE_INFO={
   gold:   {name:'Gold',   price:28, color:0xffd24f, glow:true,  dot:'#ffd24f'},
   diamond:{name:'Diamond',price:70, color:0x5ee8e2, glow:true,  dot:'#5ee8e2'}};
 function rollOreType(){ const r=Math.random(); return r<0.4?'coal':r<0.7?'iron':r<0.9?'gold':'diamond'; }
-function makeOreNode(type){ const g=new THREE.Group(); const info=ORE_INFO[type];
+function makeOreNode(type,geode){ const g=new THREE.Group(); const info=ORE_INFO[type];
   const base=texturedBox(0.95,0.8,0.95,TEX.stone); base.position.y=0.4; base.castShadow=true; g.add(base);
   for(let k=0;k<5;k++){ const s=rand(0.15,0.23);
     const chip=new THREE.Mesh(new THREE.BoxGeometry(s,s,s),
@@ -765,6 +808,13 @@ function makeOreNode(type){ const g=new THREE.Group(); const info=ORE_INFO[type]
     if(Math.random()<0.4) chip.position.set(rand(-0.3,0.3),0.8,rand(-0.3,0.3));
     else { const a=rand(0,TAU); chip.position.set(Math.cos(a)*0.48,rand(0.25,0.65),Math.sin(a)*0.48); }
     chip.rotation.y=rand(0,TAU); g.add(chip); }
+  if(geode){ // a fat crystal-crusted boulder — worth far more, takes far longer to crack
+    g.scale.setScalar(1.32);
+    const shell=texturedBox(1.06,0.5,1.06,TEX.stone); shell.position.y=1.0; shell.castShadow=true; g.add(shell);
+    for(let k=0;k<7;k++){ const a=rand(0,TAU), s=rand(0.13,0.2);
+      const cr=new THREE.Mesh(new THREE.BoxGeometry(s,s*1.9,s),
+        new THREE.MeshLambertMaterial({color:info.color,emissive:info.color,emissiveIntensity:0.55}));
+      cr.position.set(Math.cos(a)*0.42,1.18+rand(0,0.16),Math.sin(a)*0.42); cr.rotation.set(rand(-0.4,0.4),a,rand(-0.4,0.4)); g.add(cr); } }
   return g; }
 const oreNodes=[];
 { const pts=[];
@@ -773,9 +823,9 @@ const oreNodes=[];
     stoneCand.sort(()=>Math.random()-0.5);
     for(const [i,j,h] of stoneCand){ if(oreNodes.length>=WORLD.oreN)break;
       if(nearAny(i,j,pts,2.3))continue; pts.push([i,j]);
-      const type=rollOreType(), mesh=makeOreNode(type);
+      const type=rollOreType(), geode=Math.random()<0.14, mesh=makeOreNode(type,geode);
       mesh.position.set(i-HALF,h,j-HALF); scene.add(mesh);
-      oreNodes.push({x:i-HALF,z:j-HALF,y:h,type,mesh,alive:true,respawnAt:0}); } }
+      oreNodes.push({x:i-HALF,z:j-HALF,y:h,type,mesh,alive:true,respawnAt:0,geode}); } }
   // starter nodes on grass — ALWAYS, even on mine-less isles: guarantees an early coal/iron
   // source so L3 tool crafting ({coal}) is never impossible in world 1
   const sh2=grassCells.slice().sort(()=>Math.random()-0.5);
@@ -876,6 +926,12 @@ if(mineCell){
     const head=new THREE.Mesh(new THREE.BoxGeometry(0.36,0.12,0.12),steel); head.position.set(0.3,0.78,0.2); c.add(head);
     c.position.set(i-HALF,h,j-HALF); scene.add(c); } }
 
+// world construction finished — hand randomness back for gameplay rolls
+Math.random=REAL_RANDOM;
+// stable ids let the server say "node 17 is depleted" and every client agree which one
+oreNodes.forEach((n,i)=>{n.id=i;});
+treeData.forEach((t,i)=>{t.id=i;});
+
 /* ========================================================================
    7. PLAYER + BOBBER
    ======================================================================== */
@@ -909,6 +965,7 @@ const pickMesh=new THREE.Group();
   const bind=new THREE.Mesh(new THREE.BoxGeometry(0.16,0.2,0.16),new THREE.MeshLambertMaterial({color:0x6d4a28}));
   bind.position.y=0.42;
   pickMesh.add(h2,hd,tipL,tipR,bind); pickMesh.position.set(0,-0.42,0.3); pickMesh.rotation.x=-0.65;
+  pickMesh.rotation.y=Math.PI/2; // spikes fore/aft so the point leads the swing, not the flat of the head
   pickMesh.traverse(m=>{m.castShadow=true;}); pickMesh.visible=false; armR.add(pickMesh); }
 const axeMesh=new THREE.Group();
 { const h2=new THREE.Mesh(new THREE.BoxGeometry(0.12,1.05,0.12),new THREE.MeshLambertMaterial({map:TEX.bark}));
@@ -919,6 +976,7 @@ const axeMesh=new THREE.Group();
   const bind=new THREE.Mesh(new THREE.BoxGeometry(0.16,0.2,0.16),new THREE.MeshLambertMaterial({color:0x6d4a28}));
   bind.position.y=0.34;
   axeMesh.add(h2,bl,edge,bind); axeMesh.position.set(0,-0.42,0.3); axeMesh.rotation.x=-0.65;
+  axeMesh.rotation.y=-Math.PI/2; // blade forward: the cutting edge faces the tree, not the player's right
   axeMesh.traverse(m=>{m.castShadow=true;}); axeMesh.visible=false; armR.add(axeMesh); }
 const shovelMesh=new THREE.Group();
 { const h2=new THREE.Mesh(new THREE.BoxGeometry(0.11,1.1,0.11),new THREE.MeshLambertMaterial({map:TEX.bark}));
@@ -997,6 +1055,8 @@ addEventListener('keydown',e=>{
   if(onUI&&(e.code==='Space'||e.code==='Enter'))return;
   const m=KMAP[e.code]; if(m){e.preventDefault(); if(!keys[m]&&m==='act')actEdge=true; keys[m]=true;}
   if(e.code==='KeyI'||e.code==='Tab'){ e.preventDefault(); if(invOpen)closeInv(); else if(running)openInv(); }
+  if(e.code>='Digit1'&&e.code<='Digit5'&&running&&!marketOpen&&!casinoOpen&&!harborOpen){ setHotSlot(+e.code.slice(5)-1); }
+  if(e.code==='KeyP'&&running){ e.preventDefault(); togglePhoto(); }
   if(e.code==='Escape'){ if(marketOpen)closeMarket(); else if(casinoOpen)closeCasino(); else if(harborOpen)closeHarbor(); else if(invOpen)closeInv(); else if(fishing.state!=='idle')cancelFish(); else if(mining.node)cancelMine(); else if(chopping.tree)cancelChop(); else if(digging.active){digging.active=false;hint('');} }},{passive:false});
 addEventListener('keyup',e=>{const m=KMAP[e.code]; if(m)keys[m]=false;});
 addEventListener('blur',()=>{for(const k in keys)keys[k]=false;});
@@ -1399,7 +1459,7 @@ function buildFishModel(f){ disposeFishModel(); fishT=0;
     finAt(0.2,-Hh*0.32,W/2+0.04,0.26,0.15,0.05,-0.5,0.35); finAt(0.2,-Hh*0.32,-W/2-0.04,0.26,0.15,0.05,0.5,-0.35);
     if(chunky){ const pat=new THREE.MeshLambertMaterial({color:is('golden')?0xffc24b:0xf2f5f0});
       vxx(pat,0.16,Hh*0.18,W/2+0.01,0.26,0.24,0.04); vxx(pat,-0.24,0.02,-W/2-0.01,0.3,0.26,0.04); vxx(pat,-0.08,Hh/2+0.06,0,0.3,0.05,W*0.55); } }
-  if(is('glow')||is('moon')||is('midnight')||is('star')||is('thunder')){ // bioluminescent flank dots
+  if(is('glow')||is('moon')||is('midnight')||is('star')||is('thunder')||is('ember')||is('magma')||is('lava')||is('aurora')||is('crystal')||is('abyss')||is('pyro')||is('inferno')){ // bioluminescent flank dots
     const gm=new THREE.MeshLambertMaterial({color:0x0b1418,emissive:base.clone().multiplyScalar(1.2),emissiveIntensity:1});
     for(let k=0;k<4;k++){ const x=0.45-k*0.28,y=(k%2?0.12:-0.02);
       A.glows.push(vxx(gm,x,y,sideZ,0.08,0.08,0.03),vxx(gm,x,y,-sideZ,0.08,0.08,0.03)); } }
@@ -1466,9 +1526,37 @@ const state={coins:0,bucket:[],ores:{wood:0,coal:0,iron:0,gold:0,diamond:0},rodL
   dex:{},treasure:null,worlds:['isle'],ach:{},
   stocks:{own:{},basis:{},lastDiv:null,lastShareEpoch:0,gotFirst:0},
   pearls:0,pearlsLife:0,wardrobe:{},titleId:'',ownedT:{},ownedW:{},bucketTier:0,boosts:{chumUntil:0},tipEpoch:0,deeds:{},
+  pet:0,charm:0,jackpot:0,bounty:null,bountyEpoch:0,
   stats:{caught:0,mined:0,earned:0,bestWin:0,spins:0,winsCt:0,losses:0,divEarned:0}};
 const cap=()=>CAP_BASE+2*(state.bucketTier||0);
-function save(){try{localStorage.setItem(SAVE,JSON.stringify(state));}catch(e){}}
+/* ---- server bridge: when signed in, the SERVER owns the economy ----
+   Offline play is unchanged. Online, every action below is decided server-side and
+   the reply overwrites local state, so editing `state` in the console achieves nothing. */
+const SRV={
+  get on(){ return !!(window.RFNet&&RFNet.online); },
+  busy:false,
+  apply(s){ if(!s)return;
+    for(const k in s) if(Object.prototype.hasOwnProperty.call(state,k)) state[k]=s[k];
+    updateHUD(); if(invOpen)renderInv(); if(marketOpen)renderMarketAll(); },
+  /* Fire an authoritative action. Returns the server's `result`, or null when
+     offline/rejected — callers fall back to (or simply skip) local resolution. */
+  async act(name,body){
+    if(!this.on)return null;
+    if(this.busy)return null;                       // one economy action in flight at a time
+    this.busy=true;
+    try{ const r=await RFNet.action(name,body||{});
+      if(r&&r.state)this.apply(r.state);
+      return r?r.result:null; }
+    catch(e){ if(e.status===429)toast('Slow down…');
+      else toast('Server: '+(e.message||'error'),'bad');
+      return null; }
+    finally{ this.busy=false; }
+  }
+};
+function save(){ if(SRV.on){ // server holds the economy; only mirror cosmetics
+    try{ RFNet.saveCosmetics({wardrobe:state.wardrobe,titleId:state.titleId,tipEpoch:state.tipEpoch}); }catch(e){}
+    return; }
+  try{localStorage.setItem(SAVE,JSON.stringify(state));}catch(e){}}
 function load(){try{const r=localStorage.getItem(SAVE);if(r){const s=JSON.parse(r);
   state.coins=s.coins||0;state.bucket=Array.isArray(s.bucket)?s.bucket:[];
   if(s.ores)for(const k in state.ores)state.ores[k]=s.ores[k]|0;
@@ -1491,6 +1579,8 @@ function load(){try{const r=localStorage.getItem(SAVE);if(r){const s=JSON.parse(
   state.bucketTier=clamp(s.bucketTier|0,0,4);
   state.tipEpoch=+s.tipEpoch||0;
   if(s.deeds&&typeof s.deeds==='object')state.deeds=s.deeds;
+  state.pet=s.pet?1:0; state.charm=s.charm?1:0; state.jackpot=Math.max(0,s.jackpot|0);
+  if(s.bounty&&typeof s.bounty==='object')state.bounty=s.bounty; state.bountyEpoch=+s.bountyEpoch||0;
   if(state.treasure&&state.treasure.w==null)state.treasure.w=worldKey; // legacy maps: assume current isle
   if(s.boosts&&typeof s.boosts==='object')state.boosts.chumUntil=+s.boosts.chumUntil||0;
   state.rodLvl=clamp(s.rodLvl|0||1,1,MAXLVL);state.pickLvl=clamp(s.pickLvl|0||1,1,MAXLVL);
@@ -1500,7 +1590,7 @@ load();
 rebuildDockBoat();
 function F(name,rar,val){return {name,rar,val};}
 // time-of-day + weather globals (driven by the sky system in animate)
-let dayT=0.3, wState='clear';
+let dayT=0.3, wState='clear', dayCount=0; // dayCount drives the 8-day lunar phase
 const isNight=()=>dayT<0.13||dayT>0.72;
 // entries: [species, weight, cond?] — cond gates when it can bite
 const TABLE=[[F('Sardine','common',8),40],[F('Perch','common',12),34],[F('Carp','common',10),30],
@@ -1511,6 +1601,39 @@ const TABLE=[[F('Sardine','common',8),40],[F('Perch','common',12),34],[F('Carp',
   [F('Glowgill','uncommon',40),10,'night'],[F('Moonfin','rare',95),7,'night'],[F('Midnight Koi','epic',210),4,'night'],
   [F('Rainrunner','uncommon',38),12,'rain'],[F('Mistcarp','rare',88),6,'rain'],
   [F('Thunder Eel','epic',260),5,'storm'],[F('Storm Marlin','legendary',750),2,'storm']];
+// ---- per-world fish tables: every isle has its own catch (TABLE = Fortune Isle's) ----
+WORLDS.isle.fish=TABLE;
+WORLDS.mine.fish=[[F('Pebble Sardine','common',9),40],[F('Gravel Perch','common',13),34],[F('Rust Carp','common',12),30],
+  [F('Copperfin','uncommon',24),24],[F('Tin Trout','uncommon',26),20],[F('Quarry Snapper','uncommon',38),16],
+  [F('Iron Eel','rare',60),12],[F('Magnetite Tuna','rare',95),9],[F('Cobalt Koi','rare',140),7],
+  [F('Silver Sturgeon','epic',150),6],[F('Drill Marlin','epic',175),4],
+  [F('Motherlode Koi','legendary',520),2],
+  [F('Lantern Glowgill','uncommon',45),9,'night'],[F('Moonvein Eel','rare',105),6,'night'],
+  [F('Slag Eel','epic',280),4,'storm'],[F('Forge Marlin','legendary',780),1,'storm']];
+WORLDS.volcano.fish=[[F('Ash Sardine','common',10),40],[F('Soot Perch','common',14),32],
+  [F('Emberfin','uncommon',26),24],[F('Cinder Snapper','uncommon',36),18],
+  [F('Magma Eel','rare',70),12],[F('Basalt Tuna','rare',100),9],
+  [F('Obsidian Sturgeon','epic',160),6],[F('Pyro Koi','epic',200),4],
+  [F('Phoenix Marlin','legendary',800),2],
+  [F('Lava Glowgill','uncommon',48),10,'night'],[F('Ashmoon Koi','epic',240),4,'night'],
+  [F('Eruption Eel','epic',300),4,'storm'],[F('Inferno Marlin','legendary',900),1,'storm']];
+WORLDS.frost.fish=[[F('Ice Sardine','common',9),40],[F('Frost Perch','common',13),33],
+  [F('Snowfin','uncommon',24),22],[F('Glacier Trout','uncommon',26),20],
+  [F('Crystal Eel','rare',75),11],[F('Arctic Tuna','rare',105),9],
+  [F('Frozen Sturgeon','epic',165),5],[F('Snowflake Koi','epic',210),4],
+  [F('Aurora Marlin','legendary',850),2],
+  [F('Polar Glowgill','uncommon',50),9,'night'],[F('Moonfrost Koi','epic',230),4,'night'],
+  [F('Blizzard Eel','epic',290),4,'storm'],[F('Yeti Carp','legendary',820),1,'storm']];
+// cave: eternal night, so its glow species are the everyday population (three shared with isle nights)
+WORLDS.cave.fish=[[F('Cave Guppy','common',10),40],[F('Blind Perch','common',14),32],
+  [F('Glowgill','uncommon',40),20],[F('Echo Snapper','uncommon',36),16],
+  [F('Dweller Eel','rare',78),12],[F('Moonfin','rare',95),8],[F('Crystal Koi','rare',150),6],
+  [F('Midnight Koi','epic',210),5],[F('Fossil Sturgeon','epic',170),4],
+  [F('Abyss Anglerfish','legendary',900),2],[F('Wyrm Eel','legendary',850),1]];
+// combined species list (unique by name) — drives the Fishdex and completion achievements
+const ALL_FISH=[]; { const seenF=new Set();
+  for(const k in WORLDS){ const wf=WORLDS[k].fish; if(!wf)continue;
+    for(const e of wf) if(!seenF.has(e[0].name)){ seenF.add(e[0].name); ALL_FISH.push(e); } } }
 function condOK(c){ if(!c)return true; if(c==='night')return isNight();
   if(c==='rain')return wState==='rain'||wState==='storm'; if(c==='storm')return wState==='storm'; return true; }
 const RORDER={common:0,uncommon:1,rare:2,epic:3,legendary:4};
@@ -1549,6 +1672,15 @@ function onCatch(fish){ state.stats.caught++; state.bucket.push(fish);
   if(!state.treasure&&Math.random()<0.08){ const cand=landCells.filter(c=>reachable(c[0],c[1])&&Math.hypot(c[0]-spawnCell[0],c[1]-spawnCell[1])>14);
     if(cand.length){ const c=cand[(Math.random()*cand.length)|0]; state.treasure={i:c[0],j:c[1],w:worldKey};
       toast(pixSVG('map',13)+' A bottle! X marks the spot on your map','gold'); } }
+  sfx.catch(); reveal(fish); }
+/* Same celebration, but the server already decided (and banked) everything. */
+function revealServerCatch(r){ const fish=r.fish;
+  if(r.isRec&&!r.isNew)toast(`${pixSVG('trophy',13)} Record ${fish.name}: ${fish.kg} kg!`,'good');
+  if(r.isNew){ toast(`✦ NEW SPECIES: ${fish.name}`,'gold'); addShake(0.1); }
+  if(fish.shiny){ toast('✦ SHINY! Worth 5× more','gold'); addShake(0.18); addFreeze(0.1); }
+  if(r.pearls)toast(`+${r.pearls} ◉`,'good');
+  if(r.share)toast(`${pixSVG('chart',13)} +1 share ${r.share}`,'gold');
+  if(r.treasure)toast(pixSVG('map',13)+' A bottle! X marks the spot on your map','gold');
   sfx.catch(); reveal(fish); }
 // rotating market demand: every 3 min one category is HOT (x1.6), one SURPLUS (x0.75)
 const MKT_CATS=['fish','wood','coal','iron','gold','diamond'];
@@ -1640,7 +1772,7 @@ const ACH=[
   ['win5','Eel Tamer','win 5 spins',150,s=>s.stats.winsCt>=5],
   ['big1k','High Roller','a single win worth 1,000+',250,s=>s.stats.bestWin>=1000],
   ['dex5','Collector','5 species in the Fishdex',150,s=>Object.keys(s.dex).length>=5],
-  ['dexAll','Completionist','every species in the Fishdex',2000,s=>Object.keys(s.dex).length>=TABLE.length],
+  ['dexAll','Completionist','every species in the Fishdex',2000,s=>Object.keys(s.dex).length>=ALL_FISH.length],
   ['world2','Set Sail','unlock a second island',400,s=>s.worlds.length>=2],
   ['world4','Archipelago','unlock every island',5000,s=>s.worlds.length>=4],
   ['boat1','Shipwright','build your first real boat',150,s=>s.boatLvl>=1],
@@ -1649,7 +1781,7 @@ const ACH=[
    No wallet, no chain, no real value — a trophy wall with hash cosplay. ---- */
 const DEEDS=[
   ['d_arrive','Deed of Arrival','first catch or ore on the isle',s=>s.stats.caught+s.stats.mined>=1],
-  ['d_leg','Legendary Angler','land a legendary fish',s=>Object.keys(s.dex).some(n=>{const e=TABLE.find(x=>x[0].name===n);return e&&e[0].rar==='legendary';})],
+  ['d_leg','Legendary Angler','land a legendary fish',s=>Object.keys(s.dex).some(n=>{const e=ALL_FISH.find(x=>x[0].name===n);return e&&e[0].rar==='legendary';})],
   ['d_w2','Charter · Great Mine','claim the second island',s=>s.worlds.includes('mine')],
   ['d_w3','Charter · Cinder Atoll','claim the volcanic isle',s=>s.worlds.includes('volcano')],
   ['d_w4','Charter · Frostbite','claim the frozen isle',s=>s.worlds.includes('frost')],
@@ -1659,7 +1791,7 @@ const DEEDS=[
   ['d_eel','Meme Lord Certificate','hold 25+ EEL shares at once',s=>(s.stocks.own.EEL|0)>=25],
   ['d_div','Dividend Baron','collect ◈1,000 in dividends',s=>s.stats.divEarned>=1000],
   ['d_win','Whale of the Eel','win ◈2,500+ on a single spin',s=>s.stats.bestWin>=2500],
-  ['d_dex','Master of the Dex','complete the entire Fishdex',s=>Object.keys(s.dex).length>=TABLE.length]];
+  ['d_dex','Master of the Dex','complete the entire Fishdex',s=>Object.keys(s.dex).length>=ALL_FISH.length]];
 function deedHash(id){ let seed=0; for(let i=0;i<id.length;i++)seed+=id.charCodeAt(i)*(i+7);
   const mint=state.deeds[id]||0; let out='';
   for(let k=0;k<20;k++)out+=((hash(seed+mint,k*13.7)*16)|0).toString(16);
@@ -1722,6 +1854,12 @@ function renderWorldRows(){
       h+=`<div class="fishrow"><span class="nm">${pixSVG('lock',15)} ${w.name} <span style="color:var(--faint)">${w.sub}${okBoat?'':` · needs ${BOATS[br].name}`}</span></span><span class="vv">◈ ${fmt(w.cost)}</span><button class="btn gold" data-world="${k}" ${state.coins<w.cost||!okBoat?'disabled':''}>Unlock</button></div>`; } }
   return h; }
 function buyOrSail(k){ const w=WORLDS[k]; if(!w||k===worldKey)return;
+  if(SRV.on){ SRV.act('travel',{world:k}).then(r=>{ if(!r)return;
+      if(r.unlocked){ sfx.win(); addShake(0.1); toast(pixSVG('island',13)+' '+w.name+' unlocked!','gold'); return; }
+      try{localStorage.setItem('reelfortune3d-world',k);}catch(e){}
+      toast(pixSVG('boat',13)+' Sailing to '+w.name+'…','good');
+      setTimeout(()=>location.reload(),600); });
+    return; }
   if(!state.worlds.includes(k)){
     const br=BOAT_REQ[k]||0;
     if(state.boatLvl<br){ toast('Your '+BOATS[state.boatLvl].name+" can't make that voyage — see the Harbor dock",'bad'); return; }
@@ -1736,7 +1874,13 @@ function portalDest(){ const un=WORLD_ORDER.filter(k=>state.worlds.includes(k));
   if(un.length<2)return null; return un[(un.indexOf(worldKey)+1)%un.length]; }
 // the mine shaft is the door to The Undermine cave; climbing out returns to the isle you came from
 function caveReturn(){ let r='isle'; try{ const v=localStorage.getItem('reelfortune3d-return'); if(v&&WORLDS[v]&&v!=='cave')r=v; }catch(e){} return r; }
-function caveTravel(){ initAudio(); save();
+function caveTravel(){ initAudio();
+  // first descent costs coins: pay once to open the shaft, then travel is free forever
+  if(!WORLD.cave&&!state.worlds.includes('cave')){ const c=WORLDS.cave.cost;
+    if(state.coins<c){ toast('Need ◈ '+fmt(c)+' to open the mine shaft','bad'); sfx.miss(); return; }
+    state.coins-=c; state.worlds.push('cave'); updateHUD(); sfx.win();
+    toast(pixSVG('pick',13)+' Mine shaft opened — ◈ '+fmt(c),'gold'); }
+  save();
   const back=caveReturn();
   try{ if(WORLD.cave){ localStorage.setItem('reelfortune3d-world',back); }
     else { localStorage.setItem('reelfortune3d-return',worldKey); localStorage.setItem('reelfortune3d-world','cave'); } }catch(e){}
@@ -1801,12 +1945,20 @@ function renderKiosk(){ if(!kioskList)return; let h='';
       <span class="vv" style="color:var(--teal)">◉ ${BUCKET_COST[bt]}</span><button class="btn" data-kiosk="bucket" ${state.pearls<BUCKET_COST[bt]?'disabled':''}>Buy</button></div>`;
   h+=`<div class="fishrow"><span class="nm">Insider Tip <span style="color:var(--faint);font-size:10px">reveal the NEXT market rotation</span></span>
     <span class="vv" style="color:var(--teal)">◉ 30</span><button class="btn" data-kiosk="tip" ${state.pearls<30?'disabled':''}>Buy</button></div>`;
+  h+=state.pet?`<div class="fishrow"><span class="nm">Spirit Fish <span style="color:var(--faint);font-size:10px">it swims at your shoulder</span></span><span class="rr" style="color:var(--teal)">OWNED</span></div>`
+    :`<div class="fishrow"><span class="nm">Spirit Fish <span style="color:var(--faint);font-size:10px">a glowing companion that follows you everywhere</span></span>
+      <span class="vv" style="color:var(--teal)">◉ 400</span><button class="btn" data-kiosk="pet" ${state.pearls<400?'disabled':''}>Buy</button></div>`;
+  h+=state.charm?`<div class="fishrow"><span class="nm">Lucky Charm <span style="color:var(--faint);font-size:10px">re-rolls 1 losing spin in 5</span></span><span class="rr" style="color:var(--teal)">OWNED</span></div>`
+    :`<div class="fishrow"><span class="nm">Lucky Charm <span style="color:var(--faint);font-size:10px">the wheel re-rolls one losing spin in five</span></span>
+      <span class="vv" style="color:var(--teal)">◉ 600</span><button class="btn" data-kiosk="charm" ${state.pearls<600?'disabled':''}>Buy</button></div>`;
   kioskList.innerHTML=h; }
 function renderMarketAll(){ renderMarket(); renderOres(); renderUpg(); renderStocks(); renderKiosk(); }
 function openMarket(){marketOpen=true;marketEl.classList.add('on');renderBanner();renderMarketAll();}
 function closeMarket(){marketOpen=false;marketEl.classList.remove('on');save();}
 document.getElementById('marketX').onclick=closeMarket;
 document.getElementById('sellAll').onclick=()=>{ if(!state.bucket.length){toast('Bucket empty');return;}
+  if(SRV.on){ SRV.act('sell',{kind:'allfish'}).then(r=>{ if(r&&r.gained){coinFly(r.gained);sfx.sell();
+    toast('+'+fmt(r.gained)+' coins'+(r.kept?` (kept ${r.kept} ★)`:''),'gold');} }); return; }
   let g=0,kept=0; const pm=priceMult('fish');
   state.bucket=state.bucket.filter(f=>{ if(f.wins>0){kept++;return true;} g+=Math.round(f.val*pm); return false; });
   if(!g){toast(kept?'Only ★ starred fish left — sell them one by one':'Bucket empty');return;}
@@ -1815,12 +1967,16 @@ document.getElementById('sellAll').onclick=()=>{ if(!state.bucket.length){toast(
 marketEl.addEventListener('click',e=>{
   const t1=e.target.closest?e.target.closest('[data-sellone]'):null;
   if(t1){const i=+t1.getAttribute('data-sellone'),f=state.bucket[i];
+    if(SRV.on){ SRV.act('sell',{kind:'fish',index:i}).then(r=>{ if(r&&r.gained){coinFly(r.gained);sfx.sell();toast('+'+fmt(r.gained)+' coins','gold');} }); return; }
     if(f){const g=Math.round(f.val*priceMult('fish'));state.coins+=g;state.stats.earned+=g;state.bucket.splice(i,1);sfx.sell();toast('+'+fmt(g)+' coins','gold');updateHUD();renderMarketAll();save();} return;}
   const t2=e.target.closest?e.target.closest('[data-sellore]'):null;
   if(t2){const k=t2.getAttribute('data-sellore'),n=state.ores[k];
+    if(SRV.on){ SRV.act('sell',{kind:'ore',oreKey:k}).then(r=>{ if(r&&r.gained){coinFly(r.gained);sfx.sell();toast('+'+fmt(r.gained)+' coins','gold');} }); return; }
     if(n>0){const g=Math.round(n*ORE_INFO[k].price*priceMult(k));state.coins+=g;state.stats.earned+=g;state.ores[k]=0;sfx.sell();toast('+'+fmt(g)+' coins','gold');updateHUD();renderMarketAll();save();} return;}
   const t3=e.target.closest?e.target.closest('[data-buy]'):null;
   if(t3){const kind=t3.getAttribute('data-buy');
+    if(SRV.on){ SRV.act('craft',{tool:kind}).then(r=>{ if(r&&r.name){sfx.ore();addShake(0.1);
+      toast(pixSVG(kind==='rod'?'rod':kind==='axe'?'axe':'pick',13)+' '+r.name+' crafted!','gold');} }); return; }
     const doCraft=(lvlKey,base,names)=>{ const lvl=state[lvlKey]; if(lvl>=MAXLVL)return;
       const cost=lvlKey==='axeLvl'?axeCost(lvl):upCost(base,lvl),
         req=(lvlKey==='axeLvl'?AXE_REQ:UP_REQ)[lvl+1];
@@ -1835,24 +1991,30 @@ marketEl.addEventListener('click',e=>{
   if(t4){buyOrSail(t4.getAttribute('data-world'));return;}
   const t5=e.target.closest?e.target.closest('[data-buystk]'):null;
   if(t5){ const k=t5.getAttribute('data-buystk'),ep=mktEpochNow(),a=stockAsk(k,ep),st=state.stocks;
+    if(SRV.on){ SRV.act('stock',{op:'buy',ticker:k}).then(r=>{ if(r){sfx.sell();toast('+1 share '+k,'good');} }); return; }
     if(state.coins>=a&&(st.own[k]|0)<STOCK_CAP){ state.coins-=a;
       const n=st.own[k]|0,p=stockPrice(k,ep);
       st.basis[k]=((st.basis[k]||p)*n+p)/(n+1); st.own[k]=n+1;
       sfx.sell(); toast('+1 share '+k,'good'); updateHUD(); renderMarketAll(); save(); } return;}
   const t6=e.target.closest?e.target.closest('[data-sellstk]'):null;
   if(t6){ const k=t6.getAttribute('data-sellstk'),ep=mktEpochNow(),st=state.stocks;
+    if(SRV.on){ SRV.act('stock',{op:'sell',ticker:k}).then(r=>{ if(r&&r.gained){sfx.sell();coinFly(r.gained);toast('Sold 1 '+k+' for ◈'+fmt(r.gained),'gold');} }); return; }
     if((st.own[k]|0)>0){ const g=stockBid(k,ep);
       st.own[k]--; state.coins+=g;
       state.stats.earned+=Math.max(0,g-Math.round(st.basis[k]||g)); // only real profit counts toward records
       sfx.sell(); coinFly(g); toast('Sold 1 '+k+' for ◈'+fmt(g),'gold'); updateHUD(); renderMarketAll(); save(); } return;}
   const t7=e.target.closest?e.target.closest('[data-kiosk]'):null;
   if(t7){ const id=t7.getAttribute('data-kiosk');
+    if(SRV.on){ SRV.act('kiosk',{item:id}).then(r=>{ if(r){ sfx.ore(); if(r.message)toast(r.message,'good');
+      applyWardrobe(); applyTitle(); } }); return; }
     const buy=(cost,fn)=>{ if(state.pearls<cost)return; state.pearls-=cost; fn(); sfx.ore(); updateHUD(); renderMarketAll(); save(); };
     if(id==='wardrobe')buy(80,()=>{state.ownedW.wardrobe=1;toast('Wardrobe unlocked — pick your colors!','good');});
     else if(id==='chum')buy(80,()=>{state.boosts.chumUntil=Date.now()+600000;toast('Chum in the water — bites 2× faster for 10 min','good');});
     else if(id==='bucket'&&state.bucketTier<4)buy(BUCKET_COST[state.bucketTier],()=>{state.bucketTier++;toast('Deep Bucket! Capacity is now '+cap(),'good');});
     else if(id==='tip')buy(30,()=>{state.tipEpoch=mktEpochNow()+1;renderBanner();const m=mktModsAt(mktEpochNow()+1);
       toast(`Tip: next HOT ${catLabel(m.hot)} · SURPLUS ${catLabel(m.cold)}`,'gold');});
+    else if(id==='pet')buy(400,()=>{state.pet=1;toast('A Spirit Fish drifts to your side…','gold');});
+    else if(id==='charm')buy(600,()=>{state.charm=1;toast('🍀 Lucky Charm — the wheel likes you now','gold');});
     else{ const t=KIOSK_TITLES.find(x=>x[0]===id);
       if(t)buy(t[2],()=>{state.ownedT[id]=1;state.titleId=t[1];applyTitle();toast('Title equipped: '+t[1],'good');}); }
     return;}
@@ -1939,17 +2101,37 @@ if(harborEl){
 let casinoOpen=false,stakeIdx=-1,betColor=null,spinning=false,coinStake=0;
 const casinoEl=document.getElementById('casino'),stakeListEl=document.getElementById('stakeList'),
   spinBtn=document.getElementById('spinBtn'),spinResult=document.getElementById('spinResult');
-const COIN_STAKES=[50,250,1000];
+const COIN_STAKES=[50,250,1000,5000];
+// a bet is won by whichever pocket the ball lands in — colour bets, parity bets and high/low
+function betWins(bet,idx){ const col=SEG[idx];
+  if(bet==='red'||bet==='black'||bet==='green')return col===bet;
+  if(idx===0)return false;                       // the green zero eats every outside bet, as it should
+  if(bet==='odd')return idx%2===1;
+  if(bet==='even')return idx%2===0;
+  if(bet==='high')return idx>=8;
+  return false; }
+const betPay=bet=>bet==='green'?14:2;
+// the house skims 4% of every stake into a pot that GREEN pays out in full
+const JACK_CUT=0.04;
+// bigger sticks unlock bigger stakes — gear tier gates how much you may risk
+const betCap=()=>[250,1000,5000,25000,100000][clamp(Math.floor((state.rodLvl-1)/2),0,4)];
+function renderJackpot(){ const el=document.getElementById('jackpotBar'); if(!el)return;
+  el.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px;
+      padding:6px 10px;border-radius:10px;background:rgba(255,210,79,.08);border:1px solid rgba(255,210,79,.25)">
+    <span style="font-size:11px;color:var(--faint)">PROGRESSIVE POT · won on <b style="color:var(--good)">GREEN</b></span>
+    <b style="color:var(--gold)">◈ ${fmt(state.jackpot||0)}</b></div>
+    <div style="font-size:10px;color:var(--faint);margin-top:4px;text-align:right">max stake ◈${fmt(betCap())} · rod Lv.${state.rodLvl}${state.charm?' · 🍀 charm active':''}</div>`; }
 function renderStakes(){
-  let h='<div class="bets" style="margin:0 0 6px">'+COIN_STAKES.map(c=>
-    `<div class="betbtn${coinStake===c?' sel':''}" data-cstake="${c}" role="button" tabindex="0" style="color:var(--gold)${state.coins<c?';opacity:.4':''}">◈${c}<small>${state.coins<c?'not enough':'coin stake'}</small></div>`).join('')+'</div>';
+  const capv=betCap();
+  let h='<div class="bets" style="margin:0 0 6px">'+COIN_STAKES.map(c=>{ const over=c>capv, poor=state.coins<c;
+    return `<div class="betbtn${coinStake===c?' sel':''}" data-cstake="${c}" role="button" tabindex="0" style="color:var(--gold)${poor||over?';opacity:.4':''}">◈${fmt(c)}<small>${over?'rod too low':poor?'not enough':'coin stake'}</small></div>`;}).join('')+'</div>';
   if(!state.bucket.length) h+='<div class="empty" style="padding:8px">No fish to stake — bet coins or go fishing.</div>';
   else state.bucket.forEach((f,i)=>{h+=`<div class="stake${i===stakeIdx?' sel':''}" data-stake="${i}">${pixFish(RAR[f.rar],16)}
     <span class="nm">${f.name}${f.wins?` <span style="color:var(--rose)">★${f.wins}</span>`:''}</span><span class="vv">◈ ${fmt(f.val)}</span></div>`;});
   stakeListEl.innerHTML=h; }
 function updateSpinBtn(){ const hasStake=(stakeIdx>=0&&state.bucket[stakeIdx])||(coinStake>0&&state.coins>=coinStake);
   spinBtn.disabled=!(hasStake&&betColor&&!spinning); }
-function openCasino(){casinoOpen=true;viewMode='casino';casinoLabel.visible=false;casinoEl.classList.add('on');stakeIdx=-1;betColor=null;spinning=false;coinStake=0;spinResult.innerHTML='';
+function openCasino(){casinoOpen=true;viewMode='casino';casinoLabel.visible=false;casinoEl.classList.add('on');stakeIdx=-1;betColor=null;spinning=false;coinStake=0;spinResult.innerHTML='';renderJackpot();
   document.querySelectorAll('.betbtn').forEach(b=>b.classList.remove('sel'));renderStakes();updateSpinBtn();}
 function closeCasino(){
   // closing mid-spin settles the wheel HONESTLY: no loss-dodging, no swallowed stakes
@@ -1958,22 +2140,36 @@ function closeCasino(){
 document.getElementById('casinoX').onclick=closeCasino;
 stakeListEl.addEventListener('click',e=>{if(spinning)return;
   const c=e.target.closest('[data-cstake]');
-  if(c){ const amt=+c.getAttribute('data-cstake'); if(state.coins>=amt){ coinStake=(coinStake===amt?0:amt); if(coinStake)stakeIdx=-1; renderStakes(); updateSpinBtn(); } return; }
+  if(c){ const amt=+c.getAttribute('data-cstake');
+    if(amt>betCap()){ toast(`Rod Lv.${state.rodLvl} caps you at ◈${fmt(betCap())} — upgrade to bet bigger`,'bad'); return; }
+    if(state.coins>=amt){ coinStake=(coinStake===amt?0:amt); if(coinStake)stakeIdx=-1; renderStakes(); updateSpinBtn(); } return; }
   const t=e.target.closest('[data-stake]');if(t){stakeIdx=+t.getAttribute('data-stake');coinStake=0;renderStakes();updateSpinBtn();}});
 document.querySelectorAll('.betbtn').forEach(b=>{const pick=()=>{if(spinning)return;betColor=b.getAttribute('data-bet');
   document.querySelectorAll('.betbtn[data-bet]').forEach(x=>x.classList.remove('sel'));b.classList.add('sel');updateSpinBtn();};
   b.onclick=pick;b.onkeydown=e=>{if(e.code==='Enter'||e.code==='Space'){e.preventDefault();pick();}};});
 let spinSeq=0,spinAnim=null;
-spinBtn.onclick=()=>{ if(spinBtn.disabled)return;
-  const fish=stakeIdx>=0?state.bucket[stakeIdx]:null, coins=fish?0:coinStake;
-  if(!fish&&!(coins>0&&state.coins>=coins))return;
-  if(coins){ state.coins-=coins; updateHUD(); }               // coin stake leaves your purse now; refunded if cancelled
-  spinning=true;updateSpinBtn();spinResult.innerHTML='<span style="color:var(--muted)">No more bets — the ball is rolling…</span>';
-  const winIdx=Math.floor(Math.random()*NSEG);
+/* Launch the ball toward a pocket. Offline we pick it; ONLINE the server already did. */
+function startSpinAnim(winIdx,fish,coins,bet,srv){
   const th0=wheelAngle, th1=th0-(4+Math.random()*2)*TAU;   // wheel spins one way…
   const bTarget=-(winIdx*SEGA+SEGA/2)-th1;                 // …ball must come to rest on the winning pocket
   let base=(ballA-bTarget)%TAU; if(base<0)base+=TAU;
-  spinAnim={seq:++spinSeq,t:0,dur:4.4,th0,th1,b0:ballA,bTot:base+6*TAU,winIdx,fish,coins,bet:betColor,lastPocket:-1}; };
+  spinAnim={seq:++spinSeq,t:0,dur:4.4,th0,th1,b0:ballA,bTot:base+6*TAU,winIdx,fish,coins,bet,srv,lastPocket:-1}; }
+spinBtn.onclick=()=>{ if(spinBtn.disabled)return;
+  const fish=stakeIdx>=0?state.bucket[stakeIdx]:null, coins=fish?0:coinStake;
+  if(!fish&&!(coins>0&&state.coins>=coins))return;
+  if(SRV.on){ // the house is the server: it rolls the pocket, we only animate to it
+    spinning=true;updateSpinBtn();spinResult.innerHTML='<span style="color:var(--muted)">No more bets — the ball is rolling…</span>';
+    const bet=betColor;
+    SRV.act('spin',fish?{bet,stakeIdx}:{bet,coinStake:coins}).then(r=>{
+      if(!r){ spinning=false; updateSpinBtn(); spinResult.innerHTML='<span class="lose">The table refused that bet.</span>'; return; }
+      startSpinAnim(r.winIdx,fish,coins,bet,r); });
+    return; }
+  if(coins){ state.coins-=coins; state.jackpot=(state.jackpot||0)+Math.round(coins*JACK_CUT); updateHUD(); renderJackpot(); } // stake leaves now; a slice feeds the pot
+  spinning=true;updateSpinBtn();spinResult.innerHTML='<span style="color:var(--muted)">No more bets — the ball is rolling…</span>';
+  let winIdx=Math.floor(Math.random()*NSEG);
+  // the lucky charm quietly re-rolls one losing spin in five — it nudges the odds, it does not rig them
+  if(state.charm&&!betWins(betColor,winIdx)&&Math.random()<0.2)winIdx=Math.floor(Math.random()*NSEG);
+  startSpinAnim(winIdx,fish,coins,betColor,null); };
 function updateRoulette(dt){ // every frame from the main loop — the table is part of the world
   if(spinAnim){
     if(spinAnim.seq!==spinSeq||!casinoOpen){ if(spinAnim.coins){state.coins+=spinAnim.coins;updateHUD();} spinAnim=null; } // cancelled (ESC/close) — stake refunded
@@ -1991,28 +2187,47 @@ function updateRoulette(dt){ // every frame from the main loop — the table is 
   if(!spinAnim){ wheelAngle-=dt*(casinoOpen?0.4:0.7); setBallPocket(ballLockIdx); } // idle attract spin
   wheelDisc.rotation.y=wheelAngle; }
 const ballWP=new THREE.Vector3();
-function resolveSpin(sa){ const idx=sa.winIdx,fish=sa.fish,coins=sa.coins||0,color=SEG[idx],won=(color===sa.bet);
-  state.stats.spins++;
+function resolveSpin(sa){ const idx=sa.winIdx,fish=sa.fish,coins=sa.coins||0,color=SEG[idx],won=betWins(sa.bet,idx);
+  const PL=color.toUpperCase()+' '+idx; // parity/high bets need the pocket NUMBER, not just its colour
   ball.getWorldPosition(ballWP);
-  if(won){ const mult=(color==='green')?14:2;
+  if(sa.srv){ // server already settled the books — show the outcome only
+    const r=sa.srv;
+    if(r.won){ addShake(color==='green'?0.45:0.25); if(color==='green')addFreeze(0.15);
+      fxBurst(ballWP.x,ballWP.y+0.2,ballWP.z,{n:color==='green'?34:16,cols:[0xffd24f,0xffefb0,0x74e08a],speed:2.6,up:3.6,size:1.1,grav:7});
+      if(r.payout)coinFly(r.payout);
+      spinResult.innerHTML=`<span class="win">▲ ${PL} — WON! ${r.message||''}</span>`;
+      toast(r.message||'You won!','gold'); sfx.win(); }
+    else{ addShake(0.2);
+      fxBurst(ballWP.x,ballWP.y+0.15,ballWP.z,{n:14,cols:[0xff5d7a,0x8a2033,0x242a30],speed:2.2,up:2.6,size:1,grav:8});
+      spinResult.innerHTML=`<span class="lose">▼ ${PL} — ${r.message||'the eel swallowed it.'}</span>`;
+      toast(r.message||'Lost it','bad'); sfx.lose(); }
+    spinning=false; betColor=null; stakeIdx=-1; coinStake=0;
+    document.querySelectorAll('.betbtn[data-bet]').forEach(b=>b.classList.remove('sel'));
+    renderStakes(); updateHUD(); updateSpinBtn(); return; }
+  state.stats.spins++;
+  if(won){ const mult=betPay(sa.bet);
     state.stats.winsCt++;
-    if(color==='green')grantShare('EEL'); // jackpot pays out a meme-stock certificate too
+    if(sa.bet==='green')grantShare('EEL'); // jackpot pays out a meme-stock certificate too
+    // GREEN also empties the progressive pot into your purse
+    if(sa.bet==='green'&&state.jackpot>0){ const pot=state.jackpot; state.jackpot=0;
+      state.coins+=pot; state.stats.earned+=pot; coinFly(pot); addFreeze(0.2);
+      toast(`★ PROGRESSIVE POT — ◈${fmt(pot)}!`,'gold'); renderJackpot(); }
     addShake(color==='green'?0.45:0.25); if(color==='green')addFreeze(0.15);
     fxBurst(ballWP.x,ballWP.y+0.2,ballWP.z,{n:color==='green'?34:16,cols:[0xffd24f,0xffefb0,0x74e08a],speed:2.6,up:3.6,size:1.1,grav:7});
     if(fish){ const before=fish.val; fish.val=Math.round(fish.val*mult); fish.wins++;
       state.stats.bestWin=Math.max(state.stats.bestWin,fish.val);
-      spinResult.innerHTML=`<span class="win">▲ ${color.toUpperCase()} — WON! ${fish.name} ◈${fmt(before)} → <b>◈${fmt(fish.val)}</b>. Spin again or cash out.</span>`;
+      spinResult.innerHTML=`<span class="win">▲ ${PL} — WON! ${fish.name} ◈${fmt(before)} → <b>◈${fmt(fish.val)}</b>. Spin again or cash out.</span>`;
       toast(`${fish.name} doubled → ◈${fmt(fish.val)}`,'gold'); }
     else{ const gain=coins*mult; state.coins+=gain; state.stats.earned+=gain-coins;
       state.stats.bestWin=Math.max(state.stats.bestWin,gain); coinFly(gain);
-      spinResult.innerHTML=`<span class="win">▲ ${color.toUpperCase()} — WON! ◈${fmt(coins)} → <b>◈${fmt(gain)}</b>. Again?</span>`;
+      spinResult.innerHTML=`<span class="win">▲ ${PL} — WON! ◈${fmt(coins)} → <b>◈${fmt(gain)}</b>. Again?</span>`;
       toast(`◈${fmt(coins)} → ◈${fmt(gain)}!`,'gold'); }
     sfx.win(); }
   else { state.stats.losses++; addShake(0.2);
     fxBurst(ballWP.x,ballWP.y+0.15,ballWP.z,{n:14,cols:[0xff5d7a,0x8a2033,0x242a30],speed:2.2,up:2.6,size:1,grav:8});
     if(fish){ const lost=fish.name,li=state.bucket.indexOf(fish); if(li>=0)state.bucket.splice(li,1); stakeIdx=-1;
-      spinResult.innerHTML=`<span class="lose">▼ ${color.toUpperCase()} — the eel swallowed your ${lost}. Gone.</span>`; toast('Lost your '+lost,'bad'); }
-    else{ spinResult.innerHTML=`<span class="lose">▼ ${color.toUpperCase()} — the eel gulped your ◈${fmt(coins)}.</span>`; toast('Lost ◈'+fmt(coins),'bad'); }
+      spinResult.innerHTML=`<span class="lose">▼ ${PL} — the eel swallowed your ${lost}. Gone.</span>`; toast('Lost your '+lost,'bad'); }
+    else{ spinResult.innerHTML=`<span class="lose">▼ ${PL} — the eel gulped your ◈${fmt(coins)}.</span>`; toast('Lost ◈'+fmt(coins),'bad'); }
     sfx.lose(); }
   spinning=false;betColor=null;document.querySelectorAll('.betbtn').forEach(b=>b.classList.remove('sel'));
   renderStakes();updateHUD();updateSpinBtn();save(); }
@@ -2020,8 +2235,14 @@ function resolveSpin(sa){ const idx=sa.winIdx,fish=sa.fish,coins=sa.coins||0,col
 /* ========================================================================
    12. FISHING (3D)
    ======================================================================== */
-const fishing={state:'idle',t:0,biteAt:0,reel:0,reelT:0,tx:0,tz:0,cast:0};
-function cancelFish(){fishing.state='idle';bobber.visible=false;hint('');}
+const fishing={state:'idle',t:0,biteAt:0,reel:0,reelT:0,tx:0,tz:0,cast:0,
+  tens:0,fight:0,surge:0,surgeT:0,hooked:null}; // tens/fight/surge drive the reel-in tug-of-war
+// how hard each rarity pulls — legendaries will snap a starter rod if you just hold E
+const FIGHT={common:0.52,uncommon:0.66,rare:0.86,epic:1.06,legendary:1.32};
+function cancelFish(){fishing.state='idle';bobber.visible=false;fishing.hooked=null;fishing.tens=0;hint('');}
+// consecutive clean catches pay a rising bonus; one snapped line resets it
+let catchStreak=0;
+const streakMult=()=>1+Math.min(0.6,catchStreak*0.06);
 function nearestWater(){ const [ci,cj]=cellIndex(pWorld.x,pWorld.z); let bestC=null,bd=1e9;
   for(let i=ci-3;i<=ci+3;i++)for(let j=cj-3;j<=cj+3;j++){ if(i<0||j<0||i>=N||j>=N)continue; if(heightMap[i][j]>2)continue;
     const wx2=i-HALF,wz2=j-HALF,d=Math.hypot(wx2-pWorld.x,wz2-pWorld.z); if(d<bd){bd=d;bestC={x:wx2,z:wz2,dist:d};} } return bestC; }
@@ -2037,16 +2258,45 @@ function updateFishing(dt){ const f=fishing;
     if(f.t>=f.biteAt){f.state='bite';f.t=0;sfx.bite();
       fxBurst(bobber.position.x,WATER_TOP+0.15,bobber.position.z,{n:6,cols:[0x7fdcff,0xffffff],speed:1.6,up:2.2,size:0.8,grav:7});} }
   else if(f.state==='bite'){ f.t+=dt; bobber.position.y=WATER_TOP+0.05+Math.sin(clock*22)*0.14; hint('<b style="color:var(--rose)">!</b> <b>BITE!</b> press <span class="key">E</span> now!');
-    if(actEdge){f.state='reel';f.reel=0;f.reelT=0;} else if(f.t>0.85){cancelFish();sfx.miss();toast('It got away…');} }
-  else if(f.state==='reel'){ f.reelT+=dt; if(keys.act){f.reel+=dt*0.75;if(Math.random()<0.08)sfx.reel();} else f.reel-=dt*0.28; f.reel=clamp(f.reel,0,1);
-    bobber.position.y=WATER_TOP+0.1+f.reel*0.3; hint('Reel it in! hold <span class="key">E</span>');
-    if(f.reel>=1){ const fish=rollFish(); f.state='idle';
-      fxBurst(bobber.position.x,WATER_TOP+0.2,bobber.position.z,{n:16,cols:[0x7fdcff,0xd9f6ff,0xffffff],speed:2.6,up:4,size:1.1,grav:7});
-      addShake(fish.rar==='legendary'||fish.rar==='epic'?0.25:0.1);
-      if(fish.rar==='legendary')addFreeze(0.14);
-      bobber.visible=false;
-      if(state.bucket.length<cap()){onCatch(fish);updateHUD();save();} else toast('Bucket full — sell some fish!'); }
-    else if(f.reelT>4.5){cancelFish();sfx.miss();toast('The line snapped…');} }
+    if(actEdge){ f.state='reel'; f.reel=0; f.reelT=0; f.tens=0; f.surge=0; f.surgeT=rand(0.5,1.1);
+      // hook the fish NOW so the fight has real weight behind it — the one you fight is the one you land
+      f.hooked=SRV.on?null:rollFish();
+      f.fight=f.hooked?FIGHT[f.hooked.rar]:0.7; }
+    else if(f.t>0.85){cancelFish();sfx.miss();toast('It got away…');} }
+  else if(f.state==='reel'){ f.reelT+=dt;
+    // the fish fights in waves: during a SURGE the line loads up nearly 3× faster and you must give slack
+    f.surgeT-=dt;
+    if(f.surgeT<=0){ f.surge=f.surge?0:1; f.surgeT=f.surge?rand(0.6,1.25):rand(0.8,1.7);
+      if(f.surge){ sfx.bite(); addShake(0.05);
+        fxBurst(bobber.position.x,WATER_TOP+0.15,bobber.position.z,{n:5,cols:[0x7fdcff,0xffffff],speed:2,up:2.4,size:0.8,grav:7}); } }
+    const strain=f.fight*(f.surge?2.6:0.8)/(1+(state.rodLvl-1)*0.13); // a better rod takes more punishment
+    if(keys.act){ f.reel+=dt*0.62; f.tens+=dt*strain; if(Math.random()<0.08)sfx.reel(); }
+    else { f.reel-=dt*0.1; f.tens-=dt*1.25; }                          // let go to bleed tension off
+    f.reel=clamp(f.reel,0,1); f.tens=clamp(f.tens,0,1);
+    bobber.position.y=WATER_TOP+0.1+f.reel*0.3;
+    { const rk=Math.floor(f.reel*8), tk=Math.floor(f.tens*8),
+        tc=f.tens>0.78?'var(--rose)':f.tens>0.5?'var(--gold)':'var(--teal)';
+      hint(`${f.surge?'<b style="color:var(--rose)">IT RUNS!</b> let go — ':'hold <span class="key">E</span> — '}`
+        +`line <b style="color:${tc}">${'▰'.repeat(tk)+'▱'.repeat(8-tk)}</b>  fish <b>${'▰'.repeat(rk)+'▱'.repeat(8-rk)}</b>`); }
+    if(f.tens>=1){ // snapped — the fish and the streak are both gone
+      cancelFish(); sfx.miss(); addShake(0.18);
+      fxBurst(bobber.position.x,WATER_TOP+0.2,bobber.position.z,{n:10,cols:[0xff5d7a,0xffffff],speed:2.4,up:3,size:0.9,grav:8});
+      catchStreak=0; toast('The line SNAPPED — too much tension','bad'); return; }
+    if(f.reel>=1){ f.state='idle'; bobber.visible=false;
+      const bx=bobber.position.x,bz=bobber.position.z;
+      const land=fish=>{ fxBurst(bx,WATER_TOP+0.2,bz,{n:16,cols:[0x7fdcff,0xd9f6ff,0xffffff],speed:2.6,up:4,size:1.1,grav:7});
+        addShake(fish.rar==='legendary'||fish.rar==='epic'?0.25:0.1);
+        if(fish.rar==='legendary')addFreeze(0.14); };
+      if(SRV.on){ // the server rolls the fish and banks it
+        SRV.act('catch',{night:isNight(),wet:wState==='rain'||wState==='storm'}).then(r=>{
+          if(!r||!r.fish)return; land(r.fish); revealServerCatch(r); });
+      } else { const fish=f.hooked||rollFish(); land(fish);
+        catchStreak++;
+        if(catchStreak>1){ const m=streakMult();      // a clean run pays a rising bonus on the fish's value
+          fish.val=Math.round(fish.val*m);
+          if(catchStreak%3===0)toast(`${pixSVG('fish',13)} ${catchStreak} in a row — ×${m.toFixed(2)} value!`,'gold'); }
+        f.hooked=null;
+        if(state.bucket.length<cap()){onCatch(fish);updateHUD();save();} else toast('Bucket full — sell some fish!'); } } }
 }
 
 /* ========================================================================
@@ -2058,7 +2308,10 @@ function nearestOre(){ let bestN=null,bd=1e9;
   for(const n of oreNodes){ if(!n.alive)continue; const d=Math.hypot(n.x-pWorld.x,n.z-pWorld.z);
     if(d<bd){bd=d;bestN=n;} } return bestN&&bd<2.0?bestN:null; }
 function startMine(n){ initAudio(); mining.node=n; mining.t=0;
-  mining.dur=1.7/(1+(state.pickLvl-1)*0.22); }
+  mining.dur=1.7/(1+(state.pickLvl-1)*0.22)*(n.geode?2.3:1); } // geodes are a real commitment
+// chain-mining: break nodes back-to-back and the vein pays out harder each time
+let oreCombo=0,oreComboT=0;
+const comboMult=()=>1+Math.min(1.5,Math.floor(oreCombo/2)*0.5);
 function updateMining(dt){ const n=mining.node;
   if(!n||!n.alive){cancelMine();return;}
   if(keys.up||keys.down||keys.left||keys.right){cancelMine();return;}
@@ -2066,22 +2319,119 @@ function updateMining(dt){ const n=mining.node;
   else { mining.t-=dt*0.6; if(mining.t<=0){ n.mesh.scale.setScalar(1); cancelMine(); return; } }
   mining.t=clamp(mining.t,0,mining.dur);
   const p=mining.t/mining.dur,k=Math.floor(p*8);
-  hint(`${pixSVG('pick',13)} Mining ${ORE_INFO[n.type].name}… <b>${'▰'.repeat(k)+'▱'.repeat(8-k)}</b> hold <span class="key">E</span>`);
+  hint(`${pixSVG('pick',13)} ${n.geode?'<b style="color:var(--gold)">GEODE</b> — cracking':'Mining '+ORE_INFO[n.type].name}… <b>${'▰'.repeat(k)+'▱'.repeat(8-k)}</b> hold <span class="key">E</span>`
+    +(oreComboT>0?`  <span style="color:var(--gold)">vein ×${oreCombo}</span>`:''));
   if(mining.t>=mining.dur){ n.mesh.scale.setScalar(1);
-    const bonus=Math.random()<Math.min(0.85,0.15+0.08*(state.pickLvl-1))?1:0,
-      got=(1+bonus+(state.pickLvl>=6&&Math.random()<0.2?1:0))*(WORLD.oreYield||1);
+    oreCombo=oreComboT>0?oreCombo+1:1; oreComboT=6.5;   // keep the chain alive by finding the next node fast
+    addShake(n.geode?0.4:0.22); addFreeze(n.geode?0.12:0.05);
+    fxBurst(n.x,n.y+0.6,n.z,{n:n.geode?40:18,cols:[ORE_INFO[n.type].color,0x9aa1a8,0x747c84],speed:n.geode?4.4:3.2,up:n.geode?5.5:4.2,size:1.1});
+    n.alive=false; n.mesh.visible=false; n.respawnAt=clock+40+rand(0,25);
+    if(SRV.on){ sfx.ore();
+      SRV.act('mine',{type:n.type}).then(r=>{ if(r&&r.got)toast(`+${r.got} ${ORE_INFO[n.type].name}`,'good'); });
+      cancelMine(); return; }
+    const bonus=Math.random()<Math.min(0.85,0.15+0.08*(state.pickLvl-1))?1:0;
+    // a storm loosens the rock — bad weather actually pays at the quarry
+    const wBoost=(wState==='storm'?1.5:wState==='rain'||wState==='snow'||wState==='ash'?1.2:1);
+    let got=Math.round((1+bonus+(state.pickLvl>=6&&Math.random()<0.2?1:0))*(WORLD.oreYield||1)*comboMult()*wBoost*(n.geode?3.5:1));
     state.ores[n.type]+=got; state.stats.mined+=got; sfx.ore();
+    if(n.geode){ sfx.win(); // cracking one open sprays gems everywhere
+      fxBurst(n.x,n.y+1.1,n.z,{n:26,cols:[0x5ee8e2,0xffd24f,0xffefb0],speed:3.6,up:5,size:1.2,grav:6}); }
     addPearls({coal:1,iron:1,gold:2,diamond:5}[n.type]||1); // pearls track effort, not ore value
     // mining is the main source of share certificates ("mineral rights")
     const shC=0.06+0.015*(state.pickLvl-1);
     if(n.type==='diamond')grantShare(STOCK_KEYS[(Math.random()*STOCK_KEYS.length)|0]);
     else if(n.type==='gold'){ if(Math.random()<shC)grantShare(Math.random()<0.5?'HARB':'EEL'); }
     else if(Math.random()<shC)grantShare('DIGG');
-    addShake(0.22); addFreeze(0.05);
-    fxBurst(n.x,n.y+0.6,n.z,{n:18,cols:[ORE_INFO[n.type].color,0x9aa1a8,0x747c84],speed:3.2,up:4.2,size:1.1});
-    toast(`+${got} ${ORE_INFO[n.type].name}`,'good');
-    n.alive=false; n.mesh.visible=false; n.respawnAt=clock+40+rand(0,25);
+    toast(`+${got} ${ORE_INFO[n.type].name}`+(n.geode?' — GEODE!':'')+(oreCombo>1?`  vein ×${oreCombo}`:''),n.geode?'gold':'good');
     cancelMine(); updateHUD(); save(); } }
+
+/* ========================================================================
+   13e. PHOTO MODE — hide the whole UI and orbit the hero (P)
+   ======================================================================== */
+let photoMode=false,photoAng=0;
+function togglePhoto(){ photoMode=!photoMode;
+  document.body.classList.toggle('photo',photoMode);
+  if(photoMode){ photoAng=0; toast('📷 Photo mode — ←/→ orbit · scroll zoom · P to exit','gold'); } }
+
+/* ========================================================================
+   13c. METEOR STRIKES — rare sky event that plants a rich, short-lived node
+   ======================================================================== */
+const meteors=[]; let metTimer=rand(80,190);
+const METEOR_MAT=new THREE.MeshLambertMaterial({color:0x4a3c38,emissive:0xff6a2a,emissiveIntensity:0.7});
+function spawnMeteor(){
+  // land it a short walk away, on solid reachable ground so the player can actually get there
+  let tries=0,ix,jz;
+  do{ ix=(pWorld.x+rand(-16,16))|0; jz=(pWorld.z+rand(-16,16))|0; tries++; }
+  while(tries<40&&heightAt(ix,jz)<=WATER_TOP+0.5);
+  if(heightAt(ix,jz)<=WATER_TOP+0.5)return;
+  const gy=heightAt(ix,jz);
+  const g=new THREE.Group();
+  const rock=new THREE.Mesh(new THREE.BoxGeometry(0.9,0.75,0.9),METEOR_MAT); rock.position.y=0.38; rock.castShadow=true; g.add(rock);
+  for(let k=0;k<5;k++){ const s=rand(0.16,0.24);
+    const em=new THREE.Mesh(new THREE.BoxGeometry(s,s,s),new THREE.MeshLambertMaterial({color:0xff8a3a,emissive:0xff6a2a,emissiveIntensity:0.9}));
+    const a=rand(0,TAU); em.position.set(Math.cos(a)*0.44,rand(0.2,0.7),Math.sin(a)*0.44); g.add(em); }
+  g.position.set(ix,gy+26,jz); scene.add(g);                 // starts high and falls
+  meteors.push({g,x:ix,z:jz,gy,vy:0,landed:false,life:95});
+  if(running)toast('☄ A METEOR is falling — find the crater!','gold');
+}
+function updateMeteors(dt){
+  if((metTimer-=dt)<=0){ metTimer=rand(150,320); if(!WORLD.cave)spawnMeteor(); }
+  for(let i=meteors.length-1;i>=0;i--){ const m=meteors[i];
+    if(!m.landed){ m.vy+=dt*46; m.g.position.y-=m.vy*dt;
+      m.g.rotation.x+=dt*4; m.g.rotation.z+=dt*3;
+      fxBurst(m.g.position.x,m.g.position.y,m.g.position.z,{n:1,cols:[0xff8a3a,0xffd24f],speed:0.6,up:0.4,size:0.8,grav:2});
+      if(m.g.position.y<=m.gy){ m.g.position.y=m.gy; m.g.rotation.set(0,rand(0,TAU),0); m.landed=true;
+        addShake(0.5); addFreeze(0.1); beep(48,0.5,'sawtooth',0.09);
+        fxBurst(m.x,m.gy+0.4,m.z,{n:30,cols:[0xff6a2a,0xffd24f,0x4a3c38],speed:4.2,up:5,size:1.3,grav:9}); } }
+    else { m.g.children[0].material.emissiveIntensity=0.5+Math.sin(clock*4)*0.25;
+      if((m.life-=dt)<=0){ scene.remove(m.g); meteors.splice(i,1); } } }
+}
+function nearestMeteor(){ for(const m of meteors){ if(!m.landed)continue;
+    if(Math.hypot(m.x-pWorld.x,m.z-pWorld.z)<2.0)return m; } return null; }
+function claimMeteor(m){
+  const idx=meteors.indexOf(m); if(idx>=0)meteors.splice(idx,1); scene.remove(m.g);
+  addShake(0.35); addFreeze(0.08); sfx.win();
+  fxBurst(m.x,m.gy+0.6,m.z,{n:28,cols:[0xff6a2a,0xffd24f,0x5ee8e2],speed:3.8,up:5,size:1.2});
+  const gold=2+((Math.random()*3)|0), dia=1+((Math.random()*2)|0);
+  state.ores.gold+=gold; state.ores.diamond+=dia; state.stats.mined+=gold+dia;
+  addPearls(8,'meteor'); grantShare('DIGG');
+  toast(`☄ Meteoric ore! +${gold} Gold +${dia} Diamond`,'gold');
+  updateHUD(); save();
+}
+
+/* ========================================================================
+   13d. SPIRIT FISH — a companion that trails you once you've earned it
+   ======================================================================== */
+let pet=null,petBob=0;
+function buildPet(){ if(pet)return;
+  const g=new THREE.Group();
+  const body=new THREE.Mesh(new THREE.BoxGeometry(0.42,0.3,0.62),
+    new THREE.MeshLambertMaterial({color:0x7fe6ff,emissive:0x2fa8d8,emissiveIntensity:0.75,transparent:true,opacity:0.82}));
+  const tail=new THREE.Mesh(new THREE.BoxGeometry(0.1,0.28,0.24),
+    new THREE.MeshLambertMaterial({color:0xa8f0ff,emissive:0x2fa8d8,emissiveIntensity:0.6,transparent:true,opacity:0.75}));
+  tail.position.z=-0.42;
+  const eye=new THREE.Mesh(new THREE.BoxGeometry(0.07,0.07,0.05),new THREE.MeshBasicMaterial({color:0x0b1a22}));
+  eye.position.set(0.16,0.06,0.28);
+  const eye2=eye.clone(); eye2.position.x=-0.16;
+  g.add(body,tail,eye,eye2); g.userData={tail};
+  pet=g; scene.add(g); pet.position.set(pWorld.x,pWorld.y+2,pWorld.z);
+}
+function updatePet(dt){
+  if(!state.pet){ if(pet){scene.remove(pet);pet=null;} return; }
+  if(!pet)buildPet();
+  petBob+=dt;
+  // swims a lazy orbit behind the player's shoulder, always facing where it's headed
+  const tx=pWorld.x-Math.sin(pWorld.face)*1.15+Math.cos(petBob*0.7)*0.5,
+        tz=pWorld.z-Math.cos(pWorld.face)*1.15+Math.sin(petBob*0.7)*0.5,
+        ty=pWorld.y+1.75+Math.sin(petBob*2.2)*0.16;
+  const k=1-Math.exp(-3.4*dt);
+  const px2=pet.position.x,pz2=pet.position.z;
+  pet.position.x+=(tx-px2)*k; pet.position.z+=(tz-pz2)*k; pet.position.y+=(ty-pet.position.y)*k;
+  const dx=pet.position.x-px2,dz=pet.position.z-pz2;
+  if(dx*dx+dz*dz>1e-6)pet.rotation.y=lerpAngle(pet.rotation.y,Math.atan2(dx,dz),0.2);
+  pet.userData.tail.rotation.y=Math.sin(petBob*9)*0.55;
+  if(Math.random()<dt*1.6)fxBurst(pet.position.x,pet.position.y,pet.position.z,{n:1,cols:[0x7fe6ff,0xd9f6ff],speed:0.4,up:0.5,size:0.5,grav:-1});
+}
 
 /* ========================================================================
    13a. WOODCUTTING — chop trees for wood (they regrow)
@@ -2101,20 +2451,25 @@ function updateChopping(dt){ const t=chopping.tree;
   const p=chopping.t/chopping.dur,k=Math.floor(p*8);
   hint(`${pixSVG('axe',13)} Chopping… <b>${'▰'.repeat(k)+'▱'.repeat(8-k)}</b> hold <span class="key">E</span>`);
   if(chopping.t>=chopping.dur){
-    const got=1+(Math.random()<Math.min(0.85,0.35+0.08*(state.axeLvl-1))?1:0)+(state.axeLvl>=6&&Math.random()<0.2?1:0);
-    state.ores.wood+=got; state.stats.mined+=got;
-    addPearls(1); if(Math.random()<0.04)grantShare('LUMB');
     addShake(0.16); sfx.ore();
     const leafCols=t.pink?[0xec9fcb,0xf5b5d9,0x9a6b3a]:[0x3aa626,0x54cb3c,0x9a6b3a];
     fxBurst(t.x,t.y+3,t.z,{n:16,cols:leafCols,speed:2.6,up:1.6,size:1.1,grav:5});
-    toast(`+${got} Wood`,'good');
     t.cd=clock+30+rand(0,15);
+    if(SRV.on){ SRV.act('chop',{tree:t.id}).then(r=>{ if(r&&r.got)toast(`+${r.got} Wood`,'good'); });
+      cancelChop(); return; }
+    const wWood=(wState==='storm'?1.5:wState==='rain'||wState==='snow'||wState==='ash'?1.2:1); // wind brings the limbs down
+    const got=Math.round((1+(Math.random()<Math.min(0.85,0.35+0.08*(state.axeLvl-1))?1:0)+(state.axeLvl>=6&&Math.random()<0.2?1:0))*wWood);
+    state.ores.wood+=got; state.stats.mined+=got;
+    addPearls(1); if(Math.random()<0.04)grantShare('LUMB');
+    toast(`+${got} Wood`,'good');
     cancelChop(); updateHUD(); save(); } }
 
 /* ========================================================================
    13b. TREASURE DIGGING
    ======================================================================== */
+// digging speed now rides the pickaxe tier — before this it was a flat 1.5s at every level
 const digging={active:false,t:0,dur:1.5};
+const digDur=()=>1.5/(1+(state.pickLvl-1)*0.16);
 function treasureDist(){ const t=state.treasure; if(!t)return 1e9;
   if(t.w&&t.w!==worldKey)return 1e9; // the X is buried on another island
   return Math.hypot(t.i-HALF-pWorld.x,t.j-HALF-pWorld.z); }
@@ -2126,9 +2481,12 @@ function updateDigging(dt){
   const p=digging.t/digging.dur,k=Math.floor(p*8);
   hint(`${pixSVG('map',13)} Digging… <b>${'▰'.repeat(k)+'▱'.repeat(8-k)}</b> hold <span class="key">E</span>`);
   // scoop fx/sfx fire from the swing animation, synced to the blade hitting the dirt
-  if(digging.t>=digging.dur){ digging.active=false; state.treasure=null; addPearls(10,'treasure');
+  if(digging.t>=digging.dur){ digging.active=false;
     addShake(0.25); addFreeze(0.08);
     fxBurst(pWorld.x,pWorld.y+0.5,pWorld.z,{n:20,cols:[0xffd24f,0xffefb0,0x8a5a34],speed:3.4,up:4.5,size:1.1});
+    if(SRV.on){ SRV.act('dig',{}).then(r=>{ if(r&&r.message)toast(r.message,'gold'); if(r&&r.coins)coinFly(r.coins); sfx.win(); });
+      hint(''); return; }
+    state.treasure=null; addPearls(10,'treasure');
     const r=Math.random();
     if(r<0.55){ const g=Math.round(rand(150,600)*(1+0.12*(state.rodLvl+state.pickLvl)));
       state.coins+=g; state.stats.earned+=g; coinFly(g); sfx.win(); toast(pixSVG('map',13)+' Buried treasure! +'+fmt(g)+' coins','gold'); }
@@ -2172,9 +2530,9 @@ function renderInv(){
       <div class="inm">${f.name}<span style="color:var(--faint);font-size:10px"> ${f.kg||'?'} kg</span></div><div class="ivv">◈ ${fmt(f.val)}${f.wins?` <span style="color:var(--rose)">★${f.wins}</span>`:''}</div></div>`;});
     invFish.innerHTML=h+'</div>'; }
   // Fishdex — every species across conditions, ??? until first caught
-  { const seen=Object.keys(state.dex).length, total=TABLE.length;
+  { const seen=Object.keys(state.dex).length, total=ALL_FISH.length;
     let h=`<div class="seclab" style="margin-top:2px">Fishdex · ${seen}/${total}</div><div class="invgrid">`;
-    for(const e of TABLE){ const t=e[0],d=state.dex[t.name];
+    for(const e of ALL_FISH){ const t=e[0],d=state.dex[t.name];
       if(d) h+=`<div class="invcard" style="border-color:${RAR[t.rar]}55">${pixFish(RAR[t.rar],15)}
         <div class="inm">${t.name}${e[2]?` <span style="color:var(--faint);font-size:9px">${pixSVG(e[2]==='night'?'moon':e[2]==='storm'?'storm':'rain',10)}</span>`:''}<span style="color:var(--faint);font-size:10px"> ×${d.n}</span></div>
         <div class="ivv" style="color:var(--teal)">${d.best} kg</div></div>`;
@@ -2222,7 +2580,15 @@ invTabs.forEach(b=>b.addEventListener('click',()=>setInvTab(b.getAttribute('data
 function openInv(){ if(marketOpen||casinoOpen||harborOpen)return; invOpen=true; invEl.classList.add('on'); renderInv(); setInvTab('bag'); }
 function closeInv(){ invOpen=false; invEl.classList.remove('on'); }
 document.getElementById('invX').onclick=closeInv;
-document.querySelectorAll('#hotbar .slot').forEach(s=>{ s.addEventListener('click',()=>{ if(invOpen)closeInv(); else openInv(); }); });
+// --- hotbar selection: 1-5 pick the held tool; the empty-hand walk shows what you're carrying ---
+let hotSlot=0;
+const HOT_EL=[...document.querySelectorAll('#hotbar .slot')];
+function setHotSlot(i){ hotSlot=clamp(i,0,4);
+  HOT_EL.forEach((el,k)=>el.classList.toggle('sel',k===hotSlot)); }
+setHotSlot(0);
+HOT_EL.forEach((s,i)=>{ s.addEventListener('click',()=>{
+  if(i!==hotSlot&&i<3){ setHotSlot(i); return; }   // tool slots select; bucket/pouch (and re-click) open the bag
+  if(invOpen)closeInv(); else openInv(); }); });
 
 /* ========================================================================
    14b. SKY — day/night cycle + weather (rain, storm)
@@ -2233,13 +2599,23 @@ const DAYKEYS=[
   [0.20,WORLD.sky,0.55,0.62],[0.60,WORLD.sky,0.55,0.62],[0.68,0xf7906a,0.32,0.45],
   [0.76,0x101c38,0.10,0.28],[1.00,0x101c38,0.10,0.28]];
 const cA=new THREE.Color(),cB=new THREE.Color(),cRain=new THREE.Color(0x6b7f8a);
+const cTop=new THREE.Color(),cBot=new THREE.Color(),cHaze=new THREE.Color(0xf7b06a);
 let wTimer=rand(60,140),flashT=0;
+// paint the gradient quad: `top` at the zenith, `bot` at the horizon
+function paintSky(top,bot){ const c=skyGeo.attributes.color, a=c.array;
+  a[0]=a[3]=top.r; a[1]=a[4]=top.g; a[2]=a[5]=top.b;
+  a[6]=a[9]=bot.r; a[7]=a[10]=bot.g; a[8]=a[11]=bot.b; c.needsUpdate=true; }
+// COLD worlds get snow instead of rain; the volcano gets ash. Weather is per-world now.
+const isCold=()=>worldKey==='frost', isAsh=()=>worldKey==='volcano';
+const SUN_DIR=new THREE.Vector3();
 function skyUpdate(dt){
   if(WORLD.cave){ // eternal underground gloom: no day cycle, no weather — lamps and night fish rule
-    dayT=0.02; wState='clear'; rainMesh.visible=false;
-    cA.setHex(WORLD.sky); scene.background.copy(cA); scene.fog.color.copy(cA);
+    dayT=0.02; wState='clear'; rainMesh.visible=false; snowMesh.visible=false;
+    cA.setHex(WORLD.sky); scene.fog.color.copy(cA);
+    paintSky(cA,cA); starMat.opacity=0;
+    sunDisc.visible=sunGlow.visible=moonDisc.visible=moonGlow.visible=moonShade.visible=false;
     sun.intensity=0.12; hemiL.intensity=0.34; return; }
-  dayT=(dayT+dt/DAY_LEN)%1;
+  { const nd=dayT+dt/DAY_LEN; if(nd>=1)dayCount++; dayT=nd%1; } // rolling over midnight advances the moon
   let seg=null;
   for(let k=0;k<DAYKEYS.length-1;k++){ if(dayT>=DAYKEYS[k][0]&&dayT<=DAYKEYS[k+1][0]){seg=[DAYKEYS[k],DAYKEYS[k+1]];break;} }
   if(!seg)seg=[DAYKEYS[0],DAYKEYS[1]];
@@ -2248,19 +2624,62 @@ function skyUpdate(dt){
   let sunI=lerp(seg[0][2],seg[1][2],u), hemiI=lerp(seg[0][3],seg[1][3],u);
   const wet=wState==='rain'||wState==='storm';
   if(wet){ cA.lerp(cRain,0.45); sunI*=0.55; }
+  if(wState==='snow'){ cA.lerp(cB.setHex(0xc8d8e4),0.4); sunI*=0.7; }
+  if(wState==='ash'){ cA.lerp(cB.setHex(0x6a4a42),0.42); sunI*=0.6; }
   if(flashT>0){ flashT-=dt; sunI+=1.0; cA.lerp(cB.setHex(0xffffff),0.25); }
-  scene.background.copy(cA); scene.fog.color.copy(cA);
+  scene.fog.color.copy(cA);
   sun.intensity=sunI; hemiL.intensity=hemiI;
-  // weather state machine
+
+  /* --- the sky itself: gradient, arcing sun & moon, stars --- */
+  // sun rides an arc from dawn (0.12) to dusk (0.76); the moon runs the opposite half
+  const dayFrac=(dayT-0.12)/0.64, sunUp=dayFrac>=0&&dayFrac<=1;
+  const sunAng=dayFrac*Math.PI, sunX=-Math.cos(sunAng), sunY=Math.sin(sunAng);
+  let nf=(dayT-0.76)/0.36; if(nf<0)nf=(dayT+0.24)/0.36;      // night wraps midnight
+  const moonAng=clamp(nf,0,1)*Math.PI, moonX=-Math.cos(moonAng), moonY=Math.sin(moonAng);
+  const aspx=Math.max(1,window.innerWidth/window.innerHeight);
+  // zenith is deeper than the horizon; dawn/dusk push a warm haze along the skyline
+  cTop.copy(cA).multiplyScalar(0.72);
+  cBot.copy(cA);
+  const golden=sunUp?Math.max(0,1-Math.abs(sunY)*2.4):0;      // strongest when the sun is low
+  if(golden>0)cBot.lerp(cHaze,golden*0.5);
+  paintSky(cTop,cBot);
+  sunDisc.visible=sunGlow.visible=sunUp;
+  if(sunUp){ const x=sunX*aspx*0.92, y=sunY*0.95-0.12;
+    sunDisc.position.set(x,y,0); sunGlow.position.set(x,y,0);
+    sunGlow.material.opacity=0.16+golden*0.24;
+    sunDisc.material.color.setHex(0xfff3c4).lerp(cHaze,golden*0.55); } // reddens at the horizon
+  const moonUp=!sunUp;
+  moonDisc.visible=moonGlow.visible=moonShade.visible=moonUp;
+  if(moonUp){ const x=moonX*aspx*0.92, y=moonY*0.9-0.1;
+    moonDisc.position.set(x,y,0); moonGlow.position.set(x,y,0);
+    // lunar phase over an 8-day cycle: a shade box slides across the disc
+    const ph=(Math.floor(dayCount)%8)/8, off=Math.cos(ph*TAU)*0.145;
+    moonShade.position.set(x+off,y,0.01); moonShade.material.color.copy(cA); }
+  starMat.opacity=clamp((isNight()?1:0)*(wet||wState==='snow'?0.25:1),0,1)*0.85;
+  stars.visible=starMat.opacity>0.01;
+  // the directional light now TRACKS the sun instead of sitting still all day
+  const el=sunUp?Math.max(0.18,sunY):0.22;
+  SUN_DIR.set(-sunX*0.75,el,0.42).normalize().multiplyScalar(120);
+  sun.position.set(pWorld.x+SUN_DIR.x,SUN_DIR.y,pWorld.z+SUN_DIR.z);
+  sun.target.position.set(pWorld.x,0,pWorld.z); sun.target.updateMatrixWorld();
+
+  // weather state machine — each world rolls its own kinds of bad weather
   wTimer-=dt;
   if(wTimer<=0){ const r=Math.random(), prev=wState;
-    wState=r<0.55?'clear':r<0.88?'rain':'storm'; wTimer=rand(70,160);
+    if(isCold()) wState=r<0.45?'clear':r<0.85?'snow':'storm';
+    else if(isAsh()) wState=r<0.5?'clear':r<0.82?'ash':'storm';
+    else wState=r<0.55?'clear':r<0.88?'rain':'storm';
+    wTimer=rand(70,160);
     if(running&&wState!==prev){ if(wState==='rain')toast(pixSVG('rain',13)+' Rain — fish bite faster!','good');
+      else if(wState==='snow')toast(pixSVG('rain',13)+' Snowfall — the ice fish rise…','good');
+      else if(wState==='ash')toast(pixSVG('rain',13)+' Ashfall — the vents are venting…','gold');
       else if(wState==='storm')toast(pixSVG('storm',13)+' STORM — rare fish stir…','gold');
       else toast(pixSVG('sun',13)+' Skies clear'); } }
   if(wState==='storm'&&Math.random()<dt*0.22){ flashT=0.12;
     setTimeout(()=>beep(58,0.4,'sawtooth',0.07),rand(150,500)); }
   rainMesh.visible=wet;
+  snowMesh.visible=wState==='snow'||wState==='ash';
+  if(snowMesh.visible)snowMesh.material.color.setHex(wState==='ash'?0x6b5a52:0xffffff);
 }
 // rain: instanced streaks falling around the player
 const RAINN=240;
@@ -2276,6 +2695,21 @@ function rainUpdate(dt){ if(!rainMesh.visible)return;
     dummy.rotation.set(0,0,0.12); dummy.scale.set(1,1,1);
     dummy.updateMatrix(); rainMesh.setMatrixAt(k,dummy.matrix); }
   rainMesh.instanceMatrix.needsUpdate=true; }
+// snow / volcanic ash: fat slow flakes that drift sideways instead of falling straight
+const SNOWN=200;
+const snowMesh=new THREE.InstancedMesh(new THREE.BoxGeometry(0.13,0.13,0.13),
+  new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.8}),SNOWN);
+snowMesh.frustumCulled=false; snowMesh.visible=false; scene.add(snowMesh);
+const snowP=[]; for(let k=0;k<SNOWN;k++)snowP.push({ox:rand(-14,14),oz:rand(-14,14),y:rand(2,16),ph:rand(0,TAU),sp:rand(1.4,2.8)});
+function snowUpdate(dt){ if(!snowMesh.visible)return;
+  for(let k=0;k<SNOWN;k++){ const p=snowP[k];
+    p.y-=dt*p.sp;
+    if(p.y<WATER_TOP-1){ p.y=rand(12,16); p.ox=rand(-14,14); p.oz=rand(-14,14); }
+    const sway=Math.sin(clock*0.8+p.ph)*0.9;                 // lazy sideways drift
+    dummy.position.set(pWorld.x+p.ox+sway,p.y,pWorld.z+p.oz+Math.cos(clock*0.6+p.ph)*0.6);
+    dummy.rotation.set(clock*0.6+p.ph,clock*0.4+p.ph,0); dummy.scale.setScalar(1);
+    dummy.updateMatrix(); snowMesh.setMatrixAt(k,dummy.matrix); }
+  snowMesh.instanceMatrix.needsUpdate=true; }
 // HUD time/weather chip
 const timeIco=document.getElementById('timeIco'),wIco=document.getElementById('wIco');
 let chipT=0,chipKey='';
@@ -2308,7 +2742,7 @@ function tryMove(dt){
 let tree=null;
 function interactions(){
   const dT=Math.hypot(pWorld.x-TRADER_POS.x,pWorld.z-TRADER_POS.z), dC=Math.hypot(pWorld.x-CASINO_POS.x,pWorld.z-CASINO_POS.z);
-  const ore=nearestOre();
+  const ore=nearestOre(), met=nearestMeteor();
   const w=nearestWater(), canFish=w&&w.dist<2.4;
   if(dT<2.6){ hint('<span class="key">E</span> Trade at the Market'); if(actEdge){initAudio();openMarket();} }
   else if(dC<2.8){ hint('<span class="key">E</span> Enter the Spinning Eel'); if(actEdge){initAudio();openCasino();} }
@@ -2317,12 +2751,15 @@ function interactions(){
     if(pd){ hint(`<span class="key">E</span> Step through → <b>${WORLDS[pd].name}</b>`); if(actEdge){initAudio();buyOrSail(pd);} }
     else hint('Portal dormant — unlock more isles at the Market'); }
   else if(mineProps.door&&Math.hypot(pWorld.x-mineProps.door.x,pWorld.z-mineProps.door.z)<2.1){
-    hint(pixSVG('pick',13)+` <span class="key">E</span> `+(WORLD.cave?`Climb back to <b>${WORLDS[caveReturn()].name}</b>`:'Descend into <b>The Undermine</b>'));
+    hint(pixSVG('pick',13)+` <span class="key">E</span> `+(WORLD.cave?`Climb back to <b>${WORLDS[caveReturn()].name}</b>`
+      :state.worlds.includes('cave')?'Descend into <b>The Undermine</b>'
+      :`Open the shaft &amp; descend · <span style="color:var(--gold)">◈ ${fmt(WORLDS.cave.cost)}</span>`));
     if(actEdge)caveTravel(); }
   else if(HARBOR_POS&&Math.hypot(pWorld.x-HARBOR_POS.x,pWorld.z-HARBOR_POS.z)<2.6){
     hint(pixSVG('boat',13)+' <span class="key">E</span> The Harbor — shipwright &amp; sailings'); if(actEdge){initAudio();openHarbor();} }
-  else if(treasureDist()<1.8){ hint(pixSVG('map',13)+' <span class="key">E</span> Dig here!'); if(actEdge){initAudio();digging.active=true;digging.t=0;} }
-  else if(ore){ hint(`<span class="key">E</span> Mine ${ORE_INFO[ore.type].name}`); if(actEdge)startMine(ore); }
+  else if(treasureDist()<1.8){ hint(pixSVG('map',13)+' <span class="key">E</span> Dig here!'); if(actEdge){initAudio();digging.active=true;digging.t=0;digging.dur=digDur();} }
+  else if(met){ hint('☄ <span class="key">E</span> <b style="color:var(--gold)">Crack the meteorite</b>'); if(actEdge){initAudio();claimMeteor(met);} }
+  else if(ore){ hint(`<span class="key">E</span> ${ore.geode?'<b style="color:var(--gold)">Crack the geode</b>':'Mine '+ORE_INFO[ore.type].name}`); if(actEdge)startMine(ore); }
   else if((tree=nearestTree())){ hint(pixSVG('axe',13)+' <span class="key">E</span> Chop wood'); if(actEdge){initAudio();chopping.tree=tree;chopping.t=0;chopping.dur=1.4/(1+(state.axeLvl-1)*0.22);} }
   else if(canFish){ if(state.bucket.length>=cap())hint('Bucket full — sell at the Trader'); else { hint('<span class="key">E</span> Cast your line'); if(actEdge)startCast(w); } }
   else hint('');
@@ -2398,15 +2835,19 @@ function animate(now){
       if(act==='mine'&&mining.node){ mining.node.mesh.scale.setScalar(1+mineFlinch*0.09); mineFlinch*=Math.exp(-9*dt); } } // flinch on hit, then relax
     else{ swing.p=swing.last=0; rodMesh.rotation.x=-0.7; }
     leanT=lerp(leanT,lean,1-Math.exp(-10*dt)); player.rotation.x=leanT;
-    rodMesh.visible=(act==='fish');
-    pickMesh.visible=(act==='mine');
+    // idle/walking, the hero carries whatever the hotbar has selected
+    const carry=act?'':['fish','mine','chop'][hotSlot]||'';
+    rodMesh.visible=(act==='fish'||carry==='fish');
+    pickMesh.visible=(act==='mine'||carry==='mine');
     shovelMesh.visible=(act==='dig');
-    axeMesh.visible=(act==='chop');
+    axeMesh.visible=(act==='chop'||carry==='chop');
     player.position.set(pWorld.x, pWorld.y+(moving?Math.abs(Math.sin(pWorld.step))*0.08:0), pWorld.z);
 
     for(const n of oreNodes){ if(!n.alive&&clock>=n.respawnAt&&n.respawnAt>0){n.alive=true;n.mesh.visible=true;} }
     biomeCheck();
     if((achT+=dt)>1.4){achT=0;checkAch();checkDeeds();payDividends();}
+    if(oreComboT>0&&(oreComboT-=dt)<=0)oreCombo=0;   // the vein goes cold if you dawdle
+    updateMeteors(dt); updatePet(dt);
     if(titleSprite)titleSprite.position.set(pWorld.x,pWorld.y+2.95,pWorld.z);
     if(marketOpen===true&&clock-bannerT>0.5){bannerT=clock;renderBanner();
       const e=Math.floor(Date.now()/MKT_MS);
@@ -2418,6 +2859,11 @@ function animate(now){
   // camera: smooth fly between the follow-cam and a close-up over the roulette table
   if(!running){ const ta=clock*0.05; vTargL.set(0,5,0); vTargP.set(Math.cos(ta)*62,50,Math.sin(ta)*62); } // title: slow cinematic orbit of the isle
   else if(viewMode==='casino'){ vTargL.copy(WHEEL_CENTER).addScaledVector(CAS_SHIFT,1); vTargP.copy(vTargL).add(CAS_CAM_OFF); }
+  else if(photoMode){ // free orbit around the hero, arrow keys steer it
+    photoAng+=((keys.right?1:0)-(keys.left?1:0))*rdt*1.1;
+    const r=camSize*1.5, ey=camSize*1.15;
+    vTargP.set(pWorld.x+Math.cos(photoAng)*r,pWorld.y+ey,pWorld.z+Math.sin(photoAng)*r);
+    vTargL.set(pWorld.x,pWorld.y+1.1,pWorld.z); }
   else{ vTargP.set(pWorld.x+CAM_OFF.x,pWorld.y+CAM_OFF.y,pWorld.z+CAM_OFF.z); vTargL.set(pWorld.x,pWorld.y+1,pWorld.z); }
   const vTargS=!running?15:viewMode==='casino'?3.2:camSize, vk=1-Math.exp(-4.5*rdt);
   vPos.lerp(vTargP,vk); vLook.lerp(vTargL,vk); vSize+=(vTargS-vSize)*vk;
@@ -2432,7 +2878,7 @@ function animate(now){
   fxUpdate(dt);
 
   animWater(clock); animGrass(clock);
-  skyUpdate(dt); rainUpdate(dt);
+  skyUpdate(dt); rainUpdate(dt); snowUpdate(dt);
   if((chipT+=dt)>0.5){chipT=0;chipUpdate();}
   water.position.y=WATER_TOP+Math.sin(clock*0.8)*0.03;
   if(dockBoat){ dockBoat.position.y=WATER_TOP+0.03+Math.sin(clock*0.85+1)*0.045;
@@ -2452,7 +2898,10 @@ function animate(now){
   drawMinimap();
 
   actEdge=false;
-  renderer.render(scene,camera);
+  renderer.autoClear=false; renderer.clear();
+  renderer.render(skyScene,skyCam);   // sky first…
+  renderer.clearDepth();
+  renderer.render(scene,camera);      // …then the world on top of it
   requestAnimationFrame(animate);
 }
 
@@ -2486,6 +2935,51 @@ function start(){ initAudio(); if(AC&&AC.state==='suspended')AC.resume(); startM
   startOv.classList.remove('on'); running=true; updateHUD(); setArea(WORLD.name,WORLD.sub);
   if(state.stats.caught===0&&state.stats.mined===0)toast(pixSVG('island',13)+' Welcome to '+WORLD.name+'! Walk through the gate','gold'); }
 document.getElementById('startBtn').onclick=start;
+
+/* ---- account panel: offline by default, sign in to hand the economy to the server ---- */
+{ const $=id=>document.getElementById(id);
+  const statusEl=$('acctStatus'),formEl=$('acctForm'),msgEl=$('acctMsg'),toggleEl=$('acctToggle');
+  const msg=(t,cls)=>{ if(msgEl){msgEl.textContent=t||'';msgEl.className=cls||'';} };
+  function paint(){ if(!statusEl)return;
+    if(window.RFNet&&RFNet.online){
+      statusEl.textContent='signed in as '+RFNet.user+' · progress saved on the server';
+      statusEl.className='on'; if(formEl)formEl.style.display='none';
+      if(toggleEl)toggleEl.textContent='sign out';
+    } else {
+      statusEl.textContent=(window.RFNet&&RFNet.reachable)
+        ? 'playing offline · sign in to sync and play online'
+        : 'playing offline · progress saved in this browser';
+      statusEl.className=''; if(toggleEl)toggleEl.textContent='sign in to play online';
+    } }
+  /* Pull the authoritative state and adopt it wholesale. */
+  async function adopt(){ try{ const d=await RFNet.getState();
+      if(d&&d.state){ SRV.apply(d.state);
+        if(d.state.world&&d.state.world!==worldKey){ // server says we are on another isle
+          try{localStorage.setItem('reelfortune3d-world',d.state.world);}catch(e){}
+          toast('Syncing to '+((WORLDS[d.state.world]||{}).name||d.state.world)+'…','good');
+          setTimeout(()=>location.reload(),700); return; }
+        applyWardrobe(); applyTitle();
+        if(d.dividends)toast(`${pixSVG('chart',13)} Dividends while away: +◈${fmt(d.dividends)}`,'gold'); }
+    }catch(e){ msg('Could not load your save: '+e.message,'bad'); } }
+  if(toggleEl)toggleEl.onclick=async()=>{
+    if(window.RFNet&&RFNet.online){ await RFNet.logout(); paint(); msg('Signed out — back to offline play.'); return; }
+    if(formEl)formEl.style.display=formEl.style.display==='none'?'flex':'none';
+    if(!(window.RFNet&&RFNet.reachable))msg('No server found at '+(RFNet?RFNet.base||'(none)':'—')+'.','bad');
+  };
+  const creds=()=>[($('acctUser')||{}).value||'',($('acctPass')||{}).value||''];
+  const doAuth=async(fn,label)=>{ const [u,p]=creds();
+    if(u.length<3||p.length<8){ msg('Username ≥3 chars, password ≥8.','bad'); return; }
+    msg(label+'…');
+    try{ await fn(u,p); msg('Welcome, '+RFNet.user+'!','good'); paint(); await adopt(); }
+    catch(e){ msg(e.message||'failed','bad'); } };
+  if($('acctLogin'))$('acctLogin').onclick=()=>doAuth((u,p)=>RFNet.login(u,p),'Signing in');
+  if($('acctReg'))$('acctReg').onclick=()=>doAuth((u,p)=>RFNet.register(u,p),'Creating account');
+  // boot: is a backend reachable, and is our token still good?
+  (async()=>{ if(!window.RFNet)return;
+    await RFNet.probe();
+    if(RFNet.reachable&&await RFNet.resume())await adopt();
+    paint(); })();
+}
 
 // idle preview loop: the island is already alive behind the start menu
 last=performance.now(); requestAnimationFrame(animate);
