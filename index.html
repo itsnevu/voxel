@@ -25,7 +25,7 @@
   .hud{position:fixed;z-index:5;}
   #hud-bucket{top:12px;left:12px;display:flex;gap:8px;align-items:center;background:rgba(10,18,20,.82);border:1px solid var(--border);
     border-radius:8px;padding:8px 13px;font-size:14px;font-weight:600;box-shadow:0 2px 0 rgba(2,6,7,.6);}
-  #hud-bucket .ic{color:var(--teal);font-size:16px;}
+  #hud-bucket .ic{display:flex;align-items:center;}
   #hud-bucket.full{border-color:var(--rose);color:var(--rose);}
   #hud-ores{top:56px;left:12px;display:flex;gap:6px;}
   .orechip{display:flex;gap:6px;align-items:center;background:rgba(10,18,20,.82);border:1px solid var(--border);
@@ -49,7 +49,11 @@
     display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;cursor:pointer;
     box-shadow:0 3px 0 rgba(2,6,7,.6);transition:transform .06s,border-color .12s;}
   #hotbar .slot:hover{border-color:var(--teal);transform:translateY(-2px);}
-  #hotbar .slot .sic{font-size:21px;line-height:1;}
+  #hotbar .slot .sic{height:28px;display:flex;align-items:center;justify-content:center;}
+  .pix{display:inline-block;vertical-align:-2px;image-rendering:pixelated;}
+  .nm .pix,.statrow .pix,.seclab .pix{vertical-align:-3px;margin-right:2px;}
+  .fishrow>.pix,.stake>.pix,.invcard>.pix{flex:0 0 auto;}
+  #timeChip .pix{vertical-align:-3px;}
   #hotbar .slot .sb{font-family:"Chakra Petch";font-weight:700;font-size:10px;color:var(--gold);font-variant-numeric:tabular-nums;}
   #hotbar .invkey{align-self:center;margin-left:4px;font-size:10px;color:var(--muted);background:rgba(10,18,20,.8);
     border:1px solid var(--border);border-radius:6px;padding:5px 8px;pointer-events:none;}
@@ -153,9 +157,9 @@
 <div id="scene"></div>
 <div id="vig"></div>
 
-<div id="hud-bucket" class="hud"><span class="ic">🪣</span><span class="n">0/12</span></div>
+<div id="hud-bucket" class="hud"><span class="ic" data-pix="bucket" data-pix-size="18"></span><span class="n">0/12</span></div>
 <div id="hud-ores" class="hud">
-  <div class="orechip" id="timeChip"><span id="timeIco">☀️</span><span id="wIco"></span></div>
+  <div class="orechip" id="timeChip"><span id="timeIco" data-pix="sun" data-pix-size="14"></span><span id="wIco"></span></div>
   <div class="orechip"><span class="od" style="background:#9a6b3a;color:#9a6b3a"></span><span id="oreW">0</span></div>
   <div class="orechip"><span class="od" style="background:#565e66;color:#565e66"></span><span id="oreC">0</span></div>
   <div class="orechip"><span class="od" style="background:#d8cfc4;color:#d8cfc4"></span><span id="oreI">0</span></div>
@@ -167,10 +171,10 @@
 <div id="area"></div>
 <div id="hint"></div>
 <div id="hotbar">
-  <div class="slot" title="Fishing Rod"><span class="sic">🎣</span><span class="sb" id="hbRod">Lv1</span></div>
-  <div class="slot" title="Pickaxe"><span class="sic">⛏️</span><span class="sb" id="hbPick">Lv1</span></div>
-  <div class="slot" title="Fish Bucket"><span class="sic">🪣</span><span class="sb" id="hbBucket">0/12</span></div>
-  <div class="slot" title="Ore Pouch"><span class="sic">💎</span><span class="sb" id="hbPouch">0</span></div>
+  <div class="slot" title="Fishing Rod"><span class="sic" data-pix="rod" data-pix-size="26"></span><span class="sb" id="hbRod">Lv1</span></div>
+  <div class="slot" title="Pickaxe"><span class="sic" data-pix="pick" data-pix-size="26"></span><span class="sb" id="hbPick">Lv1</span></div>
+  <div class="slot" title="Fish Bucket"><span class="sic" data-pix="bucket" data-pix-size="26"></span><span class="sb" id="hbBucket">0/12</span></div>
+  <div class="slot" title="Ore Pouch"><span class="sic" data-pix="gem" data-pix-size="26"></span><span class="sb" id="hbPouch">0</span></div>
   <div class="invkey"><b>I</b> inventory</div>
 </div>
 <div id="toasts"></div>

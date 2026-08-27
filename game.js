@@ -393,6 +393,51 @@ function humanoid(sc){ const g=new THREE.Group();
   [legL,legR,body,armL,armR,head,hat,brim].forEach(m=>{m.castShadow=true;g.add(m);});
   g.userData={legL,legR,armL,armR}; return g; }
 
+// --- the HERO: a signature captain-angler with a real face, straw hat & scarf ---
+function texFace(){ const c=px(16),g=c.getContext('2d');
+  g.fillStyle='#f0c090'; g.fillRect(0,0,16,16);
+  for(let k=0;k<26;k++){ g.fillStyle=Math.random()<0.5?'#e8b884':'#f6c898'; g.fillRect((Math.random()*16)|0,(Math.random()*16)|0,1,1); }
+  g.fillStyle='#2b2320'; g.fillRect(3,6,3,3); g.fillRect(10,6,3,3);        // eyes
+  g.fillStyle='#ffffff'; g.fillRect(4,6,1,1); g.fillRect(11,6,1,1);        // sparkle
+  g.fillStyle='#5a4632'; g.fillRect(3,4,3,1); g.fillRect(10,4,3,1);        // brows
+  g.fillStyle='#d88a6a'; g.fillRect(2,10,2,1); g.fillRect(12,10,2,1);      // blush
+  g.fillStyle='#8a4a3a'; g.fillRect(6,12,4,1); g.fillRect(5,11,1,1); g.fillRect(10,11,1,1); // grin
+  return toTex(c); }
+function makeHero(){ const g=new THREE.Group();
+  const skinM=new THREE.MeshLambertMaterial({color:0xf0c090}),
+    vestM=new THREE.MeshLambertMaterial({color:0x2ba394}),   // signature teal vest
+    shirtM=new THREE.MeshLambertMaterial({color:0xf2e6c8}),  // cream sleeves
+    pantsM=new THREE.MeshLambertMaterial({color:0x33507a}),
+    bootM=new THREE.MeshLambertMaterial({color:0x5e4226}),
+    strawM=new THREE.MeshLambertMaterial({color:0xe8c86a}),
+    bandM=new THREE.MeshLambertMaterial({color:0xd8483f}),
+    scarfM=new THREE.MeshLambertMaterial({color:0xd8483f}),
+    goldM=new THREE.MeshLambertMaterial({color:0xffd24f,emissive:0x8a6a1e,emissiveIntensity:0.25});
+  const legL=new THREE.Mesh(new THREE.BoxGeometry(0.32,0.62,0.32),pantsM); legL.position.set(-0.2,0.31,0);
+  const bootL=new THREE.Mesh(new THREE.BoxGeometry(0.36,0.2,0.4),bootM); bootL.position.set(0,-0.24,0.03); legL.add(bootL);
+  const legR=legL.clone(); legR.position.x=0.2;
+  const body=new THREE.Mesh(new THREE.BoxGeometry(0.72,0.7,0.44),vestM); body.position.y=0.95;
+  const belly=new THREE.Mesh(new THREE.BoxGeometry(0.4,0.56,0.06),shirtM); belly.position.set(0,-0.02,0.23); body.add(belly);
+  const emblem=new THREE.Mesh(new THREE.BoxGeometry(0.14,0.1,0.04),goldM); emblem.position.set(-0.2,0.16,0.25); body.add(emblem); // gold fish pin
+  const belt=new THREE.Mesh(new THREE.BoxGeometry(0.74,0.12,0.46),bootM); belt.position.y=0.62;
+  const buckle=new THREE.Mesh(new THREE.BoxGeometry(0.16,0.1,0.05),goldM); buckle.position.set(0,0,0.23); belt.add(buckle);
+  const armL=new THREE.Mesh(new THREE.BoxGeometry(0.22,0.6,0.28),shirtM); armL.position.set(-0.47,0.98,0);
+  const handL=new THREE.Mesh(new THREE.BoxGeometry(0.2,0.16,0.24),skinM); handL.position.set(0,-0.36,0); armL.add(handL);
+  const armR=armL.clone(); armR.position.x=0.47;
+  const faceM=new THREE.MeshLambertMaterial({map:texFace()});
+  const head=new THREE.Mesh(new THREE.BoxGeometry(0.56,0.52,0.5),[skinM,skinM,skinM,skinM,faceM,skinM]); head.position.y=1.56;
+  const hair=new THREE.Mesh(new THREE.BoxGeometry(0.58,0.1,0.52),new THREE.MeshLambertMaterial({color:0x5a4632})); hair.position.y=1.79;
+  const scarf=new THREE.Mesh(new THREE.BoxGeometry(0.6,0.15,0.5),scarfM); scarf.position.y=1.28;
+  const scarfTail=new THREE.Mesh(new THREE.BoxGeometry(0.16,0.36,0.06),scarfM); scarfTail.position.set(0.12,-0.2,-0.26); scarf.add(scarfTail);
+  const crown=new THREE.Mesh(new THREE.BoxGeometry(0.6,0.24,0.56),strawM); crown.position.y=1.98;
+  const band=new THREE.Mesh(new THREE.BoxGeometry(0.62,0.09,0.58),bandM); band.position.y=1.88;
+  const brim=new THREE.Mesh(new THREE.BoxGeometry(0.94,0.08,0.9),strawM); brim.position.y=1.83;
+  const lure=new THREE.Mesh(new THREE.BoxGeometry(0.09,0.12,0.05),goldM); lure.position.set(0.4,-0.09,0.3); brim.add(lure); // lucky lure on the brim
+  const pack=new THREE.Mesh(new THREE.BoxGeometry(0.5,0.56,0.22),new THREE.MeshLambertMaterial({map:TEX.wood})); pack.position.set(0,1.02,-0.34);
+  const strap=new THREE.Mesh(new THREE.BoxGeometry(0.72,0.09,0.46),bootM); strap.position.set(0,1.18,0); strap.rotation.z=0.5;
+  [legL,legR,body,belt,armL,armR,head,hair,scarf,crown,band,brim,pack,strap].forEach(m=>{m.castShadow=true;g.add(m);});
+  g.userData={legL,legR,armL,armR,scarfTail}; return g; }
+
 function makeLabel(text,color){ const c=px(256); c.height=64; const x=c.getContext('2d');
   x.fillStyle='rgba(9,16,20,0.82)'; const r=10,w=256,h=52,y=6; x.beginPath();
   x.moveTo(r,y);x.arcTo(w,y,w,h,r);x.arcTo(w,h+y,0,h+y,r);x.arcTo(0,h+y,0,y,r);x.arcTo(0,y,w,y,r);x.closePath();x.fill();
@@ -537,7 +582,7 @@ if(mineCell){ const mineLabel=makeLabel('MINE','#9fd7ff');
 /* ========================================================================
    7. PLAYER + BOBBER
    ======================================================================== */
-const player=humanoid({shirt:0xd8483f,pants:0x33507a,hat:0xf0c437,skin:0xf0c090});
+const player=makeHero();
 const pWorld={x:spawnCell[0]-HALF,z:spawnCell[1]-HALF,y:spawnCell[2],face:0,step:0};
 player.position.set(pWorld.x,pWorld.y,pWorld.z); scene.add(player);
 
@@ -639,6 +684,271 @@ const sfx={cast:()=>beep(300,.15,'sine',.05),bite:()=>{beep(880,.08,'square',.06
 document.getElementById('mute').onclick=()=>{muted=!muted;const b=document.getElementById('mute');b.textContent=muted?'♪ MUTED':'♪ SOUND';b.style.color=muted?'var(--faint)':'';};
 
 const RAR={common:'#b9c6c4',uncommon:'#74e08a',rare:'#57b7ff',epic:'#c07bff',legendary:'#ffc24b'};
+
+/* ---- pixel-art icon set — hand-drawn 12×12 grids rendered as crisp SVG (no emoji) ---- */
+const PIX={
+rod:{p:{c:'#e8f4f2',w:'#a06a33',h:'#6b421f',l:'#bfe8e2',r:'#ff5d7a',W:'#f2f2f2'},g:[
+'............',
+'.........c..',
+'........cc..',
+'.......ww.l.',
+'......ww..l.',
+'.....ww...l.',
+'....ww....l.',
+'...ww.....l.',
+'..hh.....rr.',
+'.hh......WW.',
+'hh..........',
+'............']},
+pick:{p:{s:'#cfd8d6',S:'#8a97a0',h:'#8a5a2c'},g:[
+'....ssssss..',
+'..sssSSSSss.',
+'.ss......ss.',
+'.s....h..ss.',
+'......hh..s.',
+'.....hh...s.',
+'....hh......',
+'...hh.......',
+'..hh........',
+'.hh.........',
+'hh..........',
+'............']},
+axe:{p:{s:'#cfd8d6',S:'#8a97a0',h:'#8a5a2c'},g:[
+'............',
+'....ssss....',
+'...sSSsss...',
+'...sshhss...',
+'....hh......',
+'...hh.......',
+'..hh........',
+'.hh.........',
+'............',
+'............',
+'............',
+'............']},
+bucket:{p:{h:'#9fb2ba',m:'#c4d2d8',b:'#7e929c',w:'#2fd3bd',W:'#c8fff4'},g:[
+'...hhhhhh...',
+'..h......h..',
+'.h........h.',
+'.mmmmmmmmmm.',
+'.mwwwwWwwwm.',
+'.mbbbbbbbbm.',
+'.mbbbbbbbbm.',
+'..mbbbbbbm..',
+'..mbbbbbbm..',
+'...mbbbbm...',
+'...mmmmmm...',
+'............']},
+gem:{p:{d:'#2ba898',D:'#5ee8e2',L:'#d8fffb'},g:[
+'............',
+'............',
+'..dddddddd..',
+'.dLLDDDDDDd.',
+'.dDDDDDDDDd.',
+'..dDDDDDDd..',
+'...dDDDDd...',
+'....dDDd....',
+'.....dd.....',
+'............',
+'............',
+'............']},
+fish:{p:{b:'#57b7ff',t:'#2f86c9',E:'#0e1a20'},g:[
+'............',
+'............',
+'............',
+'.....bbbb...',
+'.t..bbbbbb..',
+'.ttbbbbbEb..',
+'.ttbbbbbbb..',
+'.t..bbbbb...',
+'.....bbb....',
+'............',
+'............',
+'............']},
+ore:{p:{s:'#7e8a92',M:'#5ee8e2'},g:[
+'............',
+'............',
+'...ssssss...',
+'..sMMssMMs..',
+'.ssMMsssMMs.',
+'.sssssMMsss.',
+'.sMMsssssss.',
+'..ssssMMss..',
+'...ssssss...',
+'............',
+'............',
+'............']},
+wood:{p:{b:'#7d5530',r:'#d8b078',R:'#a87c46'},g:[
+'............',
+'............',
+'............',
+'..rrbbbbbb..',
+'.rRRrbbbbbb.',
+'.rRRrbbbbbb.',
+'..rrbbbbbb..',
+'............',
+'............',
+'............',
+'............',
+'............']},
+wheel:{p:{O:'#c8a04a',g:'#63e58a',r:'#e04545',b:'#2a3138',h:'#ffcf5c'},g:[
+'............',
+'.....gg.....',
+'...OOggOO...',
+'..OrrggbbO..',
+'.OrrrggbbbO.',
+'.OrrrhhbbbO.',
+'.ObbbhhrrrO.',
+'.ObbbbrrrrO.',
+'..ObbbrrrO..',
+'...OOOOOO...',
+'............',
+'............']},
+trophy:{p:{g:'#ffcf5c',G:'#c8963c',d:'#e0b04f'},g:[
+'............',
+'.dggggggggd.',
+'.d.gggggg.d.',
+'.dd.gggg.dd.',
+'..d.gggg.d..',
+'....gGGg....',
+'.....GG.....',
+'.....gg.....',
+'....gggg....',
+'..gggggggg..',
+'............',
+'............']},
+boat:{p:{m:'#6b421f',s:'#f2ede2',h:'#8a5a2c'},g:[
+'............',
+'.....m......',
+'.....mss....',
+'..s..msss...',
+'.ss..mssss..',
+'sss..msss...',
+'.....mss....',
+'.....m......',
+'.hhhhhhhhhh.',
+'..hhhhhhhh..',
+'...hhhhhh...',
+'............']},
+island:{p:{t:'#8a5a2c',L:'#74e08a',s:'#e8d8a8',w:'#4fc3e8'},g:[
+'............',
+'..LL..LL....',
+'.LLLttLLL...',
+'.L..tt..L...',
+'....tt......',
+'....tt......',
+'....tt......',
+'...sssss....',
+'.sssssssss..',
+'.ssssssssss.',
+'wwwwwwwwwwww',
+'............']},
+lock:{p:{h:'#9fb2ba',g:'#ffcf5c',K:'#6b4a1f'},g:[
+'............',
+'....hhhh....',
+'...h....h...',
+'...h....h...',
+'..gggggggg..',
+'..gggggggg..',
+'..gggKKggg..',
+'..gggKKggg..',
+'..gggKKggg..',
+'..gggggggg..',
+'............',
+'............']},
+sun:{p:{y:'#ffe08a',g:'#ffcf5c',G:'#ffdf7c'},g:[
+'............',
+'.....yy.....',
+'.y........y.',
+'...gggggg...',
+'..gGGGGGGg..',
+'yy.GGGGGG.yy',
+'..gGGGGGGg..',
+'...gggggg...',
+'.y........y.',
+'.....yy.....',
+'............',
+'............']},
+moon:{p:{m:'#ffe9a8'},g:[
+'............',
+'....mmmm....',
+'...mmmm.....',
+'..mmmm......',
+'..mmm.......',
+'..mmm.......',
+'..mmm.......',
+'..mmmm......',
+'...mmmm.....',
+'....mmmmm...',
+'............',
+'............']},
+dusk:{p:{o:'#f7906a',h:'#3a5a6a'},g:[
+'............',
+'............',
+'............',
+'.....oo.....',
+'...oooooo...',
+'..oooooooo..',
+'.hhhhhhhhhh.',
+'.hhhhhhhhhh.',
+'............',
+'............',
+'............',
+'............']},
+rain:{p:{c:'#aebcc4',w:'#4fc3e8'},g:[
+'............',
+'...ccccc....',
+'..cccccccc..',
+'.cccccccccc.',
+'.cccccccccc.',
+'............',
+'..w...w...w.',
+'............',
+'...w...w....',
+'............',
+'............',
+'............']},
+storm:{p:{c:'#8a97a0',y:'#ffd24f'},g:[
+'............',
+'...ccccc....',
+'..cccccccc..',
+'.cccccccccc.',
+'.cccccccccc.',
+'.....yy.....',
+'....yy......',
+'...yyyy.....',
+'.....yy.....',
+'....yy......',
+'....y.......',
+'............']},
+map:{p:{p:'#a8895c',P:'#e8d8b0',d:'#8a6a3c',x:'#e04545'},g:[
+'............',
+'.pppppppppp.',
+'.pPPPPPPPPp.',
+'.pdPPPxPxPp.',
+'.pPdPPPxPPp.',
+'.pPPdPxPxPp.',
+'.pPPdPPPPPp.',
+'.pPPPddPPPp.',
+'.pppppppppp.',
+'............',
+'............',
+'............']}};
+function pixSVG(name,size,ov){ const ic=PIX[name]; if(!ic)return'';
+  const p=ov?Object.assign({},ic.p,ov):ic.p; let r='';
+  for(let y=0;y<12;y++){ const row=ic.g[y]; let x=0;
+    while(x<12){ const ch=row[x]; if(ch==='.'||!p[ch]){x++;continue;}
+      let x2=x+1; while(x2<12&&row[x2]===ch)x2++;
+      r+=`<rect x="${x}" y="${y}" width="${x2-x}" height="1" fill="${p[ch]}"/>`; x=x2; } }
+  return `<svg class="pix" width="${size}" height="${size}" viewBox="0 0 12 12" shape-rendering="crispEdges" aria-hidden="true">${r}</svg>`; }
+function shade(hex,f){ const n=parseInt(hex.slice(1),16);
+  const r=((n>>16&255)*f)|0,g=((n>>8&255)*f)|0,b=((n&255)*f)|0;
+  return '#'+((1<<24)|(r<<16)|(g<<8)|b).toString(16).slice(1); }
+const pixFish=(c,size)=>pixSVG('fish',size||16,{b:c,t:shade(c,0.62)});
+const oreIcon=(k,size)=>k==='wood'?pixSVG('wood',size||14):pixSVG('ore',size||14,{M:ORE_INFO[k].dot});
+// hydrate the static emoji placeholders in index.html
+document.querySelectorAll('[data-pix]').forEach(el=>{ el.innerHTML=pixSVG(el.getAttribute('data-pix'),+el.getAttribute('data-pix-size')||24); });
+
 const H={bn:document.querySelector('#hud-bucket .n'),bucket:document.getElementById('hud-bucket'),coins:document.getElementById('coinVal'),
   area:document.getElementById('area'),hint:document.getElementById('hint'),
   oreW:document.getElementById('oreW'),oreC:document.getElementById('oreC'),oreI:document.getElementById('oreI'),oreG:document.getElementById('oreG'),oreD:document.getElementById('oreD')};
@@ -649,11 +959,11 @@ function updateHUD(){H.bn.textContent=state.bucket.length+'/'+CAP;H.bucket.class
 let hintCur='';
 function hint(h){if(h!==hintCur){hintCur=h;if(h){H.hint.innerHTML=h;H.hint.classList.add('on');}else H.hint.classList.remove('on');}}
 const tw=document.getElementById('toasts');
-function toast(m,k){const d=document.createElement('div');d.className='toast '+(k||'');d.textContent=m;tw.appendChild(d);setTimeout(()=>d.remove(),2000);}
+function toast(m,k){const d=document.createElement('div');d.className='toast '+(k||'');d.innerHTML=m;tw.appendChild(d);setTimeout(()=>d.remove(),2000);}
 let areaCur='',areaT=0;
 function setArea(name,sub){if(name!==areaCur){areaCur=name;H.area.innerHTML=name+'<small>'+sub+'</small>';H.area.classList.add('on');areaT=3;}}
 // ---- 3D catch reveal: a live Three.js voxel fish on the card ----
-function fishSVG(rar){const c=RAR[rar];return `<svg width="76" height="46" viewBox="0 0 76 46"><g fill="${c}"><ellipse cx="34" cy="23" rx="24" ry="13"/><polygon points="8,23 -2,12 -2,34"/></g><circle cx="46" cy="20" r="2.4" fill="#0e1a20"/><path d="M50 16 q8 7 0 14" stroke="${c}" stroke-width="2" fill="none"/></svg>`;} // fallback when the reveal WebGL context can't start
+function fishSVG(rar){return pixFish(RAR[rar],60);} // fallback when the reveal WebGL context can't start
 const revEl=document.getElementById('reveal'); let revT=0;
 const fishScene=new THREE.Scene();
 const fishCam=new THREE.PerspectiveCamera(30,170/110,0.1,20); fishCam.position.set(0,0.85,3.4); fishCam.lookAt(0,0,0);
@@ -819,13 +1129,13 @@ function onCatch(fish){ state.stats.caught++; state.bucket.push(fish);
   const dexName=fish.shiny?fish.name.replace('✨ ',''):fish.name;
   const d=state.dex[dexName]||(state.dex[dexName]={n:0,best:0});
   d.n++; const isNew=d.n===1;
-  if(fish.kg>d.best){ d.best=fish.kg; if(!isNew)toast(`📏 Record ${dexName}: ${fish.kg} kg!`,'good'); }
-  if(isNew){ toast(`✨ NEW SPECIES: ${dexName}`,'gold'); addShake(0.1); }
-  if(fish.shiny){ toast('✨ SHINY! Worth 5× more','gold'); addShake(0.18); addFreeze(0.1); }
+  if(fish.kg>d.best){ d.best=fish.kg; if(!isNew)toast(`${pixSVG('trophy',13)} Record ${dexName}: ${fish.kg} kg!`,'good'); }
+  if(isNew){ toast(`✦ NEW SPECIES: ${dexName}`,'gold'); addShake(0.1); }
+  if(fish.shiny){ toast('✦ SHINY! Worth 5× more','gold'); addShake(0.18); addFreeze(0.1); }
   // rare chance the catch also snags a bottled treasure map
   if(!state.treasure&&Math.random()<0.08){ const cand=landCells.filter(c=>reachable(c[0],c[1])&&Math.hypot(c[0]-spawnCell[0],c[1]-spawnCell[1])>14);
     if(cand.length){ const c=cand[(Math.random()*cand.length)|0]; state.treasure={i:c[0],j:c[1]};
-      toast('🗺️ A bottle! X marks the spot on your map','gold'); } }
+      toast(pixSVG('map',13)+' A bottle! X marks the spot on your map','gold'); } }
   sfx.catch(); reveal(fish); }
 // rotating market demand: every 3 min one category is HOT (x1.6), one SURPLUS (x0.75)
 const MKT_CATS=['fish','wood','coal','iron','gold','diamond'];
@@ -856,38 +1166,38 @@ function renderBanner(){ const m=mktMods(), left=MKT_MS-(Date.now()%MKT_MS), mm=
     <span style="color:var(--faint)"> · rotates in ${mm}:${String(ss).padStart(2,'0')}</span>`; }
 function renderMarket(){ if(!state.bucket.length){marketList.innerHTML='<div class="empty">Your bucket is empty. Go catch something!</div>';return;}
   const pm=priceMult('fish');
-  let h=''; state.bucket.forEach((f,i)=>{h+=`<div class="fishrow"><span class="dot" style="background:${RAR[f.rar]};color:${RAR[f.rar]}"></span>
+  let h=''; state.bucket.forEach((f,i)=>{h+=`<div class="fishrow">${pixFish(RAR[f.rar],18)}
     <span class="nm">${f.name} ${f.wins?`<span class="hot">${'★'.repeat(Math.min(f.wins,5))} ×${Math.pow(2,f.wins)}</span>`:''}</span>
     <span class="rr" style="color:${RAR[f.rar]}">${f.rar}</span><span class="vv">◈ ${fmt(f.val*pm)}</span><button class="btn" data-sellone="${i}">Sell</button></div>`;});
   marketList.innerHTML=h; }
 function renderOres(){ const any=Object.values(state.ores).some(v=>v>0);
   if(!any){oreList.innerHTML='<div class="empty">No ores yet — find rocks with colored chunks and hold E.</div>';return;}
   let h=''; for(const k in ORE_INFO){ const n=state.ores[k]; if(!n)continue; const info=ORE_INFO[k];
-    h+=`<div class="fishrow"><span class="dot" style="background:${info.dot};color:${info.dot}"></span>
+    h+=`<div class="fishrow">${oreIcon(k,16)}
       <span class="nm">${info.name} <span style="color:var(--muted)">×${n}</span></span>
       <span class="vv">◈ ${fmt(info.price*n*priceMult(k))}</span><button class="btn" data-sellore="${k}">Sell all</button></div>`; }
   oreList.innerHTML=h; }
 function renderUpg(){
   const row=(kind,lvl,base,names)=>{ const nxt=lvl+1, cost=upCost(base,lvl), req=UP_REQ[nxt];
-    if(lvl>=MAXLVL)return `<div class="fishrow"><span class="nm">${kind==='rod'?'🎣':'⛏️'} ${names[lvl]} <span style="color:var(--teal)">Lv.${lvl}</span></span><span class="rr" style="color:var(--gold)">MAX</span></div>`;
+    if(lvl>=MAXLVL)return `<div class="fishrow"><span class="nm">${pixSVG(kind==='rod'?'rod':'pick',14)} ${names[lvl]} <span style="color:var(--teal)">Lv.${lvl}</span></span><span class="rr" style="color:var(--gold)">MAX</span></div>`;
     const can=state.coins>=cost&&haveOres(req);
-    return `<div class="fishrow"><span class="nm">${kind==='rod'?'🎣':'⛏️'} ${names[lvl]} <span style="color:var(--teal)">Lv.${lvl}</span>
+    return `<div class="fishrow"><span class="nm">${pixSVG(kind==='rod'?'rod':'pick',14)} ${names[lvl]} <span style="color:var(--teal)">Lv.${lvl}</span>
         <span style="color:var(--faint);font-size:11px">→ ${names[nxt]} · needs ${reqLabel(req)}</span></span>
       <span class="vv">◈ ${fmt(cost)}</span><button class="btn gold" data-buy="${kind}" ${can?'':'disabled'}>Craft</button></div>`; };
   upgList.innerHTML=row('rod',state.rodLvl,ROD_BASE,ROD_NAMES)+row('pick',state.pickLvl,PICK_BASE,PICK_NAMES)+renderWorldRows(); }
 function renderWorldRows(){
-  let h='<div class="seclab" style="margin-top:14px">⛵ Harbor — sail to another island</div>';
+  let h='<div class="seclab" style="margin-top:14px">'+pixSVG('boat',12)+' Harbor — sail to another island</div>';
   for(const k of WORLD_ORDER){ const w=WORLDS[k];
-    if(k===worldKey){ h+=`<div class="fishrow"><span class="nm">🏝️ ${w.name} <span style="color:var(--faint)">${w.sub}</span></span><span class="rr" style="color:var(--teal)">YOU ARE HERE</span></div>`; }
-    else if(state.worlds.includes(k)){ h+=`<div class="fishrow"><span class="nm">🏝️ ${w.name} <span style="color:var(--faint)">${w.sub}</span></span><button class="btn" data-world="${k}">SAIL</button></div>`; }
-    else { h+=`<div class="fishrow"><span class="nm">🔒 ${w.name} <span style="color:var(--faint)">${w.sub}</span></span><span class="vv">◈ ${fmt(w.cost)}</span><button class="btn gold" data-world="${k}" ${state.coins<w.cost?'disabled':''}>Unlock</button></div>`; } }
+    if(k===worldKey){ h+=`<div class="fishrow"><span class="nm">${pixSVG('island',15)} ${w.name} <span style="color:var(--faint)">${w.sub}</span></span><span class="rr" style="color:var(--teal)">YOU ARE HERE</span></div>`; }
+    else if(state.worlds.includes(k)){ h+=`<div class="fishrow"><span class="nm">${pixSVG('island',15)} ${w.name} <span style="color:var(--faint)">${w.sub}</span></span><button class="btn" data-world="${k}">SAIL</button></div>`; }
+    else { h+=`<div class="fishrow"><span class="nm">${pixSVG('lock',15)} ${w.name} <span style="color:var(--faint)">${w.sub}</span></span><span class="vv">◈ ${fmt(w.cost)}</span><button class="btn gold" data-world="${k}" ${state.coins<w.cost?'disabled':''}>Unlock</button></div>`; } }
   return h; }
 function buyOrSail(k){ const w=WORLDS[k]; if(!w||k===worldKey)return;
   if(!state.worlds.includes(k)){ if(state.coins<w.cost)return;
     state.coins-=w.cost; state.worlds.push(k); sfx.win(); addShake(0.1);
-    toast('🗺️ '+w.name+' unlocked!','gold'); updateHUD(); renderUpg(); save(); return; }
+    toast(pixSVG('island',13)+' '+w.name+' unlocked!','gold'); updateHUD(); renderUpg(); save(); return; }
   save(); try{localStorage.setItem('reelfortune3d-world',k);}catch(e){}
-  toast('⛵ Sailing to '+w.name+'…','good');
+  toast(pixSVG('boat',13)+' Sailing to '+w.name+'…','good');
   setTimeout(()=>location.reload(),600); }
 function openMarket(){marketOpen=true;marketEl.classList.add('on');renderBanner();renderMarket();renderOres();renderUpg();}
 function closeMarket(){marketOpen=false;marketEl.classList.remove('on');save();}
@@ -911,7 +1221,7 @@ marketEl.addEventListener('click',e=>{
       const cost=upCost(base,lvl),req=UP_REQ[lvl+1];
       if(state.coins<cost||!haveOres(req))return;
       state.coins-=cost; for(const k in req)state.ores[k]-=req[k];
-      state[lvlKey]=lvl+1; sfx.ore(); addShake(0.1); toast('⚒️ '+names[lvl+1]+' crafted!','gold'); };
+      state[lvlKey]=lvl+1; sfx.ore(); addShake(0.1); toast(pixSVG(lvlKey==='rodLvl'?'rod':'pick',13)+' '+names[lvl+1]+' crafted!','gold'); };
     if(kind==='rod')doCraft('rodLvl',ROD_BASE,ROD_NAMES);
     else if(kind==='pick')doCraft('pickLvl',PICK_BASE,PICK_NAMES);
     updateHUD();renderOres();renderUpg();save(); return;}
@@ -926,7 +1236,7 @@ let casinoOpen=false,stakeIdx=-1,betColor=null,spinning=false;
 const casinoEl=document.getElementById('casino'),stakeListEl=document.getElementById('stakeList'),
   spinBtn=document.getElementById('spinBtn'),spinResult=document.getElementById('spinResult');
 function renderStakes(){ if(!state.bucket.length){stakeListEl.innerHTML='<div class="empty" style="padding:8px">No fish to stake — go fishing first.</div>';return;}
-  let h=''; state.bucket.forEach((f,i)=>{h+=`<div class="stake${i===stakeIdx?' sel':''}" data-stake="${i}"><span class="dot" style="background:${RAR[f.rar]};color:${RAR[f.rar]}"></span>
+  let h=''; state.bucket.forEach((f,i)=>{h+=`<div class="stake${i===stakeIdx?' sel':''}" data-stake="${i}">${pixFish(RAR[f.rar],16)}
     <span class="nm">${f.name}${f.wins?` <span style="color:var(--rose)">★${f.wins}</span>`:''}</span><span class="vv">◈ ${fmt(f.val)}</span></div>`;});
   stakeListEl.innerHTML=h; }
 function updateSpinBtn(){spinBtn.disabled=!(stakeIdx>=0&&betColor&&!spinning&&state.bucket[stakeIdx]);}
@@ -997,7 +1307,7 @@ function updateFishing(dt){ const f=fishing;
   else if(f.state==='wait'){ f.t+=dt; bobber.position.y=WATER_TOP+0.1+Math.sin(clock*3)*0.05; hint('Waiting for a bite… <span class="key">ESC</span> reel in');
     if(f.t>=f.biteAt){f.state='bite';f.t=0;sfx.bite();
       fxBurst(bobber.position.x,WATER_TOP+0.15,bobber.position.z,{n:6,cols:[0x7fdcff,0xffffff],speed:1.6,up:2.2,size:0.8,grav:7});} }
-  else if(f.state==='bite'){ f.t+=dt; bobber.position.y=WATER_TOP+0.05+Math.sin(clock*22)*0.14; hint('❗ <b>BITE!</b> press <span class="key">E</span> now!');
+  else if(f.state==='bite'){ f.t+=dt; bobber.position.y=WATER_TOP+0.05+Math.sin(clock*22)*0.14; hint('<b style="color:var(--rose)">!</b> <b>BITE!</b> press <span class="key">E</span> now!');
     if(actEdge){f.state='reel';f.reel=0;f.reelT=0;} else if(f.t>0.85){cancelFish();sfx.miss();toast('It got away…');} }
   else if(f.state==='reel'){ f.reelT+=dt; if(keys.act){f.reel+=dt*0.75;if(Math.random()<0.08)sfx.reel();} else f.reel-=dt*0.28; f.reel=clamp(f.reel,0,1);
     bobber.position.y=WATER_TOP+0.1+f.reel*0.3; hint('Reel it in! hold <span class="key">E</span>');
@@ -1030,7 +1340,7 @@ function updateMining(dt){ const n=mining.node;
   else { mining.t-=dt*0.6; if(mining.t<=0){ n.mesh.scale.setScalar(1); cancelMine(); return; } }
   mining.t=clamp(mining.t,0,mining.dur);
   const p=mining.t/mining.dur,k=Math.floor(p*8);
-  hint(`⛏ Mining ${ORE_INFO[n.type].name}… <b>${'▰'.repeat(k)+'▱'.repeat(8-k)}</b> hold <span class="key">E</span>`);
+  hint(`${pixSVG('pick',13)} Mining ${ORE_INFO[n.type].name}… <b>${'▰'.repeat(k)+'▱'.repeat(8-k)}</b> hold <span class="key">E</span>`);
   if(mining.t>=mining.dur){ n.mesh.scale.setScalar(1);
     const bonus=Math.random()<Math.min(0.85,0.15+0.08*(state.pickLvl-1))?1:0,
       got=(1+bonus+(state.pickLvl>=6&&Math.random()<0.2?1:0))*(WORLD.oreYield||1);
@@ -1059,7 +1369,7 @@ function updateChopping(dt){ const t=chopping.tree;
   else { chopping.t-=dt*0.6; if(chopping.t<=0){cancelChop();return;} }
   chopping.t=clamp(chopping.t,0,chopping.dur);
   const p=chopping.t/chopping.dur,k=Math.floor(p*8);
-  hint(`🪓 Chopping… <b>${'▰'.repeat(k)+'▱'.repeat(8-k)}</b> hold <span class="key">E</span>`);
+  hint(`${pixSVG('axe',13)} Chopping… <b>${'▰'.repeat(k)+'▱'.repeat(8-k)}</b> hold <span class="key">E</span>`);
   if(chopping.t>=chopping.dur){
     const got=1+(Math.random()<0.45?1:0);
     state.ores.wood+=got; state.stats.mined+=got;
@@ -1082,19 +1392,19 @@ function updateDigging(dt){
   if(keys.act)digging.t+=dt; else { digging.t-=dt*0.6; if(digging.t<=0){digging.active=false;hint('');return;} }
   digging.t=clamp(digging.t,0,digging.dur);
   const p=digging.t/digging.dur,k=Math.floor(p*8);
-  hint(`🗺️ Digging… <b>${'▰'.repeat(k)+'▱'.repeat(8-k)}</b> hold <span class="key">E</span>`);
+  hint(`${pixSVG('map',13)} Digging… <b>${'▰'.repeat(k)+'▱'.repeat(8-k)}</b> hold <span class="key">E</span>`);
   if(Math.random()<0.1){ sfx.pick(); fxBurst(pWorld.x,pWorld.y+0.3,pWorld.z,{n:3,cols:[0x8a5a34,0x9a683e],speed:2,up:2.4,size:0.8}); }
   if(digging.t>=digging.dur){ digging.active=false; state.treasure=null;
     addShake(0.25); addFreeze(0.08);
     fxBurst(pWorld.x,pWorld.y+0.5,pWorld.z,{n:20,cols:[0xffd24f,0xffefb0,0x8a5a34],speed:3.4,up:4.5,size:1.1});
     const r=Math.random();
     if(r<0.55){ const g=Math.round(rand(150,600)*(1+0.12*(state.rodLvl+state.pickLvl)));
-      state.coins+=g; state.stats.earned+=g; coinFly(g); sfx.win(); toast('💰 Buried treasure! +'+fmt(g)+' coins','gold'); }
+      state.coins+=g; state.stats.earned+=g; coinFly(g); sfx.win(); toast(pixSVG('map',13)+' Buried treasure! +'+fmt(g)+' coins','gold'); }
     else if(r<0.85){ const ks=['iron','gold','gold','diamond'],k2=ks[(Math.random()*ks.length)|0],n2=2+((Math.random()*4)|0);
-      state.ores[k2]+=n2; state.stats.mined+=n2; sfx.ore(); toast(`⛏️ Treasure! +${n2} ${ORE_INFO[k2].name}`,'gold'); }
+      state.ores[k2]+=n2; state.stats.mined+=n2; sfx.ore(); toast(`${pixSVG('pick',13)} Treasure! +${n2} ${ORE_INFO[k2].name}`,'gold'); }
     else if(state.bucket.length<CAP){ let f=null; for(let k3=0;k3<25;k3++){ f=rollOnce(); if(RORDER[f.rar]>=2)break; }
-      onCatch(f); toast('🐟 A rare fish was buried here?!','gold'); }
-    else { const g=300; state.coins+=g; state.stats.earned+=g; coinFly(g); toast('💰 +'+fmt(g)+' coins','gold'); }
+      onCatch(f); toast(pixSVG('fish',13)+' A rare fish was buried here?!','gold'); }
+    else { const g=300; state.coins+=g; state.stats.earned+=g; coinFly(g); toast('◈ +'+fmt(g)+' coins','gold'); }
     hint(''); updateHUD(); save(); } }
 
 /* ========================================================================
@@ -1113,37 +1423,37 @@ function renderInv(){
   const rodNext=state.rodLvl<MAXLVL?`next ◈${fmt(upCost(ROD_BASE,state.rodLvl))} + ${reqLabel(UP_REQ[state.rodLvl+1])}`:'MAX';
   const pickNext=state.pickLvl<MAXLVL?`next ◈${fmt(upCost(PICK_BASE,state.pickLvl))} + ${reqLabel(UP_REQ[state.pickLvl+1])}`:'MAX';
   invTools.innerHTML=
-    `<div class="fishrow"><span class="nm">🎣 ${ROD_NAMES[state.rodLvl]} <span style="color:var(--teal)">Lv.${state.rodLvl}</span></span>
+    `<div class="fishrow"><span class="nm">${pixSVG('rod',15)} ${ROD_NAMES[state.rodLvl]} <span style="color:var(--teal)">Lv.${state.rodLvl}</span></span>
       <span class="rr" style="color:var(--muted)">${rodNext}</span></div>
-    <div class="fishrow"><span class="nm">⛏️ ${PICK_NAMES[state.pickLvl]} <span style="color:var(--teal)">Lv.${state.pickLvl}</span></span>
+    <div class="fishrow"><span class="nm">${pixSVG('pick',15)} ${PICK_NAMES[state.pickLvl]} <span style="color:var(--teal)">Lv.${state.pickLvl}</span></span>
       <span class="rr" style="color:var(--muted)">${pickNext}</span></div>`;
   if(!state.bucket.length)invFish.innerHTML='<div class="empty">Bucket empty — go fishing!</div>';
   else{ let h='<div class="invgrid">';
-    state.bucket.forEach(f=>{h+=`<div class="invcard" style="border-color:${RAR[f.rar]}55"><span class="dot" style="background:${RAR[f.rar]};color:${RAR[f.rar]}"></span>
+    state.bucket.forEach(f=>{h+=`<div class="invcard" style="border-color:${RAR[f.rar]}55">${pixFish(RAR[f.rar],15)}
       <div class="inm">${f.name}<span style="color:var(--faint);font-size:10px"> ${f.kg||'?'} kg</span></div><div class="ivv">◈ ${fmt(f.val)}${f.wins?` <span style="color:var(--rose)">★${f.wins}</span>`:''}</div></div>`;});
     invFish.innerHTML=h+'</div>'; }
   // Fishdex — every species across conditions, ??? until first caught
   { const seen=Object.keys(state.dex).length, total=TABLE.length;
     let h=`<div class="seclab" style="margin-top:2px">Fishdex · ${seen}/${total}</div><div class="invgrid">`;
     for(const e of TABLE){ const t=e[0],d=state.dex[t.name];
-      if(d) h+=`<div class="invcard" style="border-color:${RAR[t.rar]}55"><span class="dot" style="background:${RAR[t.rar]};color:${RAR[t.rar]}"></span>
-        <div class="inm">${t.name}${e[2]?` <span style="color:var(--faint);font-size:9px">${e[2]==='night'?'🌙':e[2]==='storm'?'⛈':'🌧'}</span>`:''}<span style="color:var(--faint);font-size:10px"> ×${d.n}</span></div>
+      if(d) h+=`<div class="invcard" style="border-color:${RAR[t.rar]}55">${pixFish(RAR[t.rar],15)}
+        <div class="inm">${t.name}${e[2]?` <span style="color:var(--faint);font-size:9px">${pixSVG(e[2]==='night'?'moon':e[2]==='storm'?'storm':'rain',10)}</span>`:''}<span style="color:var(--faint);font-size:10px"> ×${d.n}</span></div>
         <div class="ivv" style="color:var(--teal)">${d.best} kg</div></div>`;
-      else h+=`<div class="invcard" style="opacity:.45"><span class="dot" style="background:#3a4a50"></span>
-        <div class="inm" style="color:var(--faint)">???${e[2]?` <span style="font-size:9px">${e[2]==='night'?'🌙':e[2]==='storm'?'⛈':'🌧'}</span>`:''}</div><div class="ivv" style="color:var(--faint)">—</div></div>`; }
+      else h+=`<div class="invcard" style="opacity:.45">${pixFish('#3a4a50',15)}
+        <div class="inm" style="color:var(--faint)">???${e[2]?` <span style="font-size:9px">${pixSVG(e[2]==='night'?'moon':e[2]==='storm'?'storm':'rain',10)}</span>`:''}</div><div class="ivv" style="color:var(--faint)">—</div></div>`; }
     invDex.innerHTML=h+'</div>'; }
   let oh=''; for(const k in ORE_INFO){ const info=ORE_INFO[k];
-    oh+=`<div class="fishrow"><span class="dot" style="background:${info.dot};color:${info.dot}"></span>
+    oh+=`<div class="fishrow">${oreIcon(k,16)}
       <span class="nm">${info.name}</span><span class="rr" style="color:var(--muted)">×${state.ores[k]}</span>
       <span class="vv">◈ ${fmt(info.price*priceMult(k))}/ea</span></div>`; }
   invOres.innerHTML=oh;
   const st=state.stats, wl=st.spins?` (${st.winsCt}W · ${st.losses}L)`:'';
   invStats.innerHTML=
-    `<div class="statrow"><span>🐟 Fish caught</span><b>${fmt(st.caught)}</b></div>
-     <div class="statrow"><span>⛏️ Ores mined</span><b>${fmt(st.mined)}</b></div>
+    `<div class="statrow"><span>${pixSVG('fish',14)} Fish caught</span><b>${fmt(st.caught)}</b></div>
+     <div class="statrow"><span>${pixSVG('pick',14)} Ores mined</span><b>${fmt(st.mined)}</b></div>
      <div class="statrow"><span>◈ Coins earned</span><b>${fmt(st.earned)}</b></div>
-     <div class="statrow"><span>🎰 Roulette spins</span><b>${fmt(st.spins)}${wl}</b></div>
-     <div class="statrow"><span>🏆 Biggest win</span><b>◈ ${fmt(st.bestWin)}</b></div>`;
+     <div class="statrow"><span>${pixSVG('wheel',14)} Roulette spins</span><b>${fmt(st.spins)}${wl}</b></div>
+     <div class="statrow"><span>${pixSVG('trophy',14)} Biggest win</span><b>◈ ${fmt(st.bestWin)}</b></div>`;
 }
 function openInv(){ if(marketOpen||casinoOpen)return; invOpen=true; invEl.classList.add('on'); renderInv(); }
 function closeInv(){ invOpen=false; invEl.classList.remove('on'); }
@@ -1177,9 +1487,9 @@ function skyUpdate(dt){
   wTimer-=dt;
   if(wTimer<=0){ const r=Math.random(), prev=wState;
     wState=r<0.55?'clear':r<0.88?'rain':'storm'; wTimer=rand(70,160);
-    if(running&&wState!==prev){ if(wState==='rain')toast('🌧 Rain — fish bite faster!','good');
-      else if(wState==='storm')toast('⛈ STORM — rare fish stir…','gold');
-      else toast('☀️ Skies clear'); } }
+    if(running&&wState!==prev){ if(wState==='rain')toast(pixSVG('rain',13)+' Rain — fish bite faster!','good');
+      else if(wState==='storm')toast(pixSVG('storm',13)+' STORM — rare fish stir…','gold');
+      else toast(pixSVG('sun',13)+' Skies clear'); } }
   if(wState==='storm'&&Math.random()<dt*0.22){ flashT=0.12;
     setTimeout(()=>beep(58,0.4,'sawtooth',0.07),rand(150,500)); }
   rainMesh.visible=wet;
@@ -1200,10 +1510,12 @@ function rainUpdate(dt){ if(!rainMesh.visible)return;
   rainMesh.instanceMatrix.needsUpdate=true; }
 // HUD time/weather chip
 const timeIco=document.getElementById('timeIco'),wIco=document.getElementById('wIco');
-let chipT=0;
+let chipT=0,chipKey='';
 function chipUpdate(){ if(!timeIco)return;
-  timeIco.textContent=isNight()?'🌙':(dayT>0.6&&dayT<0.76)||(dayT>0.06&&dayT<0.2)?'🌆':'☀️';
-  wIco.textContent=wState==='storm'?'⛈':wState==='rain'?'🌧':''; }
+  const t=isNight()?'moon':(dayT>0.6&&dayT<0.76)||(dayT>0.06&&dayT<0.2)?'dusk':'sun';
+  const w=wState==='storm'?'storm':wState==='rain'?'rain':'';
+  const key=t+'|'+w; if(key===chipKey)return; chipKey=key;
+  timeIco.innerHTML=pixSVG(t,14); wIco.innerHTML=w?pixSVG(w,14):''; }
 
 /* ========================================================================
    15. MOVEMENT / INTERACTIONS / LOOP
@@ -1232,9 +1544,9 @@ function interactions(){
   const w=nearestWater(), canFish=w&&w.dist<2.4;
   if(dT<2.6){ hint('<span class="key">E</span> Trade at the Market'); if(actEdge){initAudio();openMarket();} }
   else if(dC<2.8){ hint('<span class="key">E</span> Enter the Spinning Eel'); if(actEdge){initAudio();openCasino();} }
-  else if(treasureDist()<1.8){ hint('🗺️ <span class="key">E</span> Dig here!'); if(actEdge){initAudio();digging.active=true;digging.t=0;} }
+  else if(treasureDist()<1.8){ hint(pixSVG('map',13)+' <span class="key">E</span> Dig here!'); if(actEdge){initAudio();digging.active=true;digging.t=0;} }
   else if(ore){ hint(`<span class="key">E</span> Mine ${ORE_INFO[ore.type].name}`); if(actEdge)startMine(ore); }
-  else if((tree=nearestTree())){ hint('🪓 <span class="key">E</span> Chop wood'); if(actEdge){initAudio();chopping.tree=tree;chopping.t=0;} }
+  else if((tree=nearestTree())){ hint(pixSVG('axe',13)+' <span class="key">E</span> Chop wood'); if(actEdge){initAudio();chopping.tree=tree;chopping.t=0;} }
   else if(canFish){ if(state.bucket.length>=CAP)hint('Bucket full — sell at the Trader'); else { hint('<span class="key">E</span> Cast your line'); if(actEdge)startCast(w); } }
   else hint('');
 }
@@ -1243,8 +1555,16 @@ function biomeCheck(){ const t=cellType(heightAt(pWorld.x,pWorld.z));
   if(t!==lastBiome){ lastBiome=t;
     if(t==='stone')setArea('The Quarry','hold E on ore to mine');
     else if(t==='sand')setArea('Shoreline','cast your line'); } }
+// smoothed camera state — the view flies between follow-cam and the casino table
+const CAS_CAM_OFF=new THREE.Vector3(6.5,9.2,6.5);          // steeper angle: look down onto the wheel face
+const CAS_SHIFT=new THREE.Vector3(0.78,0,-0.78);           // nudge the table left of center, clear of the bet panel
+const vTargP=new THREE.Vector3(),vTargL=new THREE.Vector3();
+const vPos=new THREE.Vector3(pWorld.x+CAM_OFF.x,pWorld.y+CAM_OFF.y,pWorld.z+CAM_OFF.z),
+      vLook=new THREE.Vector3(pWorld.x,pWorld.y+1,pWorld.z);
+let vSize=camSize;
 function animate(now){
   let dt=Math.min(0.033,(now-last)/1000||0); last=now;
+  const rdt=dt; // real dt — camera easing/shake keep moving through hit-stop
   if(freezeT>0){freezeT-=dt;dt*=0.08;} // hit-stop: world slows for a beat
   clock+=dt;
   if(running){
@@ -1257,6 +1577,7 @@ function animate(now){
     const moving=(keys.up||keys.down||keys.left||keys.right)&&fishing.state==='idle'&&!overlay&&!mining.node&&!chopping.tree;
     const sw=moving?Math.sin(pWorld.step)*0.5:0, pd=player.userData;
     if(pd.legL){pd.legL.rotation.x=sw;pd.legR.rotation.x=-sw;pd.armL.rotation.x=-sw*0.7;pd.armR.rotation.x=sw*0.7;}
+    if(pd.scarfTail)pd.scarfTail.rotation.x=0.25+Math.sin(clock*3.2)*0.12+(moving?0.35:0);
     // activity animations: the right arm acts, tools appear in hand
     const act=fishing.state!=='idle'?'fish':mining.node?'mine':chopping.tree?'chop':digging.active?'dig':'';
     if(act==='fish'){ const f=fishing;
@@ -1317,7 +1638,7 @@ addEventListener('resize',()=>{ renderer.setSize(window.innerWidth,window.innerH
 const startOv=document.getElementById('start');
 function start(){ initAudio(); if(AC&&AC.state==='suspended')AC.resume();
   startOv.classList.remove('on'); running=true; updateHUD(); setArea(WORLD.name,WORLD.sub);
-  if(state.stats.caught===0&&state.stats.mined===0)toast('🏝️ Welcome to '+WORLD.name+'! Walk through the gate','gold'); }
+  if(state.stats.caught===0&&state.stats.mined===0)toast(pixSVG('island',13)+' Welcome to '+WORLD.name+'! Walk through the gate','gold'); }
 document.getElementById('startBtn').onclick=start;
 
 // idle preview loop: the island is already alive behind the start menu
