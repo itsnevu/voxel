@@ -196,6 +196,27 @@ for(let i=0;i<N;i++){ heightMap[i]=[];
     const fall=clamp(1-Math.pow(d,2.5)*1.02,0,1); heightMap[i][j]=Math.min(13,Math.round(n*fall*10*WORLD.hMul));
   } }
 
+/* Cinder Atoll gets an ACTUAL volcano: a cone rising to the height cap with a
+   sunken crater full of lava. Pure math over the deterministic heightmap, so
+   every client builds the identical mountain. The crater floor sits 3 below the
+   rim — unreachable on foot, so you admire the lava from the edge. */
+let CRATER=null;
+if(worldKey==='volcano'){
+  let ci=HALF,cj=HALF,pk=-1;
+  for(let i=22;i<N-22;i++)for(let j=22;j<N-22;j++)
+    if(heightMap[i][j]>pk){pk=heightMap[i][j];ci=i;cj=j;}
+  const R=11, RIM=13, FLOOR=10;
+  for(let i=ci-R;i<=ci+R;i++)for(let j=cj-R;j<=cj+R;j++){
+    if(i<1||j<1||i>=N-1||j>=N-1)continue;
+    const d=Math.hypot(i-ci,j-cj);
+    if(d>R)continue;
+    if(d<=2.2)heightMap[i][j]=FLOOR;                       // crater floor — the lava lake bed
+    else if(d<=3.2)heightMap[i][j]=RIM;                    // the rim ring
+    else heightMap[i][j]=Math.max(heightMap[i][j],Math.min(13,Math.round(RIM-(d-3.2)*1.05))); // ~1-step slope
+  }
+  CRATER={i:ci,j:cj,floor:FLOOR,rim:RIM};
+}
+
 function cellIndex(x,z){ return [clamp(Math.round(x+HALF),0,N-1),clamp(Math.round(z+HALF),0,N-1)]; }
 function heightAt(x,z){ const [i,j]=cellIndex(x,z); return heightMap[i][j]; }
 function isWaterAt(x,z){ return heightAt(x,z)<=2; }
@@ -235,6 +256,8 @@ const reachable=(i,j)=>cameFrom[i*N+j]!==-2;
 
 // landmark cells
 const usedCells=new Set(); const keyOf=(i,j)=>i+'_'+j;
+// every built structure, so a close-up camera can see what heightAt() cannot: {x,z,r,h,g}
+const PROPS=[];
 function findCellNear(cx,cj,minR,maxR,extra){ let cand=null,bd=1e9;
   for(let i=0;i<N;i++)for(let j=0;j<N;j++){ const h=heightMap[i][j];
     if(h<4||h>=WORLD.stoneH||usedCells.has(keyOf(i,j))||!reachable(i,j))continue;
@@ -546,6 +569,7 @@ function makeLabel(text,color,reg){ const c=px(256); c.height=64; const x=c.getC
 const trader=humanoid({shirt:0x7a4a2a,pants:0x3a2c1c,hat:0xcaa15a,skin:0xe8bd8f});
 const tX=traderCell[0]-HALF, tY=heightMap[traderCell[0]][traderCell[1]], tZ=traderCell[1]-HALF;
 trader.position.set(tX,tY,tZ); scene.add(trader);
+PROPS.push({x:tX,z:tZ,r:2.9,h:tY+3.7,g:null});
 { const stall=new THREE.Group();
   for(const [px2,pz2] of [[-1.45,-1.1],[1.45,-1.1],[-1.45,1.1],[1.45,1.1]]){
     const post=texturedBox(0.2,2.5,0.2,TEX.bark); post.position.set(px2,1.25,pz2); post.castShadow=true; stall.add(post); }
@@ -609,6 +633,7 @@ for(let i=0;i<NSEG;i++){ const w=new THREE.Mesh(wedgeGeo(WR,i*SEGA,SEGA,0.14),ne
 const ball=new THREE.Mesh(new THREE.SphereGeometry(0.09,12,10),new THREE.MeshLambertMaterial({color:0xf4f6f0,emissive:0x50524e,emissiveIntensity:0.35}));
 ball.castShadow=true; tableG.add(ball);
 casino.position.set(casinoCell[0]-HALF,heightMap[casinoCell[0]][casinoCell[1]],casinoCell[1]-HALF); scene.add(casino);
+PROPS.push({x:casino.position.x,z:casino.position.z,r:2.9,h:casino.position.y+3.2,g:casino});
 const casinoLabel=makeLabel('CASINO','#ff5d7a'); casinoLabel.position.copy(casino.position).add(new THREE.Vector3(0,3.9,0)); scene.add(casinoLabel);
 const CASINO_POS=casino.position.clone();
 const WHEEL_CENTER=casino.position.clone().add(new THREE.Vector3(0,1.7,0));
@@ -694,7 +719,8 @@ function updateWinFx(dt,rdt){
   const beam2=texturedBox(3.6,0.34,0.6,TEX.wood); beam2.position.y=3.82; beam2.castShadow=true; gate.add(beam2);
   const banner=makeLabel(WORLD.name.toUpperCase(),'#7fdcff');
   banner.position.set(0,2.55,0); banner.scale.set(3.1,0.78,1); gate.add(banner);
-  gate.position.set(gx,gy,gz); gate.rotation.y=Math.atan2(ux,uz); scene.add(gate); }
+  gate.position.set(gx,gy,gz); gate.rotation.y=Math.atan2(ux,uz); scene.add(gate);
+  PROPS.push({x:gx,z:gz,r:3.4,h:gy+4.4,g:gate}); }
 
 // --- island portal: an obsidian arch with a swirling rift — step through to hop isles ---
 let PORTAL_POS=null,portalSwirl=null,portalCore=null; const portalBits=[];
@@ -720,6 +746,7 @@ if(portalCell){
     new THREE.MeshLambertMaterial({color:0xc9a5ff,emissive:0x9a5cff,emissiveIntensity:0.9}));
     b.userData={ph:k/7*TAU,r:rand(1.0,1.5),sp:rand(0.5,1.2)}; p.add(b); portalBits.push(b); }
   p.position.set(portalCell[0]-HALF,portalCell[2],portalCell[1]-HALF); p.rotation.y=Math.PI/4; scene.add(p);
+  PROPS.push({x:p.position.x,z:p.position.z,r:2.5,h:p.position.y+5.2,g:p});
   PORTAL_POS=p.position.clone();
   const pl=makeLabel('PORTAL','#c490ff'); pl.position.copy(PORTAL_POS).add(new THREE.Vector3(0,4.5,0)); scene.add(pl); }
 
@@ -1006,6 +1033,90 @@ if(mineCell){
     const head=new THREE.Mesh(new THREE.BoxGeometry(0.36,0.12,0.12),steel); head.position.set(0.3,0.78,0.2); c.add(head);
     c.position.set(i-HALF,h,j-HALF); scene.add(c); } }
 
+/* ========================================================================
+   WORLD SET PIECES — each isle's signature landmark, built deterministically
+   ======================================================================== */
+let lavaMat=null,emberMesh=null; const embers=[];
+if(worldKey==='volcano'&&CRATER){
+  const cx=CRATER.i-HALF, cz=CRATER.j-HALF, fy=CRATER.floor;
+  // the lava lake: a fat emissive slab pulsing in the crater, plus a drifting crust plate
+  lavaMat=new THREE.MeshLambertMaterial({color:0xff7a1a,emissive:0xff5200,emissiveIntensity:0.95});
+  const lava=new THREE.Mesh(new THREE.BoxGeometry(4.6,0.5,4.6),lavaMat);
+  lava.position.set(cx,fy+0.35,cz); scene.add(lava);
+  const crust=new THREE.Mesh(new THREE.BoxGeometry(1.5,0.56,1.1),new THREE.MeshLambertMaterial({color:0x2a2220}));
+  crust.position.set(cx+rand(-0.7,0.7),fy+0.4,cz+rand(-0.7,0.7)); crust.rotation.y=rand(0,TAU); scene.add(crust);
+  const glow=new THREE.PointLight(0xff6a20,1.5,28,2); glow.position.set(cx,fy+3.5,cz); scene.add(glow);
+  // embers riding the thermals out of the crater (animated in the main loop)
+  emberMesh=new THREE.InstancedMesh(boxGeo,
+    new THREE.MeshLambertMaterial({color:0xff9a3a,emissive:0xff7a20,emissiveIntensity:1}),36);
+  emberMesh.frustumCulled=false; emberMesh.castShadow=false; scene.add(emberMesh);
+  for(let k=0;k<36;k++)embers.push({x:cx+rand(-1.8,1.8),z:cz+rand(-1.8,1.8),y:fy+rand(0,7),v:rand(0.7,1.7),ph:rand(0,TAU),s:rand(0.06,0.13)});
+  // jagged obsidian shards crowning the rim
+  const obsM=new THREE.MeshLambertMaterial({color:0x17141a});
+  for(let k=0;k<9;k++){ const a=k/9*TAU+rand(-0.2,0.2);
+    const sh=new THREE.Mesh(new THREE.BoxGeometry(rand(0.2,0.36),rand(0.6,1.4),rand(0.2,0.36)),obsM);
+    sh.position.set(cx+Math.cos(a)*2.7,CRATER.rim+0.45,cz+Math.sin(a)*2.7);
+    sh.rotation.set(rand(-0.25,0.25),a,rand(-0.25,0.25)); sh.castShadow=true; scene.add(sh); }
+  // a couple of steaming surface vents on the lower slopes
+  for(let k=0;k<3;k++){ const a=rand(0,TAU),r2=rand(5,8);
+    const vi=Math.round(CRATER.i+Math.cos(a)*r2), vj=Math.round(CRATER.j+Math.sin(a)*r2);
+    if(vi<1||vj<1||vi>=N-1||vj>=N-1)continue;
+    const vent=new THREE.Mesh(new THREE.BoxGeometry(0.5,0.3,0.5),
+      new THREE.MeshLambertMaterial({color:0x3a2a24,emissive:0xff5200,emissiveIntensity:0.45}));
+    vent.position.set(vi-HALF,heightMap[vi][vj]+0.15,vj-HALF); scene.add(vent); lamps.push(vent); }
+}
+if(worldKey==='frost'){
+  const bergM=new THREE.MeshLambertMaterial({color:0xeef8fd});
+  const iceM=new THREE.MeshLambertMaterial({color:0xdff2fa,transparent:true,opacity:0.85});
+  // icebergs drifting offshore
+  let placed=0,guard=0;
+  while(placed<6&&guard++<500){
+    const i=2+((Math.random()*(N-4))|0), j=2+((Math.random()*(N-4))|0);
+    if(heightMap[i][j]>1)continue; const d=Math.hypot(i-HALF,j-HALF); if(d<30||d>44)continue;
+    const g=new THREE.Group(), s=rand(1.3,2.7);
+    const a=new THREE.Mesh(new THREE.BoxGeometry(s,rand(0.9,1.8),s*rand(0.7,1)),bergM);
+    a.position.y=WATER_TOP+0.25; a.castShadow=true; g.add(a);
+    const b=new THREE.Mesh(new THREE.BoxGeometry(s*0.55,rand(0.8,1.7),s*0.5),bergM);
+    b.position.set(rand(-0.4,0.4),WATER_TOP+1,rand(-0.3,0.3)); b.castShadow=true; g.add(b);
+    g.position.set(i-HALF,0,j-HALF); g.rotation.y=rand(0,TAU); scene.add(g); placed++; }
+  // thin ice floes hugging the shoreline
+  placed=0; guard=0;
+  while(placed<12&&guard++<700){
+    const i=2+((Math.random()*(N-4))|0), j=2+((Math.random()*(N-4))|0);
+    if(heightMap[i][j]>2)continue;
+    let shore=false; for(const [di,dj] of [[1,0],[-1,0],[0,1],[0,-1]]) if(heightMap[i+di][j+dj]>=3)shore=true;
+    if(!shore)continue;
+    const f=new THREE.Mesh(new THREE.BoxGeometry(rand(1.1,1.9),0.14,rand(1.1,1.9)),iceM);
+    f.position.set(i-HALF+rand(-0.2,0.2),WATER_TOP+0.08,j-HALF+rand(-0.2,0.2));
+    f.rotation.y=rand(0,TAU); scene.add(f); placed++; }
+  // a snowman greeting new arrivals near the spawn gate
+  { let si=-1,sj=-1;
+    for(const [i,j,h] of grassCells){ const d=Math.hypot(i-spawnCell[0],j-spawnCell[1]);
+      if(d>3&&d<8&&decorOK(i,j,1.6)){ si=i; sj=j; break; } }
+    if(si>=0){ decorUsed.add(keyOf(si,sj));
+      const g=new THREE.Group(), sm=new THREE.MeshLambertMaterial({color:0xf7fcff});
+      const b1=new THREE.Mesh(new THREE.BoxGeometry(0.9,0.8,0.9),sm); b1.position.y=0.4;
+      const b2=new THREE.Mesh(new THREE.BoxGeometry(0.68,0.62,0.68),sm); b2.position.y=1.08;
+      const b3=new THREE.Mesh(new THREE.BoxGeometry(0.5,0.48,0.5),sm); b3.position.y=1.62;
+      const nose=new THREE.Mesh(new THREE.BoxGeometry(0.36,0.09,0.09),new THREE.MeshLambertMaterial({color:0xff8c3d})); nose.position.set(0.4,1.64,0);
+      const eM=new THREE.MeshLambertMaterial({color:0x22262a});
+      const e1=new THREE.Mesh(new THREE.BoxGeometry(0.08,0.08,0.08),eM); e1.position.set(0.26,1.74,0.13);
+      const e2=e1.clone(); e2.position.z=-0.13;
+      const arm=texturedBox(0.06,0.72,0.06,TEX.bark); arm.position.set(0,1.15,0.52); arm.rotation.x=1.1;
+      const arm2=texturedBox(0.06,0.72,0.06,TEX.bark); arm2.position.set(0,1.15,-0.52); arm2.rotation.x=-1.1;
+      [b1,b2,b3].forEach(m=>m.castShadow=true);
+      g.add(b1,b2,b3,nose,e1,e2,arm,arm2);
+      g.position.set(si-HALF,heightMap[si][sj],sj-HALF); g.rotation.y=rand(0,TAU); scene.add(g); } }
+  // glowing ice crystal spikes up on the stone
+  { const cryM=new THREE.MeshLambertMaterial({color:0x9fe4f5,emissive:0x2a7f96,emissiveIntensity:0.35,transparent:true,opacity:0.9});
+    let n2=0,g2=0;
+    while(n2<10&&g2++<500){ const i=2+((Math.random()*(N-4))|0), j=2+((Math.random()*(N-4))|0);
+      const h=heightMap[i][j]; if(h<WORLD.stoneH||!decorOK(i,j,2))continue; decorUsed.add(keyOf(i,j));
+      const spike=new THREE.Mesh(new THREE.BoxGeometry(rand(0.18,0.3),rand(0.8,1.7),rand(0.18,0.3)),cryM);
+      spike.position.set(i-HALF,h+0.5,j-HALF);
+      spike.rotation.set(rand(-0.2,0.2),rand(0,TAU),rand(-0.2,0.2)); spike.castShadow=true; scene.add(spike); n2++; } }
+}
+
 // world construction finished — hand randomness back for gameplay rolls
 Math.random=REAL_RANDOM;
 // stable ids let the server say "node 17 is depleted" and every client agree which one
@@ -1028,33 +1139,42 @@ bobber.add(bTop,bBot); bobber.visible=false; scene.add(bobber);
 // chunky voxel props — big enough to read clearly from the iso camera
 const armR=player.userData.armR;
 const rodMesh=new THREE.Group();
+// group origin = the fist. Parts sit so the hand lands ON the red grip with a
+// short butt below it — not halfway up the blank like it used to.
 { const h2=new THREE.Mesh(new THREE.BoxGeometry(0.11,1.5,0.11),new THREE.MeshLambertMaterial({map:TEX.bark}));
+  h2.position.y=0.5;                       // blank: butt -0.25, tip +1.25
   const grip=new THREE.Mesh(new THREE.BoxGeometry(0.15,0.28,0.15),new THREE.MeshLambertMaterial({color:0xd8483f}));
-  grip.position.y=-0.55;
+  grip.position.y=-0.05;                   // right in the palm
   const reel=new THREE.Mesh(new THREE.BoxGeometry(0.16,0.16,0.1),new THREE.MeshLambertMaterial({color:0xffd24f}));
-  reel.position.set(0,-0.32,0.12);
+  reel.position.set(0,0.18,0.12);          // reel seats just above the gripping hand
   rodMesh.add(h2,grip,reel); rodMesh.position.set(0,-0.5,0.34); rodMesh.rotation.x=-0.7;
+  rodMesh.userData.tip=new THREE.Vector3(0,1.25,0); // top of the blank, for the fishing line
   rodMesh.traverse(m=>{m.castShadow=true;}); rodMesh.visible=false; armR.add(rodMesh); }
 const pickMesh=new THREE.Group();
+// group origin = the fist, gripping just above the butt of the haft: ~0.15 of
+// wood below the hand, the head at the far end where it belongs.
 { const h2=new THREE.Mesh(new THREE.BoxGeometry(0.12,1.15,0.12),new THREE.MeshLambertMaterial({map:TEX.bark}));
+  h2.position.y=0.42;                      // haft: butt -0.155, top +0.995
   const hd=new THREE.Mesh(new THREE.BoxGeometry(0.85,0.16,0.16),new THREE.MeshLambertMaterial({color:0xb8c2cc}));
-  hd.position.y=0.5;
+  hd.position.y=0.92;
   const tipL=new THREE.Mesh(new THREE.BoxGeometry(0.18,0.14,0.14),new THREE.MeshLambertMaterial({color:0x8a949e}));
-  tipL.position.set(-0.5,0.44,0);
+  tipL.position.set(-0.5,0.86,0);
   const tipR=tipL.clone(); tipR.position.x=0.5;
   const bind=new THREE.Mesh(new THREE.BoxGeometry(0.16,0.2,0.16),new THREE.MeshLambertMaterial({color:0x6d4a28}));
-  bind.position.y=0.42;
+  bind.position.y=0.84;
   pickMesh.add(h2,hd,tipL,tipR,bind); pickMesh.position.set(0,-0.42,0.3); pickMesh.rotation.x=-0.65;
   pickMesh.rotation.y=Math.PI/2; // spikes fore/aft so the point leads the swing, not the flat of the head
   pickMesh.traverse(m=>{m.castShadow=true;}); pickMesh.visible=false; armR.add(pickMesh); }
 const axeMesh=new THREE.Group();
+// group origin = the fist, just above the butt of the handle — same grip as the pick.
 { const h2=new THREE.Mesh(new THREE.BoxGeometry(0.12,1.05,0.12),new THREE.MeshLambertMaterial({map:TEX.bark}));
+  h2.position.y=0.38;                      // handle: butt -0.145, top +0.905
   const bl=new THREE.Mesh(new THREE.BoxGeometry(0.34,0.46,0.12),new THREE.MeshLambertMaterial({color:0xcfd8de}));
-  bl.position.set(0.24,0.38,0);
+  bl.position.set(0.24,0.76,0);
   const edge=new THREE.Mesh(new THREE.BoxGeometry(0.08,0.5,0.13),new THREE.MeshLambertMaterial({color:0xf0f5f8}));
-  edge.position.set(0.42,0.38,0);
+  edge.position.set(0.42,0.76,0);
   const bind=new THREE.Mesh(new THREE.BoxGeometry(0.16,0.2,0.16),new THREE.MeshLambertMaterial({color:0x6d4a28}));
-  bind.position.y=0.34;
+  bind.position.y=0.72;
   axeMesh.add(h2,bl,edge,bind); axeMesh.position.set(0,-0.42,0.3); axeMesh.rotation.x=-0.65;
   axeMesh.rotation.y=-Math.PI/2; // blade forward: the cutting edge faces the tree, not the player's right
   axeMesh.traverse(m=>{m.castShadow=true;}); axeMesh.visible=false; armR.add(axeMesh); }
@@ -1075,7 +1195,7 @@ const rodTip=new THREE.Vector3();
 function updateFishLine(){
   fishLine.visible=bobber.visible;
   if(!fishLine.visible)return;
-  rodTip.set(0.5,1.75,0.85); player.localToWorld(rodTip);
+  rodTip.copy(rodMesh.userData.tip); rodMesh.localToWorld(rodTip); // follows the cast animation too
   const pos=lineGeo.attributes.position;
   pos.setXYZ(0,rodTip.x,rodTip.y,rodTip.z);
   pos.setXYZ(1,bobber.position.x,bobber.position.y+0.25,bobber.position.z);
@@ -1620,6 +1740,7 @@ function drawMinimap(){ if(!mmX)return; const W=mmC.width;
   if(PORTAL_POS)dot(PORTAL_POS.x,PORTAL_POS.z,'#c490ff',4);
   if(HARBOR_POS)dot(HARBOR_POS.x,HARBOR_POS.z,'#39d7c4',4);
   if(mineCell)dot(mineCell[0]-HALF,mineCell[1]-HALF,'#e8f4ff',4);
+  if(CRATER)dot(CRATER.i-HALF,CRATER.j-HALF,'#ff7a1a',4);
   if(state.treasure){ const tx=(state.treasure.i)/N*W, ty=(state.treasure.j)/N*W;
     mmX.strokeStyle='#ffd24f'; mmX.lineWidth=2.4; mmX.beginPath();
     mmX.moveTo(tx-4,ty-4); mmX.lineTo(tx+4,ty+4); mmX.moveTo(tx+4,ty-4); mmX.lineTo(tx-4,ty+4); mmX.stroke(); }
@@ -2906,11 +3027,11 @@ function updateEmote(dt){
 
   else if(k==='flex'){                                 // hoist the personal best overhead
     const g=Math.min(1,t/0.45)*Math.min(1,(d-t)/0.4);
-    A.rotation.x=-2.75*g; B.rotation.x=-2.75*g; A.rotation.z=0.3*g; B.rotation.z=-0.3*g;
+    A.rotation.x=-3.0*g; B.rotation.x=-3.0*g; A.rotation.z=0.3*g; B.rotation.z=-0.3*g;
     H.rotation.x=-0.28*g; sy=1+0.05*g*S(t*3); py=0.03*g;
     player.rotation.z=S(t*2.2)*0.04*g;
     emoFish.visible=g>0.05;
-    emoFish.position.set(pWorld.x,pWorld.y+0.35+2.15*g,pWorld.z);
+    emoFish.position.set(pWorld.x,pWorld.y+0.35+2.95*g,pWorld.z);   // clear of the hat brim
     emoFish.rotation.y=player.rotation.y+S(t*4)*0.35;
     emoFish.rotation.z=S(t*7)*0.22;
     emoFish.scale.setScalar(0.88+0.12*S(t*5));
@@ -2957,7 +3078,7 @@ function updateEmote(dt){
     if(t<T0){ const q=t/T0; sy=1-0.26*q; py=-0.1*q; A.rotation.x=0.4*q; B.rotation.x=0.4*q; }
     else{ const q=(t-T0)/(d-T0), air=S(Math.PI*Math.min(1,q/0.42));
       py=air*0.92; sy=1+0.16*air;
-      A.rotation.x=-2.85; B.rotation.x=-2.85; A.rotation.z=0.42; B.rotation.z=-0.42;
+      A.rotation.x=-3.0; B.rotation.x=-3.0; A.rotation.z=0.42; B.rotation.z=-0.42;
       H.rotation.x=-0.22; player.rotation.z=S(q*9)*0.06*(1-q);
       if(q>0.5){ const w=S((q-0.5)*11); A.rotation.z=0.42+w*0.16; B.rotation.z=-0.42-w*0.16; py+=Math.abs(w)*0.05; } }
     once('j',T0,()=>{ if(sfx&&sfx.win)sfx.win(); confetti(2.2); dust(6,2.2); });
@@ -3003,15 +3124,26 @@ let capA0=0, capA1=TAU, capPhase=Math.PI/2;
 function capClear(a){                       // furthest the eye can sit on this bearing with the feet in view
   const ce=Math.cos(CAP_EL), ux=Math.cos(a)*ce, uy=Math.sin(CAP_EL), uz=Math.sin(a)*ce;
   for(let i=2;i<=14;i++){ const d=CAP_DIST*i/14;
-    if(pWorld.y+uy*d < heightAt(pWorld.x+ux*d,pWorld.z+uz*d)+0.55)return CAP_DIST*(i-1)/14; }
+    const sx=pWorld.x+ux*d, sz=pWorld.z+uz*d, sy=pWorld.y+uy*d;
+    if(sy<heightAt(sx,sz)+0.55||capHit(sx,sy,sz))return CAP_DIST*(i-1)/14; }
   return CAP_DIST; }
 let capElNow=CAP_EL; const capOut=[CAP_EL,CAP_DIST];
+const capNear=[], capHid=[];
+function capGather(){ capNear.length=0;
+  for(const t of treeData)if(Math.hypot(t.x-pWorld.x,t.z-pWorld.z)<11)capNear.push({x:t.x,z:t.z,r:1.7,h:t.y+5.4});
+  for(const p of PROPS){ const d=Math.hypot(p.x-pWorld.x,p.z-pWorld.z);
+    if(d<5.5&&p.g){ capHid.push(p.g); p.g.visible=false; }   // standing inside it: hiding beats staring at its wall
+    else if(d<12)capNear.push(p); } }
+function capShow(){ for(const g of capHid)g.visible=true; capHid.length=0; }
+function capHit(x,y,z){ for(const b of capNear)
+  if(y<b.h&&(x-b.x)*(x-b.x)+(z-b.z)*(z-b.z)<b.r*b.r)return true; return false; }
 function capSolve(a){                       // first (elevation, distance) pair on this bearing that sees the feet
   for(let e=0;e<6;e++){
     const el=CAP_EL+e*0.115, ce=Math.cos(el), ux=Math.cos(a)*ce, uy=Math.sin(el), uz=Math.sin(a)*ce;
     let t=CAP_DIST, hit=false;
     for(let i=2;i<=14;i++){ const d=CAP_DIST*i/14;
-      if(pWorld.y+uy*d < heightAt(pWorld.x+ux*d,pWorld.z+uz*d)+0.55){ t=CAP_DIST*(i-1)/14-0.15; hit=true; break; } }
+      const sx=pWorld.x+ux*d, sz=pWorld.z+uz*d, sy=pWorld.y+uy*d;
+      if(sy<heightAt(sx,sz)+0.55||capHit(sx,sy,sz)){ t=CAP_DIST*(i-1)/14-0.15; hit=true; break; } }
     if(!hit||t>=3.4){ capOut[0]=el; capOut[1]=clamp(t,2.6,CAP_DIST); return; } }
   capOut[0]=CAP_EL+5*0.115; capOut[1]=CAP_DIST; }   // last resort: look down over whatever it is
 function capPickArc(){                      // the widest run of clear bearings, scanned twice around for wrap
@@ -3064,7 +3196,7 @@ function openCam(){
   if(chopping.tree)cancelChop();
   digging.active=false;
   capCam=true;
-  capPickArc();                            // find the bearing that can actually see him, then fly there
+  capGather(); capPickArc();               // know the obstacles, then find a bearing that can actually see him
   capAng=capA1-capA0>=TAU-0.01?Math.atan2(CAM_OFF.z,CAM_OFF.x):(capA0+capA1)/2;
   capPhase=capA1-capA0>=TAU-0.01?0:Math.PI/2;
   capSolve(capAng); capElNow=capOut[0];   // open at the right tilt instead of easing into it
@@ -3076,7 +3208,7 @@ function closeCam(){
   if(!capCam)return;
   capCam=false; stopEmote();
   document.body.classList.remove('capcam');
-  capShadow(false); capLabels(false);
+  capShadow(false); capLabels(false); capShow();
   beep(300,0.09,'sine',0.04); }
 function toggleCam(){ capCam?closeCam():openCam(); }
 
@@ -3718,6 +3850,15 @@ function animate(now){
       b.position.set(Math.cos(a2)*u.r,1.82+Math.sin(a2)*u.r*0.6,0.15); } }
   updateFishLine();
   updatePeers(dt); streamPos(dt);
+  if(emberMesh){ // sparks ride the thermals out of the crater; the lava breathes
+    for(let k=0;k<embers.length;k++){ const e=embers[k];
+      e.y+=e.v*dt; if(e.y>CRATER.floor+8)e.y=CRATER.floor+rand(0,1);
+      const fade=Math.max(0.1,1-(e.y-CRATER.floor)/9), s=e.s*fade;
+      dummy.position.set(e.x+Math.sin(clock*1.7+e.ph)*0.5,e.y,e.z+Math.cos(clock*1.3+e.ph)*0.5);
+      dummy.scale.set(s,s,s); dummy.rotation.set(clock*3+e.ph,e.ph,0);
+      dummy.updateMatrix(); emberMesh.setMatrixAt(k,dummy.matrix); }
+    emberMesh.instanceMatrix.needsUpdate=true;
+    if(lavaMat)lavaMat.emissiveIntensity=0.85+Math.sin(clock*2.3)*0.15; }
   const lampNight=isNight()?1.7:1;
   for(let k=0;k<lamps.length;k++)lamps[k].material.emissiveIntensity=(0.7+Math.sin(clock*3+k*1.7)*0.3)*lampNight;
   if(casinoFlare>0.01)for(const l of casinoLamps)l.material.emissiveIntensity+=casinoFlare*1.7; // the house lamps flare when you win
@@ -3742,11 +3883,15 @@ const startOv=document.getElementById('start');
     for(const k of WORLD_ORDER){ const W2=WORLDS[k];
       const c=document.createElement('canvas'); c.width=64; c.height=64; const g=c.getContext('2d');
       const waterHex='#'+W2.water.toString(16).padStart(6,'0');
+      let pi=32,pj=32,pk2=-1;
       for(let i=0;i<64;i++)for(let j=0;j<64;j++){ const ii=i*1.5,jj=j*1.5;
         const n=fbm(ii*0.085+3.5+W2.seed,jj*0.085+1.2+W2.seed*0.7),dx=(ii-HALF)/HALF,dz=(jj-HALF)/HALF,d=Math.sqrt(dx*dx+dz*dz);
         const fall=clamp(1-Math.pow(d,2.5)*1.02,0,1),h=Math.min(13,Math.round(n*fall*10*W2.hMul));
+        if(h>pk2){pk2=h;pi=i;pj=j;}
         g.fillStyle=h<=2?waterHex:h===3?W2.sand[0]:h<W2.stoneH?W2.grass[0]:W2.stone[0];
         g.fillRect(i,j,1,1); }
+      if(k==='volcano'){ // the crater sits on the peak — show the lava on the card
+        g.fillStyle='#ff7a1a'; g.fillRect(pi-1,pj-1,3,3); }
       const d2=document.createElement('div'); d2.className='wthumb'+(k===worldKey?' cur':'');
       d2.appendChild(c); const nm=document.createElement('span'); nm.textContent=W2.name; d2.appendChild(nm);
       rowEl.appendChild(d2); thumbs.push({el:d2,w:W2,k}); }
