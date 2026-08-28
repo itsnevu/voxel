@@ -23,7 +23,7 @@
        chop   -> { got, pearls, share? }
        dig    -> { coins?, ... }          coins only when coins were paid
        spin   -> { winIdx, color, won, payout }
-       catch  -> { fish, pearls, isNew, isRec, share?, treasure? }
+       catch  -> { fish, pearls, isNew, isRec, share?, treasure?, auto? }
        travel -> { unlocked:true } when buying a charter; absent when sailing
        boat   -> { name, level }
    `share` is the bare ticker string the client toasts, never an object.
@@ -49,7 +49,7 @@ import {
   BAITS, BAIT_ORDER, BAIT_MAX, baitOf,
   BOATS, BOAT_REQ, MAX_BOAT, haveOres,
   upCost, axeCost,
-  cap, rollFish, pearlsForFish, dexNameOf,
+  cap, rollFish, pearlsForFish, dexNameOf, AUTO,
   rollOreType, oreTypeFor,
   rand, clamp
 } from './rules.js';
@@ -323,8 +323,9 @@ function tryShare(state, ticker) {
  * Roll one fish for the world the player is standing in, with whatever is on
  * the hook. `useBait: false` for a fish that was not caught on a line at all
  * (the buried one in a treasure chest) — no hook, no bait bonus, no bait spent.
+ * `auto: true` swaps in the lazy line's crushed table (rules.js AUTO).
  */
-function rollFor(state, body, { useBait: withBait = true } = {}) {
+function rollFor(state, body, { useBait: withBait = true, auto = false } = {}) {
   const { wet, storm } = weatherOf(body);
   return rollFish({
     world: state.world,
@@ -334,7 +335,8 @@ function rollFor(state, body, { useBait: withBait = true } = {}) {
     fishMul: worldOf(state).fishMul,
     night: !!body.night,
     wet,
-    storm
+    storm,
+    auto
   });
 }
 
@@ -358,7 +360,7 @@ function useBait(state) {
  * things a catch can also snag — a Reel Fisheries share and a bottled map.
  * Shared by `catch` and by `dig`'s buried-fish branch.
  */
-function landFish(state, fish, { allowMap = true } = {}) {
+function landFish(state, fish, { allowMap = true, auto = false } = {}) {
   state.stats.caught++;
   state.bucket.push(fish);
 
@@ -374,7 +376,7 @@ function landFish(state, fish, { allowMap = true } = {}) {
   let isRec = false;
   if (kg > num(d.best, 0)) { d.best = kg; isRec = true; }
 
-  const pearls = addPearls(state, pearlsForFish(fish, { isNew, isRecord: isRec }));
+  const pearls = addPearls(state, pearlsForFish(fish, { isNew, isRecord: isRec, auto }));
 
   /* epic+ catches can come with a Reel Fisheries share certificate */
   let share = null;
@@ -409,15 +411,35 @@ export const HANDLERS = {
       return err(`Bucket is full (${limit}) — sell your catch at the Trader first`);
     }
 
-    const fish = rollFor(state, body);
+    /* `auto` is the one fact in `body` a client may assert about itself, and
+       asserting it can only ever make the catch worse — the lazy line rolls a
+       crushed table, spends no bait, and bottles no maps. It also carries its
+       own cadence floor ON TOP of RATE.catch, so alternating held-rod and auto
+       casts cannot be used to fish faster than a held rod alone. */
+    const auto = !!body.auto;
+    const now = Date.now();
+    if (auto) {
+      const last = num(state.autoAt, 0);
+      if (last > now) state.autoAt = 0;            // clock skew / hand-edited save
+      else if (last > 0 && now - last < AUTO.gapMs) {
+        return err('The auto-rig is still resetting the line…');
+      }
+    }
+
+    const fish = rollFor(state, body, { useBait: !auto, auto });
     if (!fish) return err('Nothing is biting here');
 
-    const { isNew, isRec, pearls, share, treasure } = landFish(state, fish);
+    if (auto) state.autoAt = now;
+    /* no bottled maps off an unattended rig: the map roll is flat 8% per catch
+       and is the one drop the crushed rarity table does not already gate */
+    const { isNew, isRec, pearls, share, treasure } =
+      landFish(state, fish, { allowMap: !auto, auto });
     /* spent AFTER the fish is banked, so a rejected catch never eats a bait */
-    const bait = useBait(state);
+    const bait = auto ? null : useBait(state);
 
     const result = { fish, pearls, isNew, isRec, bucket: state.bucket.length, cap: limit,
       message: `Landed ${fish.name} · ◈${fish.val}` };
+    if (auto) result.auto = true;
     attachShare(result, share);
     if (treasure) result.treasure = treasure;
     if (bait) result.bait = bait;

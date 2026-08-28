@@ -376,10 +376,18 @@ app.post('/api/action/:name', requireAuth, (req, res) => {
       username = u && u.username ? String(u.username) : '';
     } catch (e) { console.error('[users.findById]', e); }
 
-    if (name === 'catch' && result.fish) {
+    /* The derby and the wanted-fish bounty are contests between people who are
+       actually at the rod. An unattended auto-rig catch scores neither — it
+       still banks the fish, it just does not compete. */
+    if (name === 'catch' && result.fish && !result.auto) {
       try {
         EV.recordCatch(state.world, userId, username, result.fish.kg || 0);
-        const bounty = EV.tryClaimWanted(state.world, mktEpochNow(), userId, result.fish.name);
+        /* A fish hooked under one poster can land a moment after the 3-minute
+           rotation. Try the live epoch, then the one just gone — claims are
+           deduped per world+epoch, so the second try can never double-pay. */
+        const epNow = mktEpochNow();
+        const bounty = EV.tryClaimWanted(state.world, epNow, userId, result.fish.name)
+          || EV.tryClaimWanted(state.world, epNow - 1, userId, result.fish.name);
         if (bounty > 0) {
           state.coins += bounty;
           state.stats.earned += bounty;

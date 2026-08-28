@@ -87,6 +87,24 @@ const CLOSE_TOO_BIG = 1009;            // frame over MAX_FRAME
 const rooms = new Map();
 /** userId -> peer. One live socket per account; a new one evicts the old. */
 const byUser = new Map();
+
+/* Per-ACCOUNT moderation state. Sockets come and go — a refresh, a tunnel
+   blip, a deliberate reconnect to dodge a cooldown — but the consequences of
+   what someone said should not. Entries are pruned once they are inert. */
+const modByUser = new Map();
+function modOf(userId) {
+  let m = modByUser.get(userId);
+  if (!m) { m = { maskedAt: [], chatCoolUntil: 0, reportAt: 0 }; modByUser.set(userId, m); }
+  return m;
+}
+function pruneMod(t) {
+  for (const [uid, m] of modByUser) {
+    const busy = m.chatCoolUntil > t
+      || m.maskedAt.some((at) => t - at < CHAT_STRIKE_WINDOW_MS)
+      || t - m.reportAt < REPORT_GAP_MS;
+    if (!busy && !byUser.has(uid)) modByUser.delete(uid);
+  }
+}
 /** Every authenticated socket, hello'd or not — the heartbeat walks this. */
 const conns = new Set();
 /** world -> { node: Map<id, untilMs>, tree: Map<id, untilMs> } */
@@ -170,7 +188,7 @@ function cleanChat(v, max = CHAT_MAX) {
 
 /** Anything that smells like a URL becomes "[link]" — game chat has no
     legitimate need to carry one, and phishing links are the main abuse. */
-const URL_RE = /\b(?:https?:\/\/|www\.)\S+/gi;
+const URL_RE = /\b(?:https?:\/\/|www\.)\S+|\b[a-z0-9-]+(?:\.[a-z0-9-]{2,})+\/\S*|\b[a-z0-9-]+\.(?:com|net|org|io|gg|ly|me|co|id|xyz|link|app)\b/gi;
 
 /** Four-or-more of the same character in a row squeezed to three:
     "WOIIIIII" -> "WOIII". Enthusiasm survives; keysmash walls do not. */
@@ -313,6 +331,7 @@ function sweepRegistry() {
   for (const [world, b] of depleted) {
     if (pruneBucket(b, t) === 0) depleted.delete(world);
   }
+  pruneMod(t);   // moderation state outlives sockets, so it needs its own broom
 }
 
 export const nodes = {
@@ -525,7 +544,7 @@ function onChat(peer, msg, t) {
   if (t - peer.chatAt < CHAT_GAP) return;
 
   // In cooldown: the socket stays, the megaphone doesn't.
-  if (t < peer.chatCoolUntil) {
+  if (t < peer.mod.chatCoolUntil) {
     peer.chatAt = t;
     send(peer, { t: 'chat_err', m: 'cooldown' });
     return;
@@ -556,13 +575,13 @@ function onChat(peer, msg, t) {
 
   const { text, masked } = maskProfanity(m);
   if (masked) {
-    peer.maskedAt.push(t);
-    peer.maskedAt = peer.maskedAt.filter((at) => t - at < CHAT_STRIKE_WINDOW_MS);
-    if (peer.maskedAt.length >= CHAT_STRIKES) {
+    peer.mod.maskedAt.push(t);
+    peer.mod.maskedAt = peer.mod.maskedAt.filter((at) => t - at < CHAT_STRIKE_WINDOW_MS);
+    if (peer.mod.maskedAt.length >= CHAT_STRIKES) {
       // Third strike: this line still goes out (masked), then the megaphone
       // goes away for a minute and the peer is told exactly why.
-      peer.chatCoolUntil = t + CHAT_COOLDOWN_MS;
-      peer.maskedAt.length = 0;
+      peer.mod.chatCoolUntil = t + CHAT_COOLDOWN_MS;
+      peer.mod.maskedAt.length = 0;
       send(peer, { t: 'chat_err', m: 'cooldown' });
     }
   }
@@ -573,22 +592,30 @@ function onChat(peer, msg, t) {
   if (!room) return;
   const raw = JSON.stringify({ t: 'chat', id: peer.id, name: peer.name, m: text, at: t });
   for (const other of room) {
-    if (other.muted.has(peer.id)) continue;
+    if (other.mutedUsers.has(peer.userId)) continue;
     rawSend(other, raw);
   }
 }
 
 /**
- * Mute lives on the RECEIVER: it filters what this peer hears, world-wide and
- * for the life of the socket, and costs the muted player nothing. The cap
- * exists only so a hostile client cannot grow the Set without bound.
+ * Mute lives on the RECEIVER: it filters what this peer hears and costs the
+ * muted player nothing. It is stored by ACCOUNT, not by socket id — otherwise
+ * the muted player reconnects, is handed a fresh peer id, and walks straight
+ * back into every mute list in the room. The client still speaks peer ids, so
+ * we resolve one to its account here and answer with the id it sent.
  */
+function peerByIdInRoom(peer, id) {
+  for (const other of conns) if (other.id === id && other.world === peer.world) return other;
+  return null;
+}
 function onMute(peer, msg) {
   const id = peerIdArg(msg.id);
   if (id === null || id === peer.id) return;
-  if (!peer.muted.has(id)) {
-    if (peer.muted.size >= MUTE_MAX) return;   // silently full — no ack to lie with
-    peer.muted.add(id);
+  const target = peerByIdInRoom(peer, id);
+  if (!target) return;                          // gone already: nothing to mute
+  if (!peer.mutedUsers.has(target.userId)) {
+    if (peer.mutedUsers.size >= MUTE_MAX) return;   // silently full — no ack to lie with
+    peer.mutedUsers.add(target.userId);
   }
   send(peer, { t: 'mute_ok', id });
 }
@@ -596,7 +623,8 @@ function onMute(peer, msg) {
 function onUnmute(peer, msg) {
   const id = peerIdArg(msg.id);
   if (id === null) return;
-  peer.muted.delete(id);
+  const target = peerByIdInRoom(peer, id);
+  if (target) peer.mutedUsers.delete(target.userId);
   send(peer, { t: 'unmute_ok', id });
 }
 
@@ -607,10 +635,10 @@ function onUnmute(peer, msg) {
  * was still online to snapshot.
  */
 function onReport(peer, msg, t) {
-  if (t - peer.reportAt < REPORT_GAP_MS) return;
+  if (t - peer.mod.reportAt < REPORT_GAP_MS) return;
   const id = peerIdArg(msg.id);
   if (id === null || id === peer.id) return;
-  peer.reportAt = t;
+  peer.mod.reportAt = t;
 
   let target = null;
   for (const p of conns) {
@@ -759,6 +787,10 @@ function onConnection(ws, req) {
   }
 
   const t = now();
+  /* Moderation state belongs to the ACCOUNT, not the socket. Without this a
+     player in a chat cooldown gets the megaphone back by pressing F5, and the
+     report throttle resets on every reconnect. `modOf` keeps it across sockets. */
+  const mod = modOf(userId);
   const peer = {
     id: nextId++,
     userId,
@@ -780,10 +812,8 @@ function onConnection(ws, req) {
     lastChatNorm: '',          // previous line, lowercased, for the dedupe check
     lastChatNormAt: 0,
     lastChatText: '',          // previous line pre-mask, attached to reports
-    maskedAt: [],              // timestamps of recently masked lines (strikes)
-    chatCoolUntil: 0,          // chat disabled until this time after 3 strikes
-    muted: new Set(),          // peer ids this RECEIVER chose not to hear
-    reportAt: 0,
+    mod,                       // shared, per-account: strikes, cooldown, report gap
+    mutedUsers: new Set(),     // ACCOUNT ids this RECEIVER chose not to hear
   };
 
   conns.add(peer);

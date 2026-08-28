@@ -255,6 +255,35 @@ export function fishLuck({ rodLvl = 1, bait = null } = {}) {
   return rodLuck(rodLvl) + (b ? b.luck : 0);
 }
 
+/* ============================================================================
+   AUTO-FISHING — the "lazy line".
+   A rig propped up on the shore that fishes while nobody is at the keyboard.
+   It is deliberately the WORST way to fish: no hand sets the hook, no hand
+   plays the fish, so it only ever brings up whatever swims into it — the
+   cheap end of the water.
+
+   `W` is the dial that matters. It multiplies each species' table weight AFTER
+   the world's own weights, so on Fortune Isle a legendary goes from ~1 in 220
+   casts to ~1 in 26,000. The rest just make sure an unattended catch is never
+   worth as much as one you actually fought:
+     luck   the rod ladder counts a quarter, and bait is not on the hook at all
+     val    landed rough off a slack line — the Trader pays 30% less
+     shiny  the mutation is four times rarer
+     pearls half the activity points
+     gapMs  floor between two auto catches, enforced server-side on top of
+            RATE.catch. The client paces itself just above it.
+   ============================================================================ */
+export const AUTO = {
+  W: { common: 1, uncommon: 0.45, rare: 0.1, epic: 0.03, legendary: 0.008 },
+  luck: 0.25,
+  val: 0.7,
+  shiny: 0.25,
+  pearls: 0.5,
+  gapMs: 4500
+};
+/** The auto-rig's rarity multiplier for a species (1 for anything unknown). */
+export const autoWeight = (rar) => (has(AUTO.W, rar) ? AUTO.W[rar] : 1);
+
 /** Coin cost to go from `lvl` -> `lvl+1`. */
 export const upCost = (base, lvl) => Math.round(base * Math.pow(1.75, lvl - 1));
 /** The axe has its own gentler ladder — wood is a 6-coin commodity. */
@@ -319,6 +348,9 @@ export function newState() {
     bucketTier: 0,
     bait: {}, baitId: '',
     boosts: { chumUntil: 0 },
+    /* wall-clock ms of the last auto-rig catch — the server's own pacing floor
+       for the lazy line, so it cannot be run faster than AUTO.gapMs */
+    autoAt: 0,
     tipEpoch: 0,
     deeds: {},
     stats: { caught: 0, mined: 0, earned: 0, bestWin: 0, spins: 0, winsCt: 0, losses: 0, divEarned: 0 }
@@ -452,6 +484,7 @@ export function normalizeState(raw) {
   /* an equipped bait you have none of is the same as no bait at all */
   st.baitId = typeof s.baitId === 'string' && st.bait[s.baitId] > 0 ? s.baitId : '';
   st.tipEpoch = Math.max(0, num(s.tipEpoch, 0));
+  st.autoAt = Math.max(0, num(s.autoAt, 0));
   const boosts = obj(s.boosts);
   if (boosts) st.boosts.chumUntil = Math.max(0, num(boosts.chumUntil, 0));
   st.rodLvl = clamp(int0(s.rodLvl) || 1, 1, MAXLVL);
@@ -503,12 +536,13 @@ export function fishPool(world = 'isle', env = {}, minRar = null) {
 }
 
 /** Materialize a table entry into a caught-fish object. */
-function makeFish(t, mul) {
+function makeFish(t, mul, auto = false) {
   return {
     uid: (Date.now() + Math.random()).toString(36),
     name: t.name,
     rar: t.rar,
-    val: Math.round(t.val * mul * rand(0.85, 1.18)),
+    /* never below 1: an auto-caught sardine is cheap, not free */
+    val: Math.max(1, Math.round(t.val * mul * rand(0.85, 1.18) * (auto ? AUTO.val : 1))),
     kg: +(t.val / 9 * rand(0.5, 1.6) + 0.2).toFixed(1),
     wins: 0
   };
@@ -516,25 +550,26 @@ function makeFish(t, mul) {
 
 /**
  * One weighted draw from a world's pool — the client's rollOnce().
- * `luck` re-weights the table by rarity, `minRar` floors it.
+ * `luck` re-weights the table by rarity, `minRar` floors it, and `auto` folds
+ * the lazy line's rarity multipliers in on top of both.
  * Returns null only if the pool is somehow empty (never, for shipped tables).
  */
 export function rollOnce(opts = {}) {
-  const { world = 'isle', fishMul, luck = 0, minRar = null } = opts;
+  const { world = 'isle', fishMul, luck = 0, minRar = null, auto = false } = opts;
   const mul = Number.isFinite(+fishMul) ? +fishMul : (WORLDS[world]?.fishMul || 1);
   const pool = fishPool(world, opts, minRar);
   if (!pool.length) return null;
 
-  const wt = pool.map((e) => e[1] * luckWeight(e[0].rar, luck));
+  const wt = pool.map((e) => e[1] * luckWeight(e[0].rar, luck) * (auto ? autoWeight(e[0].rar) : 1));
   let tot = 0;
   for (const x of wt) tot += x;
   let r = Math.random() * tot;
   for (let i = 0; i < pool.length; i++) {
     r -= wt[i];
-    if (r <= 0) return makeFish(pool[i][0], mul);
+    if (r <= 0) return makeFish(pool[i][0], mul, auto);
   }
   /* floating-point tail: the last entry is the correct answer */
-  return makeFish(pool[pool.length - 1][0], mul);
+  return makeFish(pool[pool.length - 1][0], mul, auto);
 }
 
 /**
@@ -547,28 +582,37 @@ export function rollOnce(opts = {}) {
  * `fishMul` defaults to the world's multiplier when omitted.
  */
 export function rollFish({ rodLvl = 1, bait = null, boatLvl = 0, fishMul,
-                           night = false, wet = false, storm = false, world = 'isle' } = {}) {
-  const b = baitOf(bait);
+                           night = false, wet = false, storm = false, world = 'isle',
+                           auto = false } = {}) {
+  /* an unattended hook carries no bait, so neither its luck nor its rarity
+     floor apply — Siren's Chum cannot be left fishing for legendaries */
+  const b = auto ? null : baitOf(bait);
   const opts = {
-    world, fishMul, night, wet, storm,
-    luck: fishLuck({ rodLvl, bait }),
+    world, fishMul, night, wet, storm, auto,
+    luck: auto ? rodLuck(rodLvl) * AUTO.luck : fishLuck({ rodLvl, bait }),
     minRar: b ? b.min : null
   };
   let f = rollOnce(opts);
   if (!f) return null;
 
-  const e = envOf({ night, wet, storm });
-  if ((e.rain || e.storm) && Math.random() < 0.12) {
-    const g = rollOnce(opts);
-    if (g && RORDER[g.rar] > RORDER[f.rar]) f = g;
+  /* Weather and hull only stir up better fish for someone holding the rod. The
+     lazy line gets one flat draw and no second chances. */
+  if (!auto) {
+    const e = envOf({ night, wet, storm });
+    if ((e.rain || e.storm) && Math.random() < 0.12) {
+      const g = rollOnce(opts);
+      if (g && RORDER[g.rar] > RORDER[f.rar]) f = g;
+    }
+    /* a finer ship stirs finer fish (game.js:1726) */
+    const bl = (BOATS[clamp(boatLvl | 0, 0, MAX_BOAT)] || BOATS[0]).luck;
+    if (bl && Math.random() < bl) {
+      const g = rollOnce(opts);
+      if (g && RORDER[g.rar] > RORDER[f.rar]) f = g;
+    }
   }
-  /* a finer ship stirs finer fish (game.js:1726) */
-  const bl = (BOATS[clamp(boatLvl | 0, 0, MAX_BOAT)] || BOATS[0]).luck;
-  if (bl && Math.random() < bl) {
-    const g = rollOnce(opts);
-    if (g && RORDER[g.rar] > RORDER[f.rar]) f = g;
+  if (Math.random() < 0.018 * (auto ? AUTO.shiny : (b ? b.shiny : 1))) {
+    f.shiny = true; f.val *= 5; f.name = '✦ ' + f.name;
   }
-  if (Math.random() < 0.018 * (b ? b.shiny : 1)) { f.shiny = true; f.val *= 5; f.name = '✦ ' + f.name; }
   return f;
 }
 
@@ -581,10 +625,13 @@ export const dexNameOf = (fish) =>
  * world or price. Shiny triples; a new species adds 5, a personal record 2
  * (the caller knows those from the dex, hence the optional second argument).
  */
-export function pearlsForFish(fish, { isNew = false, isRecord = false } = {}) {
+export function pearlsForFish(fish, { isNew = false, isRecord = false, auto = false } = {}) {
   if (!fish) return 0;
   let pp = PEARL_RARITY[fish.rar] || 1;
   if (fish.shiny) pp *= 3;
+  /* the rig earns half the activity points; a first sighting is still a first
+     sighting, so the discovery bonuses ride on top untouched */
+  if (auto) pp = Math.max(1, Math.floor(pp * AUTO.pearls));
   if (isNew) pp += 5;
   else if (isRecord) pp += 2;
   return pp;

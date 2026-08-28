@@ -8,3 +8,5 @@ server/.env
 __test*.html
 __test*.js
 .DS_Store
+__shot*.html
+__shot*.js

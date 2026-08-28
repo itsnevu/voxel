@@ -1258,9 +1258,10 @@ addEventListener('keydown',e=>{
   if(e.code==='KeyT'&&running&&!chatOpen&&!marketOpen&&!casinoOpen&&!invOpen){ e.preventDefault(); openChat(); }
   if(e.code>='Digit1'&&e.code<='Digit8'&&running&&capCam&&!chatOpen){ e.preventDefault(); playBarEmote(+e.code.slice(5)-1); return; }
   if(e.code>='Digit1'&&e.code<='Digit5'&&running&&!marketOpen&&!casinoOpen&&!harborOpen){ setHotSlot(+e.code.slice(5)-1); }
+  if(e.code==='KeyF'&&running&&!chatOpen&&!marketOpen&&!casinoOpen&&!invOpen&&!harborOpen){ e.preventDefault(); toggleAuto(); }
   if(e.code==='KeyP'&&running){ e.preventDefault(); togglePhoto(); }
   if(e.code==='KeyC'&&running&&!chatOpen&&!marketOpen&&!casinoOpen&&!invOpen&&!harborOpen){ e.preventDefault(); toggleCam(); }
-  if(e.code==='Escape'){ if(marketOpen)closeMarket(); else if(casinoOpen)closeCasino(); else if(harborOpen)closeHarbor(); else if(invOpen)closeInv(); else if(capCam)closeCam(); else if(fishing.state!=='idle')cancelFish(); else if(mining.node)cancelMine(); else if(chopping.tree)cancelChop(); else if(digging.active){digging.active=false;hint('');} }},{passive:false});
+  if(e.code==='Escape'){ if(marketOpen)closeMarket(); else if(casinoOpen)closeCasino(); else if(harborOpen)closeHarbor(); else if(invOpen)closeInv(); else if(capCam)closeCam(); else if(autoFish.on)setAuto(false,'Auto-fishing off'); else if(fishing.state!=='idle')cancelFish(); else if(mining.node)cancelMine(); else if(chopping.tree)cancelChop(); else if(digging.active){digging.active=false;hint('');} }},{passive:false});
 addEventListener('keyup',e=>{const m=KMAP[e.code]; if(m)keys[m]=false;});
 addEventListener('blur',()=>{for(const k in keys)keys[k]=false;});
 
@@ -1269,6 +1270,27 @@ function initAudio(){if(AC)return;try{AC=new (window.AudioContext||window.webkit
 function beep(f,d,t,v){if(!AC||muted)return;const o=AC.createOscillator(),g=AC.createGain();o.type=t||'sine';o.frequency.value=f;
   g.gain.value=.0001;o.connect(g);g.connect(AC.destination);const n=AC.currentTime;
   g.gain.exponentialRampToValueAtTime(v||.05,n+.01);g.gain.exponentialRampToValueAtTime(.0001,n+d);o.start(n);o.stop(n+d+.02);}
+/* white noise, built once and cached: footsteps, splashes, tool impacts and
+   thunder all need a filtered burst, and oscillators alone can't make one */
+let NBUF=null;
+function noiseBuf(){ if(!NBUF){ const n=(AC.sampleRate*0.7)|0; NBUF=AC.createBuffer(1,n,AC.sampleRate);
+    const d=NBUF.getChannelData(0); for(let i=0;i<n;i++)d[i]=Math.random()*2-1; } return NBUF; }
+function nz(dur,cut,vol,o){ if(!AC||muted)return; o=o||{}; const n=AC.currentTime;
+  const src=AC.createBufferSource(); src.buffer=noiseBuf(); src.loop=true;
+  const f=AC.createBiquadFilter(); f.type=o.type||'lowpass'; f.Q.value=o.q||1;
+  f.frequency.setValueAtTime(cut,n); if(o.to)f.frequency.exponentialRampToValueAtTime(o.to,n+dur);
+  const g=AC.createGain(); g.gain.setValueAtTime(.0001,n);
+  g.gain.exponentialRampToValueAtTime(vol,n+(o.atk||.008));
+  g.gain.exponentialRampToValueAtTime(.0001,n+dur);
+  src.connect(f); f.connect(g); g.connect(AC.destination); src.start(n); src.stop(n+dur+.03); }
+function sweep(f0,f1,d,t,v){ if(!AC||muted)return; const o=AC.createOscillator(),g=AC.createGain(),n=AC.currentTime;
+  o.type=t||'sine'; o.frequency.setValueAtTime(f0,n); o.frequency.exponentialRampToValueAtTime(f1,n+d);
+  g.gain.setValueAtTime(.0001,n); g.gain.exponentialRampToValueAtTime(v,n+.02);
+  g.gain.exponentialRampToValueAtTime(.0001,n+d); o.connect(g); g.connect(AC.destination); o.start(n); o.stop(n+d+.03); }
+// footfalls read the ground: soft on grass, gritty on sand, hard on stone, crunchy on snow
+const STEPFX={grass:{d:.07,f:2200,t:900,v:.035,q:.9},sand:{d:.08,f:1500,t:600,v:.032,q:.7},
+  stone:{d:.055,f:1000,t:380,v:.042,q:1.6},snow:{d:.09,f:3200,t:1400,v:.03,q:.8},
+  seabed:{d:.16,f:800,t:240,v:.05,q:.7}};
 const sfx={cast:()=>beep(300,.15,'sine',.05),bite:()=>{beep(880,.08,'square',.06);setTimeout(()=>beep(1100,.08,'square',.06),90);},
   reel:()=>beep(200+Math.random()*80,.05,'sawtooth',.03),catch:()=>{beep(523,.1,'triangle',.06);setTimeout(()=>beep(784,.14,'triangle',.06),90);},
   miss:()=>beep(160,.2,'sawtooth',.05),sell:()=>{beep(660,.08,'sine',.06);setTimeout(()=>beep(990,.1,'sine',.06),70);},
@@ -1283,36 +1305,116 @@ const sfx={cast:()=>beep(300,.15,'sine',.05),bite:()=>{beep(880,.08,'square',.06
     setTimeout(()=>{for(let i=0;i<5;i++)setTimeout(()=>beep(1760+Math.random()*900,.07,'triangle',.028),i*95);},430);},
   lose:()=>{beep(200,.3,'sawtooth',.07);setTimeout(()=>beep(130,.4,'sawtooth',.07),160);},
   pick:()=>beep(340+Math.random()*120,.05,'square',.04),
-  ore:()=>{beep(620,.09,'triangle',.06);setTimeout(()=>beep(930,.12,'triangle',.06),80);}};
+  ore:()=>{beep(620,.09,'triangle',.06);setTimeout(()=>beep(930,.12,'triangle',.06),80);},
+  /* ---- one sound per action: movement, tools, UI, world events ---- */
+  step:k=>{ const S=STEPFX[k]||STEPFX.grass; nz(S.d,S.f,S.v,{type:'bandpass',q:S.q,to:S.t}); },
+  splash:v=>{ nz(.26,900,v||.07,{type:'lowpass',q:.7,to:220}); beep(430,.09,'sine',.03); },
+  chop:()=>{ nz(.09,1600,.09,{type:'bandpass',q:1.6,to:500}); beep(180+Math.random()*40,.07,'square',.05); },
+  dig:()=>{ nz(.13,700,.08,{type:'lowpass',q:.8,to:180}); beep(115,.08,'sine',.05); },
+  creak:()=>nz(.3,260,.05,{type:'bandpass',q:6,to:520}),        // the line groans before it snaps
+  open:()=>{beep(430,.07,'sine',.045);setTimeout(()=>beep(660,.09,'sine',.04),55);},
+  close:()=>{beep(520,.07,'sine',.04);setTimeout(()=>beep(330,.1,'sine',.035),55);},
+  click:()=>beep(720,.035,'square',.03),
+  tab:()=>beep(880,.04,'triangle',.03),
+  deny:()=>{beep(190,.09,'square',.05);setTimeout(()=>beep(140,.13,'square',.045),80);},
+  emote:()=>{beep(660,.05,'triangle',.04);setTimeout(()=>beep(990,.07,'triangle',.035),60);},
+  shutter:()=>{ nz(.04,3000,.07,{type:'bandpass',q:2}); setTimeout(()=>nz(.06,1800,.05,{type:'bandpass',q:2}),70); },
+  chat:()=>{beep(1046,.05,'sine',.035);setTimeout(()=>beep(1318,.06,'sine',.03),55);},
+  bait:()=>{ nz(.12,1200,.05,{type:'bandpass',q:1.2,to:600}); beep(500,.06,'triangle',.035); },
+  pearl:()=>{beep(1318,.07,'sine',.035);setTimeout(()=>beep(1760,.1,'sine',.03),70);},
+  craft:()=>{ beep(392,.09,'square',.05); setTimeout(()=>beep(523,.09,'square',.05),90);
+    setTimeout(()=>{beep(659,.22,'triangle',.055);beep(1318,.16,'sine',.02);},180); },
+  ach:()=>{ [659,880,1046,1318].forEach((f,i)=>setTimeout(()=>{beep(f,.16,'triangle',.055);beep(f*2,.08,'sine',.018);},i*90)); },
+  sail:()=>{ sweep(200,900,.5,'sine',.05); nz(.8,500,.08,{type:'lowpass',to:1500,atk:.25}); },
+  door:()=>{ nz(.7,420,.1,{type:'lowpass',q:.9,to:120,atk:.06}); beep(70,.5,'sawtooth',.05); },
+  thunder:()=>{ nz(1.6,300,.16,{type:'lowpass',q:.6,to:60,atk:.02}); setTimeout(()=>nz(1.1,180,.1,{type:'lowpass',to:40}),240); },
+  rumble:()=>nz(1.1,200,.07,{type:'lowpass',q:.6,to:50,atk:.05}), // a flash on the horizon, not the strike overhead
+  gust:()=>nz(1.8,700,.07,{type:'bandpass',q:.5,to:1600,atk:.5}),
+  meteor:()=>sweep(1800,300,2.2,'sawtooth',.035),
+  boom:()=>{ nz(1.2,220,.18,{type:'lowpass',q:.7,to:45}); beep(48,.5,'sawtooth',.09); },
+  pet:()=>{beep(1046,.05,'triangle',.035);setTimeout(()=>beep(1568,.07,'triangle',.03),55);},
+  spinUp:()=>sweep(140,520,.6,'sawtooth',.04),
+  // a rare catch announces itself — the arpeggio climbs with the rarity, shinies shimmer on top
+  rare:(r,shiny)=>{ const n=RORDER[r]||0; if(n<2&&!shiny)return;
+    [[784,988,1175],[880,1109,1318,1568],[1046,1318,1568,2093]][Math.max(0,Math.min(2,n-2))]
+      .forEach((f,i)=>setTimeout(()=>beep(f,.18,'triangle',.045),i*80));
+    if(shiny)setTimeout(()=>{for(let i=0;i<4;i++)setTimeout(()=>beep(2093+Math.random()*900,.06,'sine',.02),i*70);},120); }};
 document.getElementById('mute').onclick=()=>{muted=!muted;const b=document.getElementById('mute');b.textContent=muted?'♪ MUTED':'♪ SOUND';b.style.color=muted?'var(--faint)':'';
   if(musMaster)musMaster.gain.value=muted?0:MUS_VOL;};
 
-/* ---- chiptune loop + ocean ambience — pure WebAudio, no assets ---- */
+/* ---- one track per isle — chiptune + ambience, pure WebAudio, no assets ----
+   Travel reloads the page, so the world's entry is chosen once in startMusic()
+   and nothing ever has to crossfade.
+   step  = seconds per 16th · bass/lead = 16-step patterns, 0 = rest
+   lift  = per-bar transpose of the lead · hush = the step the lead drops out at
+   tick  = the percussive blip · amb = the noise bed · drone = the sub underneath */
 const MUS_VOL=0.14;
-let musMaster=null,musStep=0,musNext=0;
-const MUS_BASS=[131,0,98,0, 87,0,98,0, 131,0,98,0, 117,0,98,131];
-const MUS_LEAD=[523,0,659,784, 0,659,0,523, 587,0,698,880, 784,0,698,0];
+let musMaster=null,musStep=0,musNext=0,MUS=null;
+const MUSIC={
+  // Fortune Isle — the original: bright major chiptune over rolling surf
+  isle:{step:0.24,bars:4,
+    bass:[131,0,98,0, 87,0,98,0, 131,0,98,0, 117,0,98,131],bassType:'triangle',bassVol:0.45,bassDur:1,
+    lead:[523,0,659,784, 0,659,0,523, 587,0,698,880, 784,0,698,0],leadType:'square',leadVol:0.18,leadDur:0.83,
+    lift:[1,1,1.5,1],hush:[16,16,16,12],                       // bar 3 lifts a fifth, bar 4 breathes
+    tick:{f:1760,every:4,at:2,type:'square',vol:0.06,dur:0.05},
+    amb:{cut:420,gain:0.28,lfo:0.11,wob:0.14}},
+  // The Great Mine — a plodding work song in A minor, pickaxe on the offbeat
+  mine:{step:0.27,bars:4,
+    bass:[110,0,110,0, 82,0,110,0, 98,0,98,0, 110,0,82,98],bassType:'square',bassVol:0.30,bassDur:1,
+    lead:[440,0,523,0, 587,0,523,0, 440,0,392,440, 523,0,440,0],leadType:'triangle',leadVol:0.20,leadDur:0.9,
+    lift:[1,1,1,0.5],hush:[16,16,16,14],                       // the last bar drops an octave and leans on the shovel
+    tick:{f:349,every:8,at:4,type:'square',vol:0.05,dur:0.07},
+    amb:{cut:300,gain:0.22,lfo:0.07,wob:0.1}},
+  // Cinder Atoll — fast, Phrygian, sawtooth: the isle is actively trying to kill you
+  volcano:{step:0.20,bars:4,
+    bass:[73,0,73,73, 78,0,73,0, 65,0,73,0, 78,73,65,73],bassType:'sawtooth',bassVol:0.32,bassDur:1,
+    lead:[587,622,587,0, 466,0,523,587, 0,622,587,466, 440,0,466,0],leadType:'sawtooth',leadVol:0.11,leadDur:0.7,
+    lift:[1,1,1,1.5],hush:[16,16,16,16],                       // relentless — the lead never rests
+    tick:{f:1318,every:4,at:2,type:'square',vol:0.05,dur:0.04},
+    drone:{f:44,gain:0.16},                                    // the crater breathing under everything
+    amb:{cut:190,gain:0.30,lfo:0.06,wob:0.2}},
+  // Frostbite Isle — slow, sparse, glassy: sine bells over thin wind
+  frost:{step:0.32,bars:4,
+    bass:[73,0,0,0, 0,0,110,0, 98,0,0,0, 0,0,82,0],bassType:'triangle',bassVol:0.34,bassDur:2.6,
+    lead:[1174,0,0,880, 0,0,1046,0, 0,1174,0,0, 987,0,880,0],leadType:'sine',leadVol:0.16,leadDur:2.2,
+    lift:[1,1,0.5,1],hush:[16,16,16,16],
+    tick:{f:2637,every:8,at:6,type:'sine',vol:0.03,dur:0.12},
+    amb:{cut:1100,gain:0.16,lfo:0.05,wob:0.14}},
+  // The Undermine — near silence with a heartbeat, a far-off echo and one dripping note a bar
+  cave:{step:0.30,bars:4,
+    bass:[65,0,0,0, 65,0,0,0, 58,0,0,0, 62,0,0,65],bassType:'sine',bassVol:0.50,bassDur:3,
+    lead:[0,0,392,0, 0,466,0,0, 523,0,0,392, 0,0,349,0],leadType:'triangle',leadVol:0.15,leadDur:1.6,
+    lift:[1,1,2,1],hush:[16,16,16,12],                         // bar 3 answers itself an octave up
+    tick:{f:1568,every:16,at:11,type:'sine',vol:0.04,dur:0.08},
+    drone:{f:41,gain:0.12},
+    amb:{cut:250,gain:0.20,lfo:0.04,wob:0.16}}};
 function musNote(t,f,dur,type,vol){ if(!f)return; const o=AC.createOscillator(),g=AC.createGain();
   o.type=type; o.frequency.value=f; g.gain.value=0.0001; o.connect(g); g.connect(musMaster);
   g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(vol,t+0.02);
   g.gain.exponentialRampToValueAtTime(0.0001,t+dur); o.start(t); o.stop(t+dur+0.05); }
-function schedMusic(){ if(!AC||!musMaster)return;
-  while(musNext<AC.currentTime+0.35){ const s=musStep%16, bar=(musStep>>4)%4;
-    musNote(musNext,MUS_BASS[s],0.24,'triangle',0.45);
-    if(!(bar===3&&s>=12)) musNote(musNext,MUS_LEAD[s]*(bar===2?1.5:1),0.2,'square',0.18); // bar 3 lifts a fifth, bar 4 breathes
-    if(s%4===2) musNote(musNext,1760,0.05,'square',0.06);
-    musNext+=0.24; musStep++; } }
+function schedMusic(){ if(!AC||!musMaster||!MUS)return; const M=MUS;
+  while(musNext<AC.currentTime+0.35){ const s=musStep%16, bar=(musStep>>4)%M.bars;
+    musNote(musNext,M.bass[s],M.step*M.bassDur,M.bassType,M.bassVol);
+    if(s<M.hush[bar]) musNote(musNext,M.lead[s]*M.lift[bar],M.step*M.leadDur,M.leadType,M.leadVol);
+    const t=M.tick; if(t&&s%t.every===t.at%t.every) musNote(musNext,t.f,t.dur,t.type,t.vol);
+    musNext+=M.step; musStep++; } }
 function startMusic(){ if(!AC||musMaster)return;
+  MUS=MUSIC[worldKey]||MUSIC.isle;
   musMaster=AC.createGain(); musMaster.gain.value=muted?0:MUS_VOL; musMaster.connect(AC.destination);
-  // ocean ambience: looped noise through a slowly wobbling lowpass
-  const len=(2*AC.sampleRate)|0, buf=AC.createBuffer(1,len,AC.sampleRate), d=buf.getChannelData(0);
+  // ambience bed: looped noise through a slowly wobbling lowpass — surf on the isles,
+  // a dull roar in the crater, thin wind on the ice, dripping stillness underground
+  const A=MUS.amb, len=(2*AC.sampleRate)|0, buf=AC.createBuffer(1,len,AC.sampleRate), d=buf.getChannelData(0);
   for(let i=0;i<len;i++)d[i]=Math.random()*2-1;
   const noise=AC.createBufferSource(); noise.buffer=buf; noise.loop=true;
-  const lp=AC.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=420; lp.Q.value=0.5;
-  const ng=AC.createGain(); ng.gain.value=0.28;
-  const lfo=AC.createOscillator(); lfo.frequency.value=0.11; const lg=AC.createGain(); lg.gain.value=0.14;
+  const lp=AC.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=A.cut; lp.Q.value=0.5;
+  const ng=AC.createGain(); ng.gain.value=A.gain;
+  const lfo=AC.createOscillator(); lfo.frequency.value=A.lfo; const lg=AC.createGain(); lg.gain.value=A.wob;
   lfo.connect(lg); lg.connect(ng.gain); noise.connect(lp); lp.connect(ng); ng.connect(musMaster);
   noise.start(); lfo.start();
+  if(MUS.drone){ const dr=AC.createOscillator(); dr.type='sawtooth'; dr.frequency.value=MUS.drone.f;
+    const dlp=AC.createBiquadFilter(); dlp.type='lowpass'; dlp.frequency.value=110;
+    const dg=AC.createGain(); dg.gain.value=MUS.drone.gain;
+    dr.connect(dlp); dlp.connect(dg); dg.connect(musMaster); dr.start(); }
   musNext=AC.currentTime+0.15; musStep=0; setInterval(schedMusic,110); }
 
 const RAR={common:'#b9c6c4',uncommon:'#74e08a',rare:'#57b7ff',epic:'#c07bff',legendary:'#ffc24b'};
@@ -1708,7 +1810,12 @@ function renderFishScene(dt){ if(!fishRenderer||!fishModel)return; fishT+=dt;
   if(A.glows.length)A.glows[0].material.emissiveIntensity=0.7+Math.sin(fishT*5)*0.3;
   if(A.sparks){A.sparks.rotation.y=fishT*2.2;A.sparks.rotation.x=Math.sin(fishT*1.7)*0.35;}
   fishRenderer.render(fishScene,fishCam); }
-function reveal(f){ const glow=f.shiny?'#ffd24f':RAR[f.rar];
+/* `quiet` is the auto-rig: it lands a fish every few seconds, and a full 3D
+   card for every sardine would bury the screen. Commons get a one-line toast;
+   anything the rig was not supposed to find still gets the whole ceremony. */
+function reveal(f,quiet){ sfx.rare(f.rar,f.shiny);
+  if(quiet&&RORDER[f.rar]<2&&!f.shiny){ toast(`${pixSVG('fish',13)} ${f.name} · ◈${fmt(f.val)}`); return; }
+  const glow=f.shiny?'#ffd24f':RAR[f.rar];
   revEl.innerHTML=`<div class="reveal-card" style="border-color:${glow};box-shadow:0 20px 60px rgba(0,0,0,.6),0 0 30px ${glow}55"><div class="r" style="color:${RAR[f.rar]}">${f.shiny?'✦ shiny ':''}${f.rar}</div><div class="f3d">${fishRenderer?'':fishSVG(f.rar)}</div><div class="nm">${f.name}</div><div class="v">◈ ${fmt(f.val)} · ${f.kg||'?'} kg</div></div>`;
   if(fishRenderer){ revEl.querySelector('.f3d').appendChild(fishRenderer.domElement); buildFishModel(f); renderFishScene(0); }
   revEl.classList.add('on'); revT=2.5; }
@@ -1763,6 +1870,17 @@ const luckWeight=(rar,luck)=>luck>0?Math.max(0.05,1+luck*(LUCK_W[rar]||0)):1;
 /* Rod luck replaces the old "reroll the draw up to 9× at p=0.3" ladder: that
    loop saturated near Lv.10 and left bait nothing to add. Lv.1 = 0, Lv.10 = +1.62. */
 const rodLuck=lvl=>+(0.18*(clamp(lvl|0||1,1,MAXLVL)-1)).toFixed(4);
+/* ---- AUTO-FISHING: the "lazy line" — mirrors server/src/game/rules.js AUTO.
+   A rig you prop up on the shore and walk away from. Nobody sets the hook and
+   nobody plays the fish, so it only ever brings up what swims into it: the
+   cheap end of the water. W multiplies each species' table weight AFTER the
+   world's own weights — on Fortune Isle that moves a legendary from ~1 in 220
+   casts to ~1 in 26,000. The rest just make sure an unattended catch is never
+   worth as much as one you fought for. These numbers decide the OFFLINE game
+   only; signed in, the server rolls all of it and this never runs. ---- */
+const AUTO={W:{common:1,uncommon:0.45,rare:0.1,epic:0.03,legendary:0.008},
+  luck:0.25,val:0.7,shiny:0.25,pearls:0.5,gapMs:4500};
+const autoWeight=rar=>AUTO.W[rar]!==undefined?AUTO.W[rar]:1;
 /* Bait: bought by the pack with coins, spent one per fish LANDED (a snapped
    line is free). `min` is a hard floor — the pool is filtered to that rarity
    and up, so Siren's Chum cannot hook anything but a legend. `shiny` scales
@@ -1903,23 +2021,29 @@ const RORDER={common:0,uncommon:1,rare:2,epic:3,legendary:4};
 function fishPool(minRar){ const pool=(typeof WORLD!=='undefined'&&WORLD.fish?WORLD.fish:TABLE).filter(e=>condOK(e[2]));
   const fl=RORDER[minRar]; if(fl==null)return pool;
   const up=pool.filter(e=>RORDER[e[0].rar]>=fl); return up.length?up:pool; }
-function mkFish(t,mul){ return {uid:(Date.now()+Math.random()).toString(36),name:t.name,rar:t.rar,
-  val:Math.round(t.val*mul*rand(0.85,1.18)),kg:+(t.val/9*rand(0.5,1.6)+0.2).toFixed(1),wins:0}; }
-function rollOnce(luck,minRar){ const pool=fishPool(minRar); if(!pool.length)return null;
+function mkFish(t,mul,auto){ return {uid:(Date.now()+Math.random()).toString(36),name:t.name,rar:t.rar,
+  // never below 1: an auto-caught sardine is cheap, not free
+  val:Math.max(1,Math.round(t.val*mul*rand(0.85,1.18)*(auto?AUTO.val:1))),
+  kg:+(t.val/9*rand(0.5,1.6)+0.2).toFixed(1),wins:0}; }
+function rollOnce(luck,minRar,auto){ const pool=fishPool(minRar); if(!pool.length)return null;
   const mul=typeof WORLD!=='undefined'?WORLD.fishMul||1:1;
-  const wt=pool.map(e=>e[1]*luckWeight(e[0].rar,luck||0));
+  const wt=pool.map(e=>e[1]*luckWeight(e[0].rar,luck||0)*(auto?autoWeight(e[0].rar):1));
   let tot=0; for(const x of wt)tot+=x; let r=Math.random()*tot;
-  for(let i=0;i<pool.length;i++){ r-=wt[i]; if(r<=0)return mkFish(pool[i][0],mul); }
-  return mkFish(pool[pool.length-1][0],mul); }
+  for(let i=0;i<pool.length;i++){ r-=wt[i]; if(r<=0)return mkFish(pool[i][0],mul,auto); }
+  return mkFish(pool[pool.length-1][0],mul,auto); }
 // `noBait` is for a fish that was never on a line at all (the one buried in a
 // treasure chest): rod luck still counts, the bait in your pocket does not.
-function rollFish(noBait){ const b=noBait?null:activeBait(), min=b?b.min:null,
-    luck=rodLuck(state.rodLvl)+(b?b.luck:0);
-  let f=rollOnce(luck,min);
-  if((wState==='rain'||wState==='storm')&&Math.random()<0.12){ const g=rollOnce(luck,min); if(RORDER[g.rar]>RORDER[f.rar])f=g; }
-  const bl=BOATS[state.boatLvl]?BOATS[state.boatLvl].luck:0; // a finer ship stirs finer fish
-  if(bl&&Math.random()<bl){ const g=rollOnce(luck,min); if(RORDER[g.rar]>RORDER[f.rar])f=g; }
-  if(Math.random()<0.018*(b?b.shiny:1)){ f.shiny=true; f.val*=5; f.name='✦ '+f.name; } // shiny mutation
+function rollFish(noBait,auto){ // an unattended hook carries no bait: no luck from it, no rarity floor either
+  const b=(noBait||auto)?null:activeBait(), min=b?b.min:null,
+    luck=auto?rodLuck(state.rodLvl)*AUTO.luck:rodLuck(state.rodLvl)+(b?b.luck:0);
+  let f=rollOnce(luck,min,auto);
+  // weather and hull only stir up better fish for someone holding the rod —
+  // the lazy line gets one flat draw and no second chances
+  if(!auto){
+    if((wState==='rain'||wState==='storm')&&Math.random()<0.12){ const g=rollOnce(luck,min); if(RORDER[g.rar]>RORDER[f.rar])f=g; }
+    const bl=BOATS[state.boatLvl]?BOATS[state.boatLvl].luck:0; // a finer ship stirs finer fish
+    if(bl&&Math.random()<bl){ const g=rollOnce(luck,min); if(RORDER[g.rar]>RORDER[f.rar])f=g; } }
+  if(Math.random()<0.018*(auto?AUTO.shiny:(b?b.shiny:1))){ f.shiny=true; f.val*=5; f.name='✦ '+f.name; } // shiny mutation
   return f; }
 /* Tell the player when their last bait went in the water — the same call site
    whether the server or the offline roll decided it. */
@@ -1930,11 +2054,12 @@ function useBait(){ const id=state.baitId, b=baitOf(id);
   if(!b||!(state.bait[id]>0))return null;
   const left=state.bait[id]-1;
   if(left>0)state.bait[id]=left; else { delete state.bait[id]; state.baitId=''; }
+  sfx.bait();
   return {id,name:b.name,left,out:left===0}; }
 function biteTime(){ const wet=(wState==='rain'||wState==='storm')?0.65:1;
   const chum=Date.now()<state.boosts.chumUntil?0.5:1; // Chum Jar boost
   return rand(1.1,3.2)*Math.max(0.35,1-0.06*(state.rodLvl-1))*wet*chum; }
-function onCatch(fish){ state.stats.caught++; state.bucket.push(fish);
+function onCatch(fish,auto){ state.stats.caught++; state.bucket.push(fish);
   if(RORDER[fish.rar]>=2)rareCaught++; // feeds the "land N rare-or-better" bounty
   const dexName=fish.shiny?fish.name.replace('✨ ','').replace('✦ ',''):fish.name;
   const d=state.dex[dexName]||(state.dex[dexName]={n:0,best:0});
@@ -1944,15 +2069,21 @@ function onCatch(fish){ state.stats.caught++; state.bucket.push(fish);
   if(fish.shiny){ toast('✦ SHINY! Worth 5× more','gold'); addShake(0.18); addFreeze(0.1); }
   // pearls: flat activity points by rarity (never scaled by world/price)
   let pp={common:1,uncommon:2,rare:4,epic:8,legendary:16}[fish.rar]||1;
-  if(fish.shiny)pp*=3; if(isNew)pp+=5; else if(isRec)pp+=2;
+  if(fish.shiny)pp*=3;
+  // the rig earns half the activity points; a first sighting is still a first
+  // sighting, so the discovery bonuses ride on top untouched
+  if(auto)pp=Math.max(1,Math.floor(pp*AUTO.pearls));
+  if(isNew)pp+=5; else if(isRec)pp+=2;
   addPearls(pp);
   // epic+ catches can come with a Reel Fisheries share certificate
   if(RORDER[fish.rar]>=3&&Math.random()<0.05)grantShare('REEL');
-  // rare chance the catch also snags a bottled treasure map
-  if(!state.treasure&&Math.random()<0.08){ const cand=landCells.filter(c=>reachable(c[0],c[1])&&Math.hypot(c[0]-spawnCell[0],c[1]-spawnCell[1])>14);
+  // rare chance the catch also snags a bottled treasure map. Never off the
+  // auto-rig: the map roll is a flat 8% per catch, the one drop the crushed
+  // rarity table does not already gate.
+  if(!auto&&!state.treasure&&Math.random()<0.08){ const cand=landCells.filter(c=>reachable(c[0],c[1])&&Math.hypot(c[0]-spawnCell[0],c[1]-spawnCell[1])>14);
     if(cand.length){ const c=cand[(Math.random()*cand.length)|0]; state.treasure={i:c[0],j:c[1],w:worldKey};
       toast(pixSVG('map',13)+' A bottle! X marks the spot on your map','gold'); } }
-  sfx.catch(); reveal(fish); }
+  sfx.catch(); reveal(fish,auto); }
 /* Same celebration, but the server already decided (and banked) everything. */
 function revealServerCatch(r){ const fish=r.fish;
   if(r.isRec&&!r.isNew)toast(`${pixSVG('trophy',13)} Record ${fish.name}: ${fish.kg} kg!`,'good');
@@ -1962,7 +2093,7 @@ function revealServerCatch(r){ const fish=r.fish;
   noteBaitSpent(r.bait);
   if(r.share)toast(`${pixSVG('chart',13)} +1 share ${r.share}`,'gold');
   if(r.treasure)toast(pixSVG('map',13)+' A bottle! X marks the spot on your map','gold');
-  sfx.catch(); reveal(fish); }
+  sfx.catch(); reveal(fish,r.auto); }
 // rotating market demand: every 3 min one category is HOT (x1.6), one SURPLUS (x0.75)
 const MKT_CATS=['fish','wood','coal','iron','gold','diamond'];
 const MKT_MS=180000;
@@ -2013,7 +2144,7 @@ function payDividends(){ const st=state.stocks, dNow=Math.floor(Date.now()/(MKT_
     toast(`${pixSVG('chart',13)} Dividends paid: +◈${fmt(tot)}`,'gold'); coinFly(tot); sfx.win(); updateHUD(); }
   save(); }
 // ---- PEARLS: flat activity points, never convertible to/from coins ----
-function addPearls(n,why){ if(n<=0)return; state.pearls+=n; state.pearlsLife+=n;
+function addPearls(n,why){ if(n<=0)return; state.pearls+=n; state.pearlsLife+=n; sfx.pearl();
   if(n>=2)toast(`+${n} ◉${why?' · '+why:''}`,'good');
   updateHUD(); }
 const catLabel=c=>c==='fish'?'Fish':ORE_INFO[c].name;
@@ -2086,13 +2217,13 @@ function checkDeeds(){ let minted=false;
     const d=DEEDS.find(x=>x[0]===id);
     if(!d[3](state))continue;
     state.deeds[id]=mktEpochNow(); minted=true;
-    toast(`📜 Deed minted on the Isle Ledger: ${name}`,'gold'); addShake(0.12); sfx.win(); }
+    toast(`📜 Deed minted on the Isle Ledger: ${name}`,'gold'); addShake(0.12); sfx.ach(); }
   if(minted){ save(); if(invOpen)renderInv(); } }
 let achT=0;
 function checkAch(){ for(const [id,name,desc,rw,chk] of ACH){
   if(state.ach[id]||!chk(state))continue;
   state.ach[id]=1; state.coins+=rw;
-  toast(`${pixSVG('trophy',13)} ${name} — +◈${fmt(rw)}`,'gold'); coinFly(rw); sfx.win();
+  toast(`${pixSVG('trophy',13)} ${name} — +◈${fmt(rw)}`,'gold'); coinFly(rw); sfx.ach();
   updateHUD(); save(); } }
 
 /* ========================================================================
@@ -2161,17 +2292,17 @@ function buyOrSail(k){ const w=WORLDS[k]; if(!w||k===worldKey)return;
   if(SRV.on){ SRV.act('travel',{world:k}).then(r=>{ if(!r)return;
       if(r.unlocked){ sfx.win(); addShake(0.1); toast(pixSVG('island',13)+' '+w.name+' unlocked!','gold'); return; }
       try{localStorage.setItem('reelfortune3d-world',k);}catch(e){}
-      toast(pixSVG('boat',13)+' Sailing to '+w.name+'…','good');
+      sfx.sail(); toast(pixSVG('boat',13)+' Sailing to '+w.name+'…','good');
       setTimeout(()=>location.reload(),600); });
     return; }
   if(!state.worlds.includes(k)){
     const br=BOAT_REQ[k]||0;
-    if(state.boatLvl<br){ toast('Your '+BOATS[state.boatLvl].name+" can't make that voyage — see the Harbor dock",'bad'); return; }
-    if(state.coins<w.cost)return;
+    if(state.boatLvl<br){ sfx.deny(); toast('Your '+BOATS[state.boatLvl].name+" can't make that voyage — see the Harbor dock",'bad'); return; }
+    if(state.coins<w.cost){ sfx.deny(); return; }
     state.coins-=w.cost; state.worlds.push(k); sfx.win(); addShake(0.1);
     toast(pixSVG('island',13)+' '+w.name+' unlocked!','gold'); updateHUD(); renderUpg(); save(); return; }
   save(); try{localStorage.setItem('reelfortune3d-world',k);}catch(e){}
-  toast(pixSVG('boat',13)+' Sailing to '+w.name+'…','good');
+  sfx.sail(); toast(pixSVG('boat',13)+' Sailing to '+w.name+'…','good');
   setTimeout(()=>location.reload(),600); }
 // the portal hops to the next unlocked isle in order (null while only one is unlocked)
 function portalDest(){ const un=WORLD_ORDER.filter(k=>state.worlds.includes(k));
@@ -2191,7 +2322,7 @@ function caveTravel(){ initAudio();
     toast(pixSVG('pick',13)+' Mine shaft opened — ◈ '+fmt(c),'gold'); }
   if(SRV.on){ // tell the server which isle we are standing on before the reload
     const dest=WORLD.cave?caveReturn():'cave';
-    SRV.act('travel',{world:dest}).then(()=>{
+    sfx.door(); SRV.act('travel',{world:dest}).then(()=>{
       try{ localStorage.setItem('reelfortune3d-world',dest); }catch(e){}
       setTimeout(()=>location.reload(),400); });
     return; }
@@ -2199,7 +2330,7 @@ function caveTravel(){ initAudio();
   const back=caveReturn();
   try{ if(WORLD.cave){ localStorage.setItem('reelfortune3d-world',back); }
     else { localStorage.setItem('reelfortune3d-return',worldKey); localStorage.setItem('reelfortune3d-world','cave'); } }catch(e){}
-  toast(pixSVG('pick',13)+(WORLD.cave?' Climbing back to '+WORLDS[back].name+'…':' Descending into The Undermine…'),'good');
+  sfx.door(); toast(pixSVG('pick',13)+(WORLD.cave?' Climbing back to '+WORLDS[back].name+'…':' Descending into The Undermine…'),'good');
   setTimeout(()=>location.reload(),600); }
 /* ---- ISLE EXCHANGE panel ---- */
 const stockList=document.getElementById('stockList'),kioskList=document.getElementById('kioskList'),
@@ -2302,8 +2433,8 @@ function renderBounties(){ const el=document.getElementById('bountyList'); if(!e
       <span class="rr" style="color:var(--muted)"><b>${'▰'.repeat(k)+'▱'.repeat(8-k)}</b></span>
       <span class="vv" style="color:${b.done?'var(--teal)':'var(--gold)'}">${b.done?'✓ paid':'◈ '+fmt(b.reward)}</span></div>`; }).join(''); }
 function renderMarketAll(){ renderMarket(); renderOres(); renderUpg(); renderBait(); renderStocks(); renderKiosk(); renderBounties(); }
-function openMarket(){marketOpen=true;marketEl.classList.add('on');renderBanner();renderMarketAll();}
-function closeMarket(){marketOpen=false;marketEl.classList.remove('on');save();}
+function openMarket(){marketOpen=true;sfx.open();marketEl.classList.add('on');renderBanner();renderMarketAll();}
+function closeMarket(){marketOpen=false;sfx.close();marketEl.classList.remove('on');save();}
 document.getElementById('marketX').onclick=closeMarket;
 document.getElementById('sellAll').onclick=()=>{ if(!state.bucket.length){toast('Bucket empty');return;}
   if(SRV.on){ SRV.act('sell',{kind:'allfish'}).then(r=>{ if(r&&r.gained){coinFly(r.gained);sfx.sell();
@@ -2326,14 +2457,14 @@ marketEl.addEventListener('click',e=>{
       toast('+'+fmt(g)+' coins'+(bulk>1?` · bulk +${Math.round((bulk-1)*100)}%`:''),'gold');updateHUD();renderMarketAll();save();} return;}
   const t3=e.target.closest?e.target.closest('[data-buy]'):null;
   if(t3){const kind=t3.getAttribute('data-buy');
-    if(SRV.on){ SRV.act('craft',{tool:kind}).then(r=>{ if(r&&r.name){sfx.ore();addShake(0.1);
+    if(SRV.on){ SRV.act('craft',{tool:kind}).then(r=>{ if(r&&r.name){sfx.craft();addShake(0.1);
       toast(pixSVG(kind==='rod'?'rod':kind==='axe'?'axe':'pick',13)+' '+r.name+' crafted!','gold');} }); return; }
     const doCraft=(lvlKey,base,names)=>{ const lvl=state[lvlKey]; if(lvl>=MAXLVL)return;
       const cost=lvlKey==='axeLvl'?axeCost(lvl):upCost(base,lvl),
         req=(lvlKey==='axeLvl'?AXE_REQ:UP_REQ)[lvl+1];
       if(state.coins<cost||!haveOres(req))return;
       state.coins-=cost; for(const k in req)state.ores[k]-=req[k];
-      state[lvlKey]=lvl+1; sfx.ore(); addShake(0.1); toast(pixSVG(lvlKey==='rodLvl'?'rod':'pick',13)+' '+names[lvl+1]+' crafted!','gold'); };
+      state[lvlKey]=lvl+1; sfx.craft(); addShake(0.1); toast(pixSVG(lvlKey==='rodLvl'?'rod':'pick',13)+' '+names[lvl+1]+' crafted!','gold'); };
     if(kind==='rod')doCraft('rodLvl',ROD_BASE,ROD_NAMES);
     else if(kind==='pick')doCraft('pickLvl',PICK_BASE,PICK_NAMES);
     else if(kind==='axe')doCraft('axeLvl',AXE_BASE,AXE_NAMES);
@@ -2580,11 +2711,11 @@ function buyBoat(){ const nxt=state.boatLvl+1; if(nxt>=BOATS.length)return; cons
   rebuildDockBoat(); buildPreview(state.boatLvl); renderHarbor(); updateHUD(); save();
   if(crewOnline())crewRefresh(); }
 function openHarbor(){ if(marketOpen||casinoOpen||invOpen)return;
-  harborOpen=true; harborEl.classList.add('on'); buildPreview(state.boatLvl); renderHarbor();
+  harborOpen=true; sfx.open(); harborEl.classList.add('on'); buildPreview(state.boatLvl); renderHarbor();
   // a knock can arrive while the captain is standing at the dock
   crewRefresh(); if(crewTimer)clearInterval(crewTimer);
   crewTimer=setInterval(()=>{ if(harborOpen&&!crewBusy)crewRefresh(); },6000); }
-function closeHarbor(){ harborOpen=false; harborEl.classList.remove('on');
+function closeHarbor(){ harborOpen=false; sfx.close(); harborEl.classList.remove('on');
   if(crewTimer){ clearInterval(crewTimer); crewTimer=0; } save(); }
 if(harborEl){
   document.getElementById('harborX').onclick=closeHarbor;
@@ -2634,20 +2765,20 @@ function renderStakes(){
   stakeListEl.innerHTML=h; }
 function updateSpinBtn(){ const hasStake=(stakeIdx>=0&&state.bucket[stakeIdx])||(coinStake>0&&state.coins>=coinStake);
   spinBtn.disabled=!(hasStake&&betColor&&!spinning); }
-function openCasino(){casinoOpen=true;viewMode='casino';casinoLabel.visible=false;casinoEl.classList.add('on');stakeIdx=-1;betColor=null;spinning=false;coinStake=0;spinResult.innerHTML='';renderJackpot();
+function openCasino(){casinoOpen=true;sfx.open();viewMode='casino';casinoLabel.visible=false;casinoEl.classList.add('on');stakeIdx=-1;betColor=null;spinning=false;coinStake=0;spinResult.innerHTML='';renderJackpot();
   document.querySelectorAll('.betbtn').forEach(b=>b.classList.remove('sel'));renderStakes();updateSpinBtn();}
 function closeCasino(){
   // closing mid-spin settles the wheel HONESTLY: no loss-dodging, no swallowed stakes
   if(spinAnim){ const sa=spinAnim; spinAnim=null; ballLockIdx=sa.winIdx; resolveSpin(sa); }
-  casinoOpen=false;viewMode='follow';casinoLabel.visible=true;spinSeq++;spinning=false;casinoEl.classList.remove('on');save();}
+  casinoOpen=false;sfx.close();viewMode='follow';casinoLabel.visible=true;spinSeq++;spinning=false;casinoEl.classList.remove('on');save();}
 document.getElementById('casinoX').onclick=closeCasino;
 stakeListEl.addEventListener('click',e=>{if(spinning)return;
   const c=e.target.closest('[data-cstake]');
   if(c){ const amt=+c.getAttribute('data-cstake');
-    if(amt>betCap()){ toast(`Rod Lv.${state.rodLvl} caps you at ◈${fmt(betCap())} — upgrade to bet bigger`,'bad'); return; }
-    if(state.coins>=amt){ coinStake=(coinStake===amt?0:amt); if(coinStake)stakeIdx=-1; renderStakes(); updateSpinBtn(); } return; }
-  const t=e.target.closest('[data-stake]');if(t){stakeIdx=+t.getAttribute('data-stake');coinStake=0;renderStakes();updateSpinBtn();}});
-document.querySelectorAll('.betbtn').forEach(b=>{const pick=()=>{if(spinning)return;betColor=b.getAttribute('data-bet');
+    if(amt>betCap()){ sfx.deny(); toast(`Rod Lv.${state.rodLvl} caps you at ◈${fmt(betCap())} — upgrade to bet bigger`,'bad'); return; }
+    if(state.coins>=amt){ sfx.click(); coinStake=(coinStake===amt?0:amt); if(coinStake)stakeIdx=-1; renderStakes(); updateSpinBtn(); } return; }
+  const t=e.target.closest('[data-stake]');if(t){sfx.click();stakeIdx=+t.getAttribute('data-stake');coinStake=0;renderStakes();updateSpinBtn();}});
+document.querySelectorAll('.betbtn').forEach(b=>{const pick=()=>{if(spinning)return;sfx.click();betColor=b.getAttribute('data-bet');
   document.querySelectorAll('.betbtn[data-bet]').forEach(x=>x.classList.remove('sel'));b.classList.add('sel');updateSpinBtn();};
   b.onclick=pick;b.onkeydown=e=>{if(e.code==='Enter'||e.code==='Space'){e.preventDefault();pick();}};});
 let spinSeq=0,spinAnim=null;
@@ -2657,7 +2788,7 @@ function startSpinAnim(winIdx,fish,coins,bet,srv){
   const bTarget=-(winIdx*SEGA+SEGA/2)-th1;                 // …ball must come to rest on the winning pocket
   let base=(ballA-bTarget)%TAU; if(base<0)base+=TAU;
   spinAnim={seq:++spinSeq,t:0,dur:4.4,th0,th1,b0:ballA,bTot:base+6*TAU,winIdx,fish,coins,bet,srv,lastPocket:-1}; }
-spinBtn.onclick=()=>{ if(spinBtn.disabled)return;
+spinBtn.onclick=()=>{ if(spinBtn.disabled)return; sfx.spinUp();
   const fish=stakeIdx>=0?state.bucket[stakeIdx]:null, coins=fish?0:coinStake;
   if(!fish&&!(coins>0&&state.coins>=coins))return;
   if(SRV.on){ // the house is the server: it rolls the pocket, we only animate to it
@@ -2746,7 +2877,32 @@ function resolveSpin(sa){ const idx=sa.winIdx,fish=sa.fish,coins=sa.coins||0,col
    12. FISHING (3D)
    ======================================================================== */
 const fishing={state:'idle',t:0,biteAt:0,reel:0,reelT:0,tx:0,tz:0,cast:0,
-  tens:0,fight:0,surge:0,surgeT:0,hooked:null}; // tens/fight/surge drive the reel-in tug-of-war
+  tens:0,fight:0,surge:0,surgeT:0,hooked:null,auto:false}; // tens/fight/surge drive the reel-in tug-of-war
+
+/* ---- THE AUTO-RIG ------------------------------------------------------
+   Toggle it with F and the loop plays itself: it casts at the nearest water,
+   sets the hook a beat after the bite, and reels with a hand steady enough
+   that the line never snaps. You do not have to be at the keyboard for any
+   of it — which is the whole point, and exactly what it pays for with the
+   AUTO table above.
+
+   `nextAt` is wall-clock, not a frame counter: the server enforces the same
+   AUTO.gapMs floor between two auto catches, so the rig paces itself a
+   quarter-second on the safe side of it rather than being bounced by a 400. */
+const autoFish={on:false,nextAt:0};
+const isMoving=()=>!!(keys.up||keys.down||keys.left||keys.right);
+function paintAuto(){ const el=document.getElementById('hud-auto'); if(!el)return;
+  el.classList.toggle('on',autoFish.on);
+  const v=document.getElementById('autoVal'); if(v)v.textContent=autoFish.on?'fishing':'off';
+  const b=document.getElementById('autoBtn'); if(b)b.classList.toggle('lit',autoFish.on); }
+function setAuto(on,why){
+  if(autoFish.on===!!on)return;
+  autoFish.on=!!on; autoFish.nextAt=0;
+  if(!autoFish.on&&fishing.state!=='idle')cancelFish();
+  paintAuto();
+  if(autoFish.on)toast(`${pixSVG('rod',13)} Auto-fishing ON — the rig only brings up cheap fish`,'good');
+  else toast(why||'Auto-fishing off'); }
+function toggleAuto(){ if(!running)return; initAudio(); setAuto(!autoFish.on); }
 // how hard each rarity pulls — legendaries will snap a starter rod if you just hold E
 const FIGHT={common:0.52,uncommon:0.66,rare:0.86,epic:1.06,legendary:1.32};
 function cancelFish(){fishing.state='idle';bobber.visible=false;fishing.hooked=null;fishing.tens=0;hint('');}
@@ -2757,20 +2913,22 @@ function nearestWater(){ const [ci,cj]=cellIndex(pWorld.x,pWorld.z); let bestC=n
   for(let i=ci-3;i<=ci+3;i++)for(let j=cj-3;j<=cj+3;j++){ if(i<0||j<0||i>=N||j>=N)continue; if(heightMap[i][j]>2)continue;
     const wx2=i-HALF,wz2=j-HALF,d=Math.hypot(wx2-pWorld.x,wz2-pWorld.z); if(d<bd){bd=d;bestC={x:wx2,z:wz2,dist:d};} } return bestC; }
 function startCast(w){ initAudio(); fishing.state='cast';fishing.cast=0;fishing.tx=w.x;fishing.tz=w.z;
+  fishing.auto=autoFish.on;   // whose cast this is, decided once — toggling mid-fight cannot change it
   bobber.visible=true;bobber.position.set(pWorld.x,pWorld.y+1,pWorld.z);sfx.cast(); }
 function updateFishing(dt){ const f=fishing;
   if(f.state==='cast'){ f.cast=Math.min(1,f.cast+dt*2.2);
     bobber.position.x=lerp(pWorld.x,f.tx,f.cast);bobber.position.z=lerp(pWorld.z,f.tz,f.cast);
     bobber.position.y=lerp(pWorld.y+1,WATER_TOP+0.1,f.cast)+Math.sin(f.cast*Math.PI)*1.2; hint('Casting…');
-    if(f.cast>=1){f.state='wait';f.biteAt=biteTime();f.t=0;
+    if(f.cast>=1){f.state='wait';f.biteAt=biteTime();f.t=0;sfx.splash(0.06);
       fxBurst(f.tx,WATER_TOP+0.15,f.tz,{n:8,cols:[0x7fdcff,0xd9f6ff,0xffffff],speed:1.8,up:2.6,size:0.9,grav:7});} }
   else if(f.state==='wait'){ f.t+=dt; bobber.position.y=WATER_TOP+0.1+Math.sin(clock*3)*0.05; hint('Waiting for a bite… <span class="key">ESC</span> reel in');
     if(f.t>=f.biteAt){f.state='bite';f.t=0;sfx.bite();
       fxBurst(bobber.position.x,WATER_TOP+0.15,bobber.position.z,{n:6,cols:[0x7fdcff,0xffffff],speed:1.6,up:2.2,size:0.8,grav:7});} }
-  else if(f.state==='bite'){ f.t+=dt; bobber.position.y=WATER_TOP+0.05+Math.sin(clock*22)*0.14; hint('<b style="color:var(--rose)">!</b> <b>BITE!</b> press <span class="key">E</span> now!');
-    if(actEdge){ f.state='reel'; f.reel=0; f.reelT=0; f.tens=0; f.surge=0; f.surgeT=rand(0.5,1.1);
+  else if(f.state==='bite'){ f.t+=dt; bobber.position.y=WATER_TOP+0.05+Math.sin(clock*22)*0.14;
+    hint(f.auto?'<b style="color:var(--rose)">!</b> the rig sets the hook…':'<b style="color:var(--rose)">!</b> <b>BITE!</b> press <span class="key">E</span> now!');
+    if(actEdge||(f.auto&&f.t>0.3)){ f.state='reel'; f.reel=0; f.reelT=0; f.tens=0; f.surge=0; f.surgeT=rand(0.5,1.1);
       // hook the fish NOW so the fight has real weight behind it — the one you fight is the one you land
-      f.hooked=SRV.on?null:rollFish();
+      f.hooked=SRV.on?null:rollFish(false,f.auto);
       f.fight=f.hooked?FIGHT[f.hooked.rar]:0.7; }
     else if(f.t>0.85){cancelFish();sfx.miss();catchStreak=0;toast('It got away…');} }
   else if(f.state==='reel'){ f.reelT+=dt;
@@ -2780,13 +2938,18 @@ function updateFishing(dt){ const f=fishing;
       if(f.surge){ sfx.bite(); addShake(0.05);
         fxBurst(bobber.position.x,WATER_TOP+0.15,bobber.position.z,{n:5,cols:[0x7fdcff,0xffffff],speed:2,up:2.4,size:0.8,grav:7}); } }
     const strain=f.fight*(f.surge?2.6:0.8)/(1+(state.rodLvl-1)*0.13); // a better rod takes more punishment
-    if(keys.act){ f.reel+=dt*0.62; f.tens+=dt*strain; if(Math.random()<0.08)sfx.reel(); }
+    /* The rig has a steadier hand than any player: it hauls only while the line
+       is slack enough and gives every surge straight back, so it never snaps.
+       That patience is the other half of what it trades the good fish away for
+       — it lands everything it hooks, and it hooks almost nothing worth having. */
+    const hold=f.auto?(!f.surge&&f.tens<0.55):keys.act;
+    if(hold){ f.reel+=dt*0.62; f.tens+=dt*strain; if(Math.random()<0.08)sfx.reel(); if(f.tens>0.72&&Math.random()<0.07)sfx.creak(); }
     else { f.reel-=dt*0.1; f.tens-=dt*1.25; }                          // let go to bleed tension off
     f.reel=clamp(f.reel,0,1); f.tens=clamp(f.tens,0,1);
     bobber.position.y=WATER_TOP+0.1+f.reel*0.3;
     { const rk=Math.floor(f.reel*8), tk=Math.floor(f.tens*8),
         tc=f.tens>0.78?'var(--rose)':f.tens>0.5?'var(--gold)':'var(--teal)';
-      hint(`${f.surge?'<b style="color:var(--rose)">IT RUNS!</b> let go — ':'hold <span class="key">E</span> — '}`
+      hint(`${f.auto?'the rig works it in — ':f.surge?'<b style="color:var(--rose)">IT RUNS!</b> let go — ':'hold <span class="key">E</span> — '}`
         +`line <b style="color:${tc}">${'▰'.repeat(tk)+'▱'.repeat(8-tk)}</b>  fish <b>${'▰'.repeat(rk)+'▱'.repeat(8-rk)}</b>`); }
     if(f.tens>=1){ // snapped — the fish and the streak are both gone
       cancelFish(); sfx.miss(); addShake(0.18);
@@ -2794,19 +2957,26 @@ function updateFishing(dt){ const f=fishing;
       catchStreak=0; toast('The line SNAPPED — too much tension','bad'); return; }
     if(f.reel>=1){ f.state='idle'; bobber.visible=false;
       const bx=bobber.position.x,bz=bobber.position.z;
-      const land=fish=>{ fxBurst(bx,WATER_TOP+0.2,bz,{n:16,cols:[0x7fdcff,0xd9f6ff,0xffffff],speed:2.6,up:4,size:1.1,grav:7});
+      const land=fish=>{ sfx.splash(0.11); fxBurst(bx,WATER_TOP+0.2,bz,{n:16,cols:[0x7fdcff,0xd9f6ff,0xffffff],speed:2.6,up:4,size:1.1,grav:7});
         addShake(fish.rar==='legendary'||fish.rar==='epic'?0.25:0.1);
         if(fish.rar==='legendary')addFreeze(0.14); };
+      const auto=f.auto;
+      // pace the next cast off the wall clock, a hair wider than the floor the
+      // server enforces between two auto catches
+      if(auto)autoFish.nextAt=Date.now()+AUTO.gapMs+250;
       if(SRV.on){ // the server rolls the fish and banks it
-        SRV.act('catch',{night:isNight(),wet:wState,storm:wState==='storm'}).then(r=>{
+        SRV.act('catch',{night:isNight(),wet:wState,storm:wState==='storm',auto}).then(r=>{
           if(!r||!r.fish)return; land(r.fish); revealServerCatch(r); });
-      } else { const fish=f.hooked||rollFish(); land(fish);
-        catchStreak++;
-        if(catchStreak>1){ const m=streakMult();      // a clean run pays a rising bonus on the fish's value
-          fish.val=Math.round(fish.val*m);
-          if(catchStreak%3===0)toast(`${pixSVG('fish',13)} ${catchStreak} in a row — ×${m.toFixed(2)} value!`,'gold'); }
+      } else { const fish=f.hooked||rollFish(false,auto); land(fish);
+        // the streak is a reward for playing the fish yourself; an unattended
+        // rig neither builds it nor keeps one alive
+        if(auto)catchStreak=0;
+        else{ catchStreak++;
+          if(catchStreak>1){ const m=streakMult();    // a clean run pays a rising bonus on the fish's value
+            fish.val=Math.round(fish.val*m);
+            if(catchStreak%3===0)toast(`${pixSVG('fish',13)} ${catchStreak} in a row — ×${m.toFixed(2)} value!`,'gold'); } }
         f.hooked=null;
-        if(state.bucket.length<cap()){ onCatch(fish); noteBaitSpent(useBait()); updateHUD(); save(); }
+        if(state.bucket.length<cap()){ onCatch(fish,auto); if(!auto)noteBaitSpent(useBait()); updateHUD(); save(); }
         else toast('Bucket full — sell some fish!'); } } }
 }
 
@@ -2866,7 +3036,7 @@ function updateMining(dt){ const n=mining.node;
    ======================================================================== */
 let photoMode=false,photoAng=0,photoPitch=0.72,photoSnap=false; // pitch 0 = eye level (sky fills the top), 1 = the usual iso look-down
 function togglePhoto(){ if(capCam)closeCam();   // both modes own vTargP/vTargL — only one may drive
-  photoMode=!photoMode;
+  photoMode=!photoMode; sfx.shutter();
   document.body.classList.toggle('photo',photoMode);
   photoSnap=true;                                  // jump straight to the new framing instead of drifting into it
   if(photoMode){ photoAng=0; photoPitch=0.72;
@@ -2947,7 +3117,7 @@ function rigRest(){ const pd=player.userData;
   emoCoin.visible=false; emoFish.visible=false; zHide(); }
 
 function playEmote(k,d,bi,fid){
-  initAudio();
+  initAudio(); sfx.emote();
   if(emo.k)rigRest();
   emo.k=k; emo.t=0; emo.d=d; emo.bi=bi==null?-1:bi; emo.fid=!!fid; emo.beat=-1; emo.fired={};
   if(capCam)faceCam();
@@ -3235,6 +3405,9 @@ if(emoBarEl){
   emoBarEl.querySelectorAll('.eslot').forEach((b,i)=>b.addEventListener('click',()=>{ b.blur(); playBarEmote(i); })); }
 const capBtnEl=document.getElementById('capBtn');
 if(capBtnEl)capBtnEl.addEventListener('click',()=>toggleCam());
+const autoBtnEl=document.getElementById('autoBtn');
+if(autoBtnEl)autoBtnEl.addEventListener('click',()=>toggleAuto());
+paintAuto();
 
 
 /* ========================================================================
@@ -3255,7 +3428,7 @@ function spawnMeteor(){
     const em=new THREE.Mesh(new THREE.BoxGeometry(s,s,s),new THREE.MeshLambertMaterial({color:0xff8a3a,emissive:0xff6a2a,emissiveIntensity:0.9}));
     const a=rand(0,TAU); em.position.set(Math.cos(a)*0.44,rand(0.2,0.7),Math.sin(a)*0.44); g.add(em); }
   g.position.set(ix,gy+26,jz); scene.add(g);                 // starts high and falls
-  meteors.push({g,x:ix,z:jz,gy,vy:0,landed:false,life:95});
+  meteors.push({g,x:ix,z:jz,gy,vy:0,landed:false,life:95}); sfx.meteor();
   if(running)toast('☄ A METEOR is falling — find the crater!','gold');
 }
 function updateMeteors(dt){
@@ -3265,7 +3438,7 @@ function updateMeteors(dt){
       m.g.rotation.x+=dt*4; m.g.rotation.z+=dt*3;
       fxBurst(m.g.position.x,m.g.position.y,m.g.position.z,{n:1,cols:[0xff8a3a,0xffd24f],speed:0.6,up:0.4,size:0.8,grav:2});
       if(m.g.position.y<=m.gy){ m.g.position.y=m.gy; m.g.rotation.set(0,rand(0,TAU),0); m.landed=true;
-        addShake(0.5); addFreeze(0.1); beep(48,0.5,'sawtooth',0.09);
+        addShake(0.5); addFreeze(0.1); sfx.boom();
         fxBurst(m.x,m.gy+0.4,m.z,{n:30,cols:[0xff6a2a,0xffd24f,0x4a3c38],speed:4.2,up:5,size:1.3,grav:9}); } }
     else { m.g.children[0].material.emissiveIntensity=0.5+Math.sin(clock*4)*0.25;
       if((m.life-=dt)<=0){ scene.remove(m.g); meteors.splice(i,1); } } }
@@ -3297,7 +3470,7 @@ function buildPet(){ if(pet)return;
   const eye=new THREE.Mesh(new THREE.BoxGeometry(0.07,0.07,0.05),new THREE.MeshBasicMaterial({color:0x0b1a22}));
   eye.position.set(0.16,0.06,0.28);
   const eye2=eye.clone(); eye2.position.x=-0.16;
-  g.add(body,tail,eye,eye2); g.userData={tail};
+  g.add(body,tail,eye,eye2); g.userData={tail}; sfx.pet();
   pet=g; scene.add(g); pet.position.set(pWorld.x,pWorld.y+2,pWorld.z);
 }
 function updatePet(dt){
@@ -3464,14 +3637,14 @@ const invTabs=document.querySelectorAll('#inv .tabbtn');
 function setInvTab(t){ invTabs.forEach(b=>b.classList.toggle('sel',b.getAttribute('data-tab')===t));
   { const p=document.getElementById('tab-ledger'); if(p)p.style.display=t==='ledger'?'':'none'; }
   for(const k of ['bag','dex','stats']){ const p=document.getElementById('tab-'+k); if(p)p.style.display=k===t?'':'none'; } }
-invTabs.forEach(b=>b.addEventListener('click',()=>setInvTab(b.getAttribute('data-tab'))));
-function openInv(){ if(marketOpen||casinoOpen||harborOpen)return; invOpen=true; invEl.classList.add('on'); renderInv(); setInvTab('bag'); }
-function closeInv(){ invOpen=false; invEl.classList.remove('on'); }
+invTabs.forEach(b=>b.addEventListener('click',()=>{sfx.tab();setInvTab(b.getAttribute('data-tab'));}));
+function openInv(){ if(marketOpen||casinoOpen||harborOpen)return; invOpen=true; sfx.open(); invEl.classList.add('on'); renderInv(); setInvTab('bag'); }
+function closeInv(){ invOpen=false; sfx.close(); invEl.classList.remove('on'); }
 document.getElementById('invX').onclick=closeInv;
 // --- hotbar selection: 1-5 pick the held tool; the empty-hand walk shows what you're carrying ---
 let hotSlot=0;
 const HOT_EL=[...document.querySelectorAll('#hotbar .slot')];
-function setHotSlot(i){ hotSlot=clamp(i,0,4);
+function setHotSlot(i){ sfx.click(); hotSlot=clamp(i,0,4);
   HOT_EL.forEach((el,k)=>el.classList.toggle('sel',k===hotSlot)); }
 setHotSlot(0);
 HOT_EL.forEach((s,i)=>{ s.addEventListener('click',()=>{
@@ -3563,12 +3736,13 @@ function skyUpdate(dt){
     else if(isAsh()) wState=r<0.5?'clear':r<0.82?'ash':'storm';
     else wState=r<0.55?'clear':r<0.88?'rain':'storm';
     wTimer=rand(70,160);
-    if(running&&wState!==prev){ if(wState==='rain')toast(pixSVG('rain',13)+' Rain — fish bite faster!','good');
+    if(running&&wState!==prev){ (wState==='storm'?sfx.thunder:sfx.gust)();
+      if(wState==='rain')toast(pixSVG('rain',13)+' Rain — fish bite faster!','good');
       else if(wState==='snow')toast(pixSVG('rain',13)+' Snowfall — the ice fish rise…','good');
       else if(wState==='ash')toast(pixSVG('rain',13)+' Ashfall — the vents are venting…','gold');
       else if(wState==='storm')toast(pixSVG('storm',13)+' STORM — rare fish stir…','gold');
       else toast(pixSVG('sun',13)+' Skies clear'); } }
-  if(wState==='storm'&&Math.random()<dt*0.22){ flashT=0.12;
+  if(wState==='storm'&&Math.random()<dt*0.22){ flashT=0.12; setTimeout(sfx.rumble,rand(180,700)|0);
     setTimeout(()=>beep(58,0.4,'sawtooth',0.07),rand(150,500)); }
   rainMesh.visible=wet;
   snowMesh.visible=wState==='snow'||wState==='ash';
@@ -3664,7 +3838,9 @@ function tryMove(dt){
   if(!ix&&!iy){pWorld.step=0;return;}
   moveDir.set(0,0,0).addScaledVector(FWD,iy).addScaledVector(RIGHT,ix);
   if(moveDir.lengthSq()<1e-4){pWorld.step=0;return;}
-  moveDir.normalize(); pWorld.step+=dt*9;
+  moveDir.normalize();
+  const st0=pWorld.step; pWorld.step+=dt*9;
+  if((st0/Math.PI|0)!==(pWorld.step/Math.PI|0)) sfx.step(stepSurf()); // one footfall per half-stride
   const sp=7.0, curH=heightAt(pWorld.x,pWorld.z);
   const nx=pWorld.x+moveDir.x*sp*dt;
   if(!isWaterAt(nx,pWorld.z)&&Math.abs(heightAt(nx,pWorld.z)-curH)<2&&Math.abs(nx)<HALF-1)pWorld.x=nx;
@@ -3672,11 +3848,23 @@ function tryMove(dt){
   if(!isWaterAt(pWorld.x,nz)&&Math.abs(heightAt(pWorld.x,nz)-curH2)<2&&Math.abs(nz)<HALF-1)pWorld.z=nz;
   pWorld.face=Math.atan2(moveDir.x,moveDir.z);
 }
+// frost's 'grass' is snow underfoot — everything else walks as its cell type reads
+function stepSurf(){ const t=cellType(heightAt(pWorld.x,pWorld.z)); return t==='grass'&&isCold()?'snow':t; }
 let tree=null;
 function interactions(){
   const dT=Math.hypot(pWorld.x-TRADER_POS.x,pWorld.z-TRADER_POS.z), dC=Math.hypot(pWorld.x-CASINO_POS.x,pWorld.z-CASINO_POS.z);
   const ore=nearestOre(), met=nearestMeteor();
   const w=nearestWater(), canFish=w&&w.dist<2.4;
+  /* The rig owns the interact loop, but ONLY while you are standing still at
+     the water. Walk away and every other prompt — Trader, Harbor, ore — reads
+     exactly as it does with the rig off, so you can still go sell your bucket
+     without switching it off first. */
+  if(autoFish.on&&canFish&&!isMoving()){
+    if(state.bucket.length>=cap())setAuto(false,'Bucket full — the auto-rig stopped');
+    else{ const wait=Math.max(0,(autoFish.nextAt-Date.now())/1000);
+      hint(`${pixSVG('rod',13)} <b>auto-rig</b> ${wait>0.05?`resetting the line… <b>${wait.toFixed(1)}s</b>`:'casting'} · <span class="key">F</span> stop`);
+      if(wait<=0)startCast(w);
+      return; } }
   if(dT<2.6){ hint('<span class="key">E</span> Trade at the Market'); if(actEdge){initAudio();openMarket();} }
   else if(dC<2.8){ hint('<span class="key">E</span> Enter the Spinning Eel'); if(actEdge){initAudio();openCasino();} }
   else if(PORTAL_POS&&Math.hypot(pWorld.x-PORTAL_POS.x,pWorld.z-PORTAL_POS.z)<2.2){
@@ -3761,11 +3949,11 @@ function animate(now){
       if(hit){
         if(act==='mine'){ const n=mining.node; sfx.pick(); addShake(0.06); mineFlinch=1;
           fxBurst(n.x,n.y+0.7,n.z,{n:6,cols:[0x9aa1a8,0x747c84,ORE_INFO[n.type].color],speed:2.6,up:2.8,size:0.9}); }
-        else if(act==='chop'){ const t2=chopping.tree; beep(170+Math.random()*50,0.07,'square',0.06); addShake(0.05);
+        else if(act==='chop'){ const t2=chopping.tree; sfx.chop(); addShake(0.05);
           fxBurst(t2.x,t2.y+1.1,t2.z,{n:5,cols:[0x9a6b3a,0x7d5530,0xc79a5e],speed:2.4,up:2.4,size:0.9});
           fxBurst(t2.x,t2.y+2.8,t2.z,{n:3,cols:t2.pink?[0xec9fcb,0xf5b5d9]:[0x3aa626,0x54cb3c],speed:1.4,up:0.6,size:0.8,grav:3}); }
         else{ const fx2=pWorld.x+Math.sin(pWorld.face)*0.6, fz2=pWorld.z+Math.cos(pWorld.face)*0.6;
-          beep(120,0.09,'sine',0.06); addShake(0.04);
+          sfx.dig(); addShake(0.04);
           fxBurst(fx2,pWorld.y+0.15,fz2,{n:7,cols:[0x8a5a34,0x9a683e,0x6d4526],speed:2.2,up:3,size:0.95,grav:8}); } }
       if(act==='mine'&&mining.node){ mining.node.mesh.scale.setScalar(1+mineFlinch*0.09); mineFlinch*=Math.exp(-9*dt); } } // flinch on hit, then relax
     else{ swing.p=swing.last=0; rodMesh.rotation.x=-0.7; }
@@ -3877,6 +4065,8 @@ function animate(now){
    ======================================================================== */
 addEventListener('resize',()=>{ renderer.setSize(window.innerWidth,window.innerHeight); fitCamera(); });
 const startOv=document.getElementById('start');
+// world signs stay out of the title shot; they come back on Set sail (capLabels only runs in-game, so no overlap)
+if(startOv&&startOv.classList.contains('on'))for(const l of LABELS)l.visible=false;
 // title-screen world showcase: real generated map thumbnails per theme, auto-cycling
 { const rowEl=document.getElementById('worldRow'),capEl=document.getElementById('worldCap');
   if(rowEl){ const thumbs=[];
@@ -3903,7 +4093,8 @@ const startOv=document.getElementById('start');
       ti=(ti+1)%thumbs.length; };
     cyc(); setInterval(cyc,2600); } }
 function start(){ initAudio(); if(AC&&AC.state==='suspended')AC.resume(); startMusic();
-  startOv.classList.remove('on'); running=true; updateHUD(); setArea(WORLD.name,WORLD.sub);
+  startOv.classList.remove('on'); running=true; for(const l of LABELS)l.visible=true;
+  updateHUD(); setArea(WORLD.name,WORLD.sub);
   if(state.stats.caught===0&&state.stats.mined===0)toast(pixSVG('island',13)+' Welcome to '+WORLD.name+'! Walk through the gate','gold'); }
 document.getElementById('startBtn').onclick=start;
 
@@ -3965,11 +4156,12 @@ function chatPush(name,msg,cls,peerId){ if(!chatLog)return;
     who.onclick=()=>chatMenu(name,peerId); d.appendChild(who); }
   d.appendChild(document.createTextNode(msg));  // textContent → no HTML injection
   chatLog.appendChild(d); while(chatLog.children.length>60)chatLog.removeChild(chatLog.firstChild);
+  if(name)sfx.chat();                                    // someone spoke; system lines stay silent
   chatLog.scrollTop=chatLog.scrollHeight;
   if(chatBox){ chatBox.classList.add('show'); clearTimeout(chatBox._t);
     chatBox._t=setTimeout(()=>{ if(!chatOpen)chatBox.classList.remove('show'); },7000); } }
 function openChat(){ if(!chatIn||!RFNet||!RFNet.wsReady)return;
-  chatOpen=true; chatBox.classList.add('show','open'); chatIn.style.display='block'; chatIn.focus(); }
+  chatOpen=true; sfx.click(); chatBox.classList.add('show','open'); chatIn.style.display='block'; chatIn.focus(); }
 function closeChat(){ chatOpen=false; if(chatIn){chatIn.blur();chatIn.style.display='none';chatIn.value='';}
   if(chatBox)chatBox.classList.remove('open'); }
 /* click a name -> mute, unmute or report. Deliberately tiny and reversible. */

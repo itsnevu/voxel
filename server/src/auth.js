@@ -31,6 +31,10 @@ export function hashPassword(pw) {
 }
 
 /** Constant-time comparison of a plaintext password against a stored digest. */
+/* One precomputed hash so a login for a nonexistent user costs the same scrypt
+   as a wrong password does. Computed once at boot, never compared for real. */
+const DECOY_HASH = hashPassword('decoy-not-a-real-password');
+
 export function verifyPassword(pw, stored) {
   if (typeof stored !== 'string' || typeof pw !== 'string') return false;
   const sep = stored.indexOf(':');
@@ -180,9 +184,13 @@ export function mountAuth(app) {
     const password = typeof body.password === 'string' ? body.password : '';
 
     const row = username ? users.findByName(username) : null;
-    // Same message and roughly the same work for both failure modes, so the
-    // response does not reveal whether the account exists.
-    if (!row || !verifyPassword(password, row.pass_hash)) {
+    // Same message AND the same work for both failure modes: an unknown user
+    // still pays one scrypt against a decoy hash, so response time cannot be
+    // used to enumerate which usernames exist.
+    const okPass = row
+      ? verifyPassword(password, row.pass_hash)
+      : (verifyPassword(password, DECOY_HASH), false);
+    if (!okPass) {
       return res.status(401).json({ error: 'invalid username or password' });
     }
 
