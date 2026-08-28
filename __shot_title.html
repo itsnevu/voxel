@@ -332,9 +332,6 @@
     background:radial-gradient(120% 92% at 50% 50%,rgba(116,224,138,0) 38%,rgba(116,224,138,.2) 74%,rgba(255,207,92,.4) 100%);}
   @keyframes winflash{0%{opacity:0;}18%{opacity:1;}100%{opacity:0;}}
   /* ---- title screen: the island is the hero — wordmark floats free, one glass dock below ---- */
-  /* while the start overlay is up, the gameplay HUD stays out of the shot; it fades back in on Set sail */
-  body:has(#start.on) .hud,body:has(#start.on) #hotbar,body:has(#start.on) #minimap,
-  body:has(#start.on) #mute,body:has(#start.on) #chat{opacity:0!important;pointer-events:none!important;}
   .overlay-start{align-items:stretch;justify-content:center;padding:0;backdrop-filter:none;-webkit-backdrop-filter:none;
     background:linear-gradient(180deg,rgba(3,8,10,.5),rgba(3,8,10,0) 30%),linear-gradient(0deg,rgba(3,8,10,.58),rgba(3,8,10,0) 34%);}
   .start-box{max-width:none;width:100%;height:100%;max-height:100vh;max-height:100dvh;display:flex;flex-direction:column;align-items:center;
@@ -359,8 +356,7 @@
   .start-box h1 .t3d{color:#ffcf5c;
     text-shadow:0 1px 0 #e2b04f,0 2px 0 #c0913c,0 3px 0 #96702c,0 4px 0 #6e4f1e,0 5px 0 #4a3413,0 6px 0 #2e1f0a,
       0 12px 22px rgba(3,10,12,.6),0 0 40px rgba(255,207,92,.55);}
-  .start-box .tag{color:rgba(240,252,250,.96);font-size:13.5px;font-weight:500;line-height:1.5;margin:0;
-    text-shadow:0 1px 2px rgba(0,0,0,.85),0 2px 12px rgba(0,0,0,.55);
+  .start-box .tag{color:rgba(233,248,246,.88);font-size:13px;line-height:1.5;margin:0;text-shadow:0 1px 4px rgba(0,0,0,.6);
     text-wrap:balance;animation:mark-in .9s cubic-bezier(.16,1,.3,1) .12s backwards;}
   .start-box .tag b{color:var(--gold);}
   @keyframes mark-in{from{opacity:0;transform:translateY(-24px) scale(1.03);filter:blur(5px);}to{opacity:1;transform:none;filter:none;}}
@@ -419,6 +415,7 @@
     font-family:"IBM Plex Mono";font-size:14px;text-align:center;padding:40px;line-height:1.7;}
   a:focus-visible,button:focus-visible{outline:2px solid var(--teal);outline-offset:2px;}
 </style>
+<style>*{animation:none!important;transition:none!important}</style>
 </head>
 <body>
 <div id="scene"></div>

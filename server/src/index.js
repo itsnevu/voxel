@@ -21,10 +21,12 @@ import cors from 'cors';
 
 import * as DB from './db.js';
 import { requireAuth, mountAuth } from './auth.js';
+import { mountWalletAuth } from './wallet.js';
+import * as EV from './events.js';
 import { HANDLERS, RATE } from './game/actions.js';
 import { newState, normalizeState, BOATS, boatSeats, crewSlots, MAX_BOAT } from './game/rules.js';
 import { payDividends, mktEpochNow } from './game/economy.js';
-import { attach, onlineTotal, roomCount } from './realtime.js';
+import { attach, onlineTotal, roomCount, broadcast, announceAll } from './realtime.js';
 
 const { initSchema, saves, sessions, actions: actionLog, deedsRepo, crews } = DB;
 
@@ -279,6 +281,7 @@ function stateEnvelope(state, extra) {
    AUTH  — POST /api/auth/{register,login,logout}, GET /api/auth/me
    ========================================================================== */
 mountAuth(app);
+mountWalletAuth(app);
 
 /* ============================================================================
    GET /api/state — the client's only way to learn what it owns.
@@ -357,6 +360,48 @@ app.post('/api/action/:name', requireAuth, (req, res) => {
     // A rejected action still persists any dividends we just credited.
     if (dividends > 0) saves.put(userId, state);
     return res.status(400).json({ error: msg });
+  }
+
+  // --- multiplayer events: derby scoring, wanted bounty, spin drama ---------
+  // Runs BEFORE the save below so a bounty credited here persists. Defensive:
+  // an events/realtime hiccup must never turn a valid action into a 500.
+  if (name === 'catch' || name === 'spin') {
+    if (!out.result || typeof out.result !== 'object') out.result = {};
+    const result = out.result;
+
+    // One username lookup per request, shared by every event below.
+    let username = '';
+    try {
+      const u = DB.users.findById(userId);
+      username = u && u.username ? String(u.username) : '';
+    } catch (e) { console.error('[users.findById]', e); }
+
+    if (name === 'catch' && result.fish) {
+      try {
+        EV.recordCatch(state.world, userId, username, result.fish.kg || 0);
+        const bounty = EV.tryClaimWanted(state.world, mktEpochNow(), userId, result.fish.name);
+        if (bounty > 0) {
+          state.coins += bounty;
+          state.stats.earned += bounty;
+          result.wanted = bounty;
+          broadcast(state.world, {
+            t: 'drama', kind: 'wanted', name: username,
+            fish: result.fish.name, bounty
+          });
+        }
+      } catch (e) { console.error('[events.catch]', e); }
+    }
+
+    if (name === 'spin') {
+      try {
+        broadcast(state.world, {
+          t: 'drama', kind: 'spin', name: username,
+          won: !!result.won, color: result.color, payout: result.payout || 0,
+          fish: (result.fish && result.fish.name) || null,
+          lost: result.lost || null
+        });
+      } catch (e) { console.error('[events.spin]', e); }
+    }
   }
 
   saves.put(userId, state);
@@ -915,6 +960,85 @@ app.post('/api/crew/leave', requireAuth, (req, res) => {
   markCrew(req.userId);
   const me = DB.users.findById(req.userId);
   res.json({ ok: true, left: !!left, ...crewView(req.userId, me ? me.username : '') });
+});
+
+/* ============================================================================
+   FISHING DERBY — clock is public, settlement is server-side.
+   ----------------------------------------------------------------------------
+   events.js keeps derby scores in memory; this file owns the two ends the
+   world sees: the countdown (below) and the payout sweep (the interval after
+   it). Catches are scored inside POST /api/action/:name.
+   ========================================================================== */
+
+// Deliberately unauthenticated: the shell shows the derby countdown before
+// sign-in, and the reply carries nothing but the wall clock.
+app.get('/api/derby', (req, res) => {
+  res.json({ derby: EV.derbyInfo(), serverTime: nowMs() });
+});
+
+// Settle closed derbies every 30s: credit the champion's pearls and tell every
+// isle. loadState() may throw SaveUnreadable — an unreadable champion save is
+// skipped (events.js never retries a payout, so the prize is forfeit rather
+// than risked being paid twice).
+const derbyTimer = setInterval(() => {
+  try {
+    EV.sweepDerbies((w) => {
+      let st = null;
+      try { st = loadState(w.userId); }
+      catch (e) { console.error('[derby.payout] save unreadable for', w.userId, e.message); return; }
+      if (!st) return;
+      st.pearls = (st.pearls | 0) + w.pearls;
+      st.pearlsLife = (st.pearlsLife | 0) + w.pearls;
+      saves.put(w.userId, st);
+      announceAll({
+        t: 'drama', kind: 'derby', name: w.username, world: w.world,
+        kg: +w.kg.toFixed(1), pearls: w.pearls
+      });
+    });
+  } catch (e) { console.error('[derby.sweep]', e); }
+}, 30 * 1000);
+if (typeof derbyTimer.unref === 'function') derbyTimer.unref();
+
+/* ============================================================================
+   POST /api/report — a player flags another by name (HTTP twin of the
+   websocket report, for when the target is no longer online as a peer).
+   ========================================================================== */
+const REPORT_RATE = 15 * 1000;          // one report per user per 15s
+const REPORT_ACTION = 'report';
+const REPORT_TARGET_MAX = 20;
+const REPORT_REASON_MAX = 120;
+
+/** Control chars out, whitespace collapsed, cut to `max`. */
+const cleanReportField = (v, max) => String(v ?? '')
+  .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .slice(0, max);
+
+app.post('/api/report', requireAuth, (req, res) => {
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+  const target = cleanReportField(body.target, REPORT_TARGET_MAX);
+  const reason = cleanReportField(body.reason, REPORT_REASON_MAX);
+  if (!target) return res.status(400).json({ error: 'missing target' });
+
+  const t = nowMs();
+  try {
+    const last = actionLog.last(req.userId, REPORT_ACTION) || 0;
+    if (last > 0 && t - last < REPORT_RATE) {
+      res.set('Retry-After', String(Math.ceil((REPORT_RATE - (t - last)) / 1000)));
+      return res.status(429).json({ error: 'too fast', retryAfter: REPORT_RATE - (t - last) });
+    }
+  } catch (e) { console.error('[report.rate]', e); }
+
+  try {
+    DB.reports.add(req.userId, target, reason, '');
+  } catch (e) {
+    console.error('[report.add]', e);
+    return res.status(500).json({ error: 'could not record report' });
+  }
+  try { actionLog.mark(req.userId, REPORT_ACTION); } catch (e) { console.error('[actions.mark]', e); }
+
+  res.json({ ok: true });
 });
 
 /* ------------------------------------------------------------- online ----- */

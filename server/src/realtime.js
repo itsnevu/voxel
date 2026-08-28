@@ -514,15 +514,118 @@ function onPos(peer, msg, t) {
   peer.dirty = true;
 }
 
+/**
+ * Chat, in layers. The philosophy: defuse rather than silence. URLs and
+ * profanity are rewritten and the line still lands; only repetition (dedupe)
+ * and repeat offenders (cooldown) are actually dropped, and the cooldown
+ * announces itself so the player is never left wondering.
+ */
 function onChat(peer, msg, t) {
   if (!peer.world) return;
   if (t - peer.chatAt < CHAT_GAP) return;
 
-  const m = cleanChat(msg.m);
+  // In cooldown: the socket stays, the megaphone doesn't.
+  if (t < peer.chatCoolUntil) {
+    peer.chatAt = t;
+    send(peer, { t: 'chat_err', m: 'cooldown' });
+    return;
+  }
+
+  let m = cleanChat(msg.m);
   if (!m) return;
   peer.chatAt = t;
 
-  roomSend(peer.world, { t: 'chat', id: peer.id, name: peer.name, m, at: t });
+  m = m
+    .replace(URL_RE, '[link]')
+    .replace(REPEAT_RE, '$1$1$1')
+    .trim()
+    .slice(0, CHAT_MAX);   // "[link]" can be longer than a short URL was
+  if (!m) return;
+
+  // Same line (case-insensitive) as their previous one inside 10s: silent
+  // drop. Refreshing the stamp on the drop means a line spammed continuously
+  // never gets through again until the sender actually pauses.
+  const norm = m.toLowerCase();
+  if (norm === peer.lastChatNorm && t - peer.lastChatNormAt < CHAT_DEDUPE_MS) {
+    peer.lastChatNormAt = t;
+    return;
+  }
+  peer.lastChatNorm = norm;
+  peer.lastChatNormAt = t;
+  peer.lastChatText = m;   // pre-mask, so a report shows a moderator the real line
+
+  const { text, masked } = maskProfanity(m);
+  if (masked) {
+    peer.maskedAt.push(t);
+    peer.maskedAt = peer.maskedAt.filter((at) => t - at < CHAT_STRIKE_WINDOW_MS);
+    if (peer.maskedAt.length >= CHAT_STRIKES) {
+      // Third strike: this line still goes out (masked), then the megaphone
+      // goes away for a minute and the peer is told exactly why.
+      peer.chatCoolUntil = t + CHAT_COOLDOWN_MS;
+      peer.maskedAt.length = 0;
+      send(peer, { t: 'chat_err', m: 'cooldown' });
+    }
+  }
+
+  // Hand-rolled rather than roomSend: recipients who muted this sender are
+  // skipped. Mute is the receiver's preference, never a judgement of the sender.
+  const room = rooms.get(peer.world);
+  if (!room) return;
+  const raw = JSON.stringify({ t: 'chat', id: peer.id, name: peer.name, m: text, at: t });
+  for (const other of room) {
+    if (other.muted.has(peer.id)) continue;
+    rawSend(other, raw);
+  }
+}
+
+/**
+ * Mute lives on the RECEIVER: it filters what this peer hears, world-wide and
+ * for the life of the socket, and costs the muted player nothing. The cap
+ * exists only so a hostile client cannot grow the Set without bound.
+ */
+function onMute(peer, msg) {
+  const id = peerIdArg(msg.id);
+  if (id === null || id === peer.id) return;
+  if (!peer.muted.has(id)) {
+    if (peer.muted.size >= MUTE_MAX) return;   // silently full — no ack to lie with
+    peer.muted.add(id);
+  }
+  send(peer, { t: 'mute_ok', id });
+}
+
+function onUnmute(peer, msg) {
+  const id = peerIdArg(msg.id);
+  if (id === null) return;
+  peer.muted.delete(id);
+  send(peer, { t: 'unmute_ok', id });
+}
+
+/**
+ * Report: heavily throttled, stored via DB.reports when that module has
+ * landed (it is being added to db.js separately — hence the typeof guard),
+ * and always acked so the client UX is identical whether or not the target
+ * was still online to snapshot.
+ */
+function onReport(peer, msg, t) {
+  if (t - peer.reportAt < REPORT_GAP_MS) return;
+  const id = peerIdArg(msg.id);
+  if (id === null || id === peer.id) return;
+  peer.reportAt = t;
+
+  let target = null;
+  for (const p of conns) {
+    if (p.id === id) { target = p; break; }
+  }
+
+  if (target && typeof DB.reports?.add === 'function') {
+    const reason = cleanChat(msg.reason, REASON_MAX);
+    try {
+      DB.reports.add(peer.userId, target.name, reason, target.lastChatText.slice(0, CHAT_MAX));
+    } catch (e) {
+      console.error('[rt.report]', e);
+    }
+  }
+  send(peer, { t: 'report_ok' });
 }
 
 /**
@@ -549,10 +652,13 @@ function onMessage(peer, data, isBinary) {
 
     const t = peer.seenAt;
     switch (msg.t) {
-      case 'hello': onHello(peer, msg, t); break;
-      case 'pos':   onPos(peer, msg, t);   break;
-      case 'chat':  onChat(peer, msg, t);  break;
-      case 'ping':  send(peer, { t: 'pong' }); break;
+      case 'hello':  onHello(peer, msg, t);  break;
+      case 'pos':    onPos(peer, msg, t);    break;
+      case 'chat':   onChat(peer, msg, t);   break;
+      case 'mute':   onMute(peer, msg);      break;
+      case 'unmute': onUnmute(peer, msg);    break;
+      case 'report': onReport(peer, msg, t); break;
+      case 'ping':   send(peer, { t: 'pong' }); break;
       default: break;                            // unknown types are ignored
     }
   } catch (e) {
@@ -670,6 +776,14 @@ function onConnection(ws, req) {
     posTokens: POS_BURST,
     chatAt: 0,
     helloAt: 0,
+    // -- chat moderation state --
+    lastChatNorm: '',          // previous line, lowercased, for the dedupe check
+    lastChatNormAt: 0,
+    lastChatText: '',          // previous line pre-mask, attached to reports
+    maskedAt: [],              // timestamps of recently masked lines (strikes)
+    chatCoolUntil: 0,          // chat disabled until this time after 3 strikes
+    muted: new Set(),          // peer ids this RECEIVER chose not to hear
+    reportAt: 0,
   };
 
   conns.add(peer);
