@@ -342,7 +342,7 @@ function beginFatalShutdown(code) {
   // on a socket that will never close, this is what still gets us to exit(1) so
   // systemd's Restart= can put a healthy process in our place.
   const deadline = setTimeout(() => {
-    log.error('fatal shutdown timed out — exiting anyway', { graceMs: FATAL_GRACE_MS });
+    log.error('fatal shutdown timed out · exiting anyway', { graceMs: FATAL_GRACE_MS });
     process.exit(code);
   }, FATAL_GRACE_MS);
 
@@ -362,7 +362,7 @@ function beginFatalShutdown(code) {
       clearTimeout(deadline);
       // stdout to a pipe (systemd journal, docker) flushes asynchronously, so a
       // bare exit() here can swallow the very crash line we just wrote. This
-      // timer is not unref'd either — an unref'd one would let an idle loop exit
+      // timer is not unref'd either · an unref'd one would let an idle loop exit
       // with code 0 and hide the crash from the restart policy.
       setTimeout(() => process.exit(code), 50);
     });
@@ -394,7 +394,7 @@ export function installProcessGuards() {
 
   process.on('uncaughtException', (err, origin) => {
     try {
-      log.error('uncaught exception — shutting down', { origin, err });
+      log.error('uncaught exception · shutting down', { origin, err });
     } catch { /* logging must never be what stops the shutdown */ }
     beginFatalShutdown(1);
   });

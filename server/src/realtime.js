@@ -435,6 +435,21 @@ export function onlineTotal() {
   return n;
 }
 
+/**
+ * Close every live socket with an explicit reason. Used by the shutdown path so
+ * a deploy reads as "server restarting" in the client's chat log instead of an
+ * unexplained drop — the client's reconnect backoff then does the rest.
+ */
+export function closeAllSockets(code = 1001, reason = 'server restarting') {
+  let n = 0;
+  for (const peer of Array.from(conns)) {
+    try { peer.ws.close(code, reason); n++; } catch { /* already gone */ }
+  }
+  for (const t of timers) clearInterval(t);
+  timers.length = 0;
+  return n;
+}
+
 function joinRoom(peer, world) {
   let room = rooms.get(world);
   if (!room) rooms.set(world, (room = new Set()));

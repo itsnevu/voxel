@@ -27,8 +27,8 @@ RF.mod('06-content', function (RF) {
     clam:    {n:'Clam',        c:'#e2d6ba', d:'shut, and smug about it'},
     samphire:{n:'Samphire',    c:'#8ede6a', d:'salty greens, free'},
     drift:   {n:'Driftwood',   c:'#a89070', d:'sea-sanded, burns clean'},
-    glass:   {n:'Sea Glass',   c:'#7fe6ff', d:'somebody’s bottle, eventually'},
-    crab:    {n:'Crab',        c:'#e07a4a', d:'sideways and cross about it'},
+    glass:   {n:'Sea Glass',   c:'#7fe6ff', d:'somebody else’s bottle, eventually'},
+    crab:    {n:'Crab',        c:'#e07a4a', d:'sideways, and cross about it'},
     prawn:   {n:'Prawn',       c:'#ff9f7a', d:'a potful is a good morning'},
     urchin:  {n:'Urchin',      c:'#9a6ad0', d:'all spine, a little roe'},
     roe:     {n:'Roe',         c:'#ffb35c', d:'orange, expensive-looking'},
@@ -36,7 +36,7 @@ RF.mod('06-content', function (RF) {
     cured:   {n:'Cured Roe',   c:'#ff8a3c', d:'cured slow on the rack'},
     salt:    {n:'Salt Fish',   c:'#dfe9e7', d:'cured hard on the rack'},
     dried:   {n:'Dried Prawn', c:'#e0704a', d:'cured crisp on the rack'},
-    pot:     {n:'Crab Pot',    c:'#c9a86a', d:'woven. comes back to you'},
+    pot:     {n:'Crab Pot',    c:'#c9a86a', d:'woven. it comes back to you'},
     f1:      {n:'Trim',        c:'#b9c6c4', d:'kept back from the bucket'},
     f2:      {n:'Prime Cut',   c:'#57b7ff', d:'kept back from the bucket'},
     f3:      {n:'Legend Cut',  c:'#ffc24b', d:'kept back from the bucket'}
@@ -47,19 +47,19 @@ RF.mod('06-content', function (RF) {
   /* ---- RECIPES: a buff is a duration and a handful of pipeline nudges.
      bite/speed/wood multiply, luck/ore/pearl add. Everything except bite and
      speed only bites offline — signed in, the server rolls it all — so the two
-     that always work are deliberately the two on every recipe. ---- */
+     that always work are deliberately the two on nearly every recipe. ---- */
   const DISHES = [
-    {id:'chowder', n:'Clam Chowder',      s:'thick enough to stand a spoon in', req:{clam:2,kelp:1,f1:1},
+    {id:'chowder', n:'Clam Chowder',    s:'thick enough to stand a spoon in', req:{clam:2,kelp:1,f1:1},
       ms:8*MIN,  e:{bite:0.80, luck:0.15},           blurb:'steady hands · the line goes tight sooner'},
-    {id:'skewers', n:'Prawn Skewers',     s:'eaten walking, always',            req:{prawn:2,samphire:1},
+    {id:'skewers', n:'Prawn Skewers',   s:'eaten walking, always',            req:{prawn:2,samphire:1},
       ms:6*MIN,  e:{speed:1.18},                     blurb:'quick feet · you cover the isle faster'},
-    {id:'boil',    n:'Crab Boil',         s:'the pot does the arguing',         req:{crab:1,samphire:1,f1:1},
+    {id:'boil',    n:'Crab Boil',       s:'the pot does the arguing',         req:{crab:1,samphire:1,f1:1},
       ms:6*MIN,  e:{ore:1, speed:1.06},              blurb:'a greedy pick · one more ore a swing'},
-    {id:'toast',   n:'Roe on Toast',      s:'breakfast of the briefly rich',    req:{cured:1,crisp:1},
+    {id:'toast',   n:'Roe on Toast',    s:'breakfast of the briefly rich',    req:{cured:1,crisp:1},
       ms:5*MIN,  e:{luck:0.55, bite:0.94},           blurb:'a sharp eye · better fish look at your hook'},
-    {id:'smoke',   n:'Driftwood Smoke',   s:'slow fire, patient cook',          req:{drift:3,f2:1},
+    {id:'smoke',   n:'Driftwood Smoke', s:'slow fire, patient cook',          req:{drift:3,f2:1},
       ms:10*MIN, e:{wood:2, bite:0.90},              blurb:'the long burn · double logs, quicker bites'},
-    {id:'stew',    n:'Lantern Stew',      s:'only cooks while the tide is lit', req:{f3:1,glass:1,urchin:1},
+    {id:'stew',    n:'Lantern Stew',    s:'only cooks while the tide is lit', req:{f3:1,glass:1,urchin:1},
       ms:15*MIN, e:{bite:0.82, luck:0.4, ore:1, wood:1.5, speed:1.1, pearl:1}, fest:true,
       blurb:'tidewalker · a little of everything, for a long while'}
   ];
@@ -67,20 +67,20 @@ RF.mod('06-content', function (RF) {
   /* ---- LURES: tied at the bench, worn out by fish. Uses tick down on a LANDED
      catch only, so a snapped line costs you nothing here either. ---- */
   const LURES = [
-    {id:'kelpfly', n:'Kelp Fly',        s:'green, scruffy, effective',    req:{kelp:2,drift:1},        uses:14, e:{bite:0.86}},
-    {id:'spoon',   n:'Clamshell Spoon', s:'flashes like a small mistake', req:{clam:3,glass:1},        uses:16, e:{luck:0.35}},
-    {id:'jig',     n:'Crab Jig',        s:'scuttles on the drop',         req:{crab:1,drift:2},        uses:12, e:{luck:0.2, bite:0.92}},
-    {id:'minnow',  n:'Glass Minnow',    s:'you can see the hook through it', req:{glass:2,f2:1},       uses:10, e:{luck:0.7}},
-    {id:'tidebone',n:'Tidebone Hook',   s:'filed from something that lost', req:{f3:1,cured:1,glass:2},uses:8,  e:{luck:1.1, bite:0.82}}
+    {id:'kelpfly', n:'Kelp Fly',        s:'green, scruffy, effective',       req:{kelp:2,drift:1},        uses:14, e:{bite:0.86}},
+    {id:'spoon',   n:'Clamshell Spoon', s:'flashes like a small mistake',    req:{clam:3,glass:1},        uses:16, e:{luck:0.35}},
+    {id:'jig',     n:'Crab Jig',        s:'scuttles on the drop',            req:{crab:1,drift:2},        uses:12, e:{luck:0.2, bite:0.92}},
+    {id:'minnow',  n:'Glass Minnow',    s:'you can see the hook through it', req:{glass:2,f2:1},          uses:10, e:{luck:0.7}},
+    {id:'tidebone',n:'Tidebone Hook',   s:'filed from something that lost',  req:{f3:1,cured:1,glass:2},  uses:8,  e:{luck:1.1, bite:0.82}}
   ];
   const lureById = id => { for(let i=0;i<LURES.length;i++) if(LURES[i].id===id) return LURES[i]; return null; };
 
   /* ---- CURES: what the rack turns things into, and how long it takes ---- */
   const CURES = {
-    kelp: {out:'crisp', ms:5*MIN,  n:'hang to crisp'},
-    roe:  {out:'cured', ms:9*MIN,  n:'salt and wait'},
-    f1:   {out:'salt',  ms:7*MIN,  n:'split and dry'},
-    prawn:{out:'dried', ms:6*MIN,  n:'string and dry'}
+    kelp: {out:'crisp', ms:5*MIN, n:'hang to crisp'},
+    roe:  {out:'cured', ms:9*MIN, n:'salt and wait'},
+    f1:   {out:'salt',  ms:7*MIN, n:'split and dry'},
+    prawn:{out:'dried', ms:6*MIN, n:'string and dry'}
   };
   const CURE_ORDER = ['kelp','roe','f1','prawn'];
 
@@ -110,25 +110,25 @@ RF.mod('06-content', function (RF) {
     'the trader keeps a thumb on the scale. everyone knows. nobody mentions it. the coffee is free.',
     'there were four lamps on the casino dais once. the fourth is at the bottom of the bay, with the man who unscrewed it.',
     'the eel is not a metaphor. the eel is in the machine. the eel is fed.',
-    'gulls remember faces for three years. this is longer than most contracts on this isle.',
+    'gulls remember a face for three years. that is longer than most contracts on this isle.',
     'the shaft was dug for iron. they hit water at nine feet and called it a well instead. it is not a well.',
-    'sea glass is a bottle that has been apologised for by the ocean for thirty years.',
+    'sea glass is a bottle the ocean has spent thirty years apologising for.',
     'the harbormaster logs every hull that sails. he has never once logged one coming back short-crewed.',
     'kelp grows a foot a day in the right water. so does a rumour.',
     'the first angler here traded a legendary for a rowboat. the rowboat sank. the story did not.',
-    'a full moon does not make fish braver. it makes anglers stay out later. the numbers agree with the anglers.',
-    'the quarry pays better in a storm because nobody sane is in it.',
-    'somebody buried a chest and drew a map and then, being thorough, put the map in a bottle and threw it in the sea.',
-    'the price of wood has never once gone up on a day it rained. no one can explain this.',
-    'shiny fish are not a different species. they are the same fish, having had a very good year.',
+    'a full moon does not make fish braver. it makes anglers stay out later. the numbers side with the anglers.',
+    'the quarry pays better in a storm because nobody sane is standing in it.',
+    'somebody buried a chest, drew a map, and then — being thorough — put the map in a bottle and threw it in the sea.',
+    'the price of wood has never once gone up on a day it rained. nobody can explain this.',
+    'shiny fish are not another species. they are the same fish, having had a very good year.',
     'the portal hums a fifth below the lamp posts. stand between them and the isle is briefly in tune.',
     'crab pots were invented by someone who wanted to fish and also wanted to be elsewhere.',
     'there is a species in the dex nobody on this isle has landed. the dex is patient about it.',
     'the volcano is not angry. it is simply the only thing here with a schedule it keeps.',
-    'every ledger deed is a hash of a thing that happened. the hash is fiction. the thing that happened is not.',
-    'the drying rack was here before the camp. someone built the camp around it rather than move it.',
+    'every deed on the ledger is a hash of a thing that happened. the hash is fiction. the thing that happened is not.',
+    'the drying rack was here before the camp. somebody built the camp around it rather than move it.',
     'you can hear the derby start from the shore: everyone stops talking at once.',
-    'the tide takes nine minutes to turn and the lanterns are lit for exactly that long. this is not a coincidence, it is a habit.'
+    'the tide takes nine minutes to turn and the lanterns burn for exactly that long. not a coincidence — a habit.'
   ];
 
   const MOON = ['new moon','waxing crescent','first quarter','waxing gibbous',
@@ -155,7 +155,7 @@ RF.mod('06-content', function (RF) {
   obj(WS,'nodes'); arr(WS,'pots'); arr(WS,'bottles');
   if(typeof WS.bnext !== 'number') WS.bnext = 0;
   let saveDue = 0;
-  const persist = () => { saveDue = 0.8; };                    // batched: several actions in a beat cost one write
+  const persist = () => { saveDue = 0.8; };                     // batched: several actions in a beat cost one write
   const persistNow = () => { saveDue = 0; try{ RF.store.set('06-content', S); }catch(e){ RF.warn('06-content:save', e); } };
 
   /* ---- larder arithmetic ---- */
@@ -166,6 +166,8 @@ RF.mod('06-content', function (RF) {
   const pay = r => { for(const k in r) take(k, r[k]); };
   const reqTxt = r => Object.keys(r).map(k => r[k] + '× ' + GOODS[k].n).join(' + ');
   const goodPip = k => `<i style="background:${GOODS[k].c};color:${GOODS[k].c}"></i>`;
+  // toasts are innerHTML, so the same pip can ride along inside one
+  const goodPipT = k => `<span style="display:inline-block;width:9px;height:9px;border-radius:3px;background:${GOODS[k].c};vertical-align:-1px"></span>`;
 
   const clockTxt = ms => { const s = Math.max(0, Math.round(ms/1000));
     return s >= 3600 ? Math.floor(s/3600)+'h '+Math.floor(s%3600/60)+'m'
@@ -187,17 +189,17 @@ RF.mod('06-content', function (RF) {
       if(!b || typeof b !== 'object' || !(b.until > t)){ S.buffs.splice(i,1); dropped = true; } }
     eff.bite = 1; eff.luck = 0; eff.ore = 0; eff.wood = 1; eff.speed = 1; eff.pearl = 0;
     for(let i = 0; i < S.buffs.length; i++){ const e = S.buffs[i].e || {};
-      if(e.bite) eff.bite *= e.bite;  if(e.luck) eff.luck += e.luck;   if(e.ore) eff.ore += e.ore;
+      if(e.bite) eff.bite *= e.bite;  if(e.luck) eff.luck += e.luck;    if(e.ore) eff.ore += e.ore;
       if(e.wood) eff.wood *= e.wood;  if(e.speed) eff.speed *= e.speed; if(e.pearl) eff.pearl += e.pearl; }
     const L = liveLure();
     if(L){ if(L.e.bite) eff.bite *= L.e.bite; if(L.e.luck) eff.luck += L.e.luck; }
     eff.luck += tankLuck();
-    eff.speed = clamp(eff.speed, 0.5, 1.35);                    // a buff should never make the hero uncontrollable
+    eff.speed = clamp(eff.speed, 0.5, 1.35);                    // a buff must never make the hero uncontrollable
     if(dropped){ persist(); if(uiReady) paintHud(); }
     return dropped; }
-  function addBuff(d){ const t = now();
+  function addBuff(d){
     for(let i = 0; i < S.buffs.length; i++) if(S.buffs[i].id === d.id){ S.buffs.splice(i,1); break; } // re-cooking refreshes
-    S.buffs.push({id:d.id, n:d.n, until:t + d.ms, e:d.e});
+    S.buffs.push({id:d.id, n:d.n, until:now() + d.ms, e:d.e});
     recalc(); persist(); paintHud(); }
 
   RF.modify('biteTime',  v => v * eff.bite);
@@ -209,12 +211,11 @@ RF.mod('06-content', function (RF) {
 
   /* ==================================================================
      SITING — where the camp goes. Deterministic: findCellNear scans in a
-     fixed order and the heightmap is seeded, so the camp lands on the same
-     five cells every reload. usedCells/decorUsed/pathSet keep it off the
-     trader, the casino, the harbor, the portal, the shaft, ore and trees.
+     fixed order over a seeded heightmap, so the camp lands on the same five
+     cells every reload, for every client.
      ================================================================== */
-  // distance-to-water, multi-source BFS. One pass beats re-scanning a
-  // window per candidate cell inside findCellNear's 9,216-cell sweep.
+  // distance-to-water, one multi-source BFS. Beats re-scanning a window per
+  // candidate inside findCellNear's 9,216-cell sweep, five times over.
   const wdist = new Int16Array(N*N);
   { const q = new Int32Array(N*N); let qh = 0, qt = 0;
     for(let i=0;i<N;i++) for(let j=0;j<N;j++){ const k = i*N+j;
@@ -226,43 +227,49 @@ RF.mod('06-content', function (RF) {
       if(cj<N-1 && wdist[c+1] > d){ wdist[c+1] = d; q[qt++] = c+1; } } }
 
   // Only the props that existed BEFORE the camp: the stations get their own,
-  // looser spacing rule below, or the fifth one would have nowhere left to stand.
+  // looser spacing rule below, or the fifth one would have nowhere to stand.
   const PROP0 = RF.PROPS.length;
   const stations = [];
-  /* A station has to clear: every landmark prop, the paths, every tree/rock/
-     flower cell, every ore node — and it has to sit at least four cells from
-     water. That last one is not decoration: it guarantees a station is never
-     inside the 2.4-unit casting radius, so claiming the E prompt there can
-     never eat a cast or quietly stall the auto-rig. */
-  const clearOf = (i,j) => { const k = keyOf(i,j), wx = i-HALF, wz = j-HALF, wd = wdist[i*N+j];
-    if(wd < 4 || wd > 15) return false;
+  /* A station has to clear every landmark prop, the paths, every tree/rock/
+     flower cell and every ore node — and sit at least four cells from water.
+     That last one is not decoration: it guarantees a station is never inside
+     the 2.4-unit casting radius, so claiming the E prompt there can never eat
+     a cast or quietly stall the auto-rig. */
+  /* `slack` scales every clearance at once: a wooded, ore-rich isle can leave
+     no cell at all that clears everything comfortably, and a camp with one
+     building in it is worse than a camp that stands a little closer together. */
+  const clearOf = (i,j,slack) => { const k = keyOf(i,j), wx = i-HALF, wz = j-HALF, s = slack === undefined ? 1 : slack;
+    if(wdist[i*N+j] < 4) return false;                          // never inside the 2.4-unit casting radius
     if(RF.decorUsed.has(k) || RF.pathSet.has(k)) return false;
     for(let n = 0; n < PROP0; n++){ const p = RF.PROPS[n];
-      if(Math.hypot(p.x - wx, p.z - wz) < (p.r || 2.5) + 2) return false; }
+      if(Math.hypot(p.x - wx, p.z - wz) < (p.r || 2.5) + 2*s) return false; }
     for(let n = 0; n < RF.treeData.length; n++){ const t2 = RF.treeData[n];
-      if(Math.hypot(t2.x - wx, t2.z - wz) < 3.2) return false; }
+      if(Math.hypot(t2.x - wx, t2.z - wz) < 3.2*s) return false; }
     for(let n = 0; n < RF.oreNodes.length; n++){ const o = RF.oreNodes[n];
-      if(Math.hypot(o.x - wx, o.z - wz) < 3.2) return false; }
+      if(Math.hypot(o.x - wx, o.z - wz) < 3.2*s) return false; }
+    const gap = Math.max(2.2, 2.7*s);                           // two buildings must never share a doorway
     for(let n = 0; n < stations.length; n++)
-      if(Math.hypot(stations[n].x - wx, stations[n].z - wz) < 2.7) return false;
+      if(Math.hypot(stations[n].x - wx, stations[n].z - wz) < gap) return false;
     return true; };
 
   const sp = RF.spawnCell || [HALF, HALF, 4];
-  const anchor = fn.findCellNear(sp[0], sp[1], 8, 22, (i,j) => wdist[i*N+j] <= 11 && clearOf(i,j))
-    || fn.findCellNear(sp[0], sp[1], 5, 32, clearOf);
+  const anchor = fn.findCellNear(sp[0], sp[1], 8, 22, (i,j) => wdist[i*N+j] <= 11 && clearOf(i,j,1))
+    || fn.findCellNear(sp[0], sp[1], 5, 32, (i,j) => wdist[i*N+j] <= 17 && clearOf(i,j,0.8))
+    || fn.findCellNear(sp[0], sp[1], 4, 40, (i,j) => clearOf(i,j,0.66));
 
   function site(id, label, tab, icon, build){
     if(!anchor) return null;
-    const c = fn.findCellNear(anchor[0], anchor[1], 0, 5.5, clearOf);
+    const c = fn.findCellNear(anchor[0], anchor[1], 0, 7,  (i,j) => clearOf(i,j,1))
+      ||      fn.findCellNear(anchor[0], anchor[1], 0, 12, (i,j) => clearOf(i,j,0.78))
+      ||      fn.findCellNear(anchor[0], anchor[1], 0, 18, (i,j) => clearOf(i,j,0.62));
     if(!c) return null;
     RF.usedCells.add(keyOf(c[0], c[1])); RF.decorUsed.add(keyOf(c[0], c[1]));
     const x = c[0]-HALF, y = HM[c[0]][c[1]], z = c[1]-HALF;
-    const g = new T.Group(); g.position.set(x, y, z); RF.scene.add(g);
+    const g = new T.Group(); g.position.set(x, y, z); g.userData.camp = 'station:' + id; RF.scene.add(g);
     const st = {id:id, label:label, tab:tab, icon:icon, x:x, y:y, z:z, g:g, i:c[0], j:c[1]};
-    g.userData.camp = 'station:' + id;
     stations.push(st);
     try{ build(g, st); }catch(e){ RF.warn('06-content:build:'+id, e); }
-    RF.PROPS.push({x:x, z:z, r:1.2, h:y+2.4, g:g});
+    RF.PROPS.push({x:x, z:z, r:1.2, h:y+2.4, g:g});             // so the photo camera can see past it
     return st; }
 
   /* ---- voxel helpers: one shared cube geometry, materials cached by colour ---- */
@@ -284,7 +291,6 @@ RF.mod('06-content', function (RF) {
   const flames = [], emberMat = new T.MeshLambertMaterial({color:0xff9a3c, emissive:0xff6a1a, emissiveIntensity:0.9});
   const embers = [], emberP = [];
   const fireLight = new T.PointLight(0xff9a3c, 0, 9);
-  let fireIdx = 0;
 
   const fireSt = site('fire','The cookfire','fire', pix('sun',13), (g) => {
     for(let k = 0; k < 9; k++){ const a = k/9*RF.TAU;
@@ -295,8 +301,8 @@ RF.mod('06-content', function (RF) {
       at(f, (k-1)*0.16, 0.42 + k*0.16, (k===1?0.12:-0.08)); g.add(f); flames.push(f); }
     for(let k = 0; k < 8; k++){ const e = new T.Mesh(G1, emberMat); e.scale.setScalar(0.07); e.visible = false;
       g.add(e); embers.push(e); emberP.push({t:0, x:0, y:0, z:0, vy:0}); }
-    // a cooking pot on a spit — the thing the recipes actually happen in
-    for(const s of [-0.62, 0.62]){ const p = vox(0.09,1.1,0.09, 0x4a3a28); at(p, s, 0.55, 0); g.add(p); }
+    // a pot on a spit — the thing the recipes actually happen in
+    for(const s of [-0.62, 0.62]) g.add(at(vox(0.09,1.1,0.09, 0x4a3a28), s, 0.55, 0));
     g.add(at(vox(1.34,0.08,0.08, 0x4a3a28), 0, 1.06, 0));
     g.add(at(vox(0.56,0.42,0.56, 0x3a4046), 0, 0.72, 0));
     g.add(at(vox(0.62,0.07,0.62, 0x596068), 0, 0.95, 0));
@@ -304,26 +310,26 @@ RF.mod('06-content', function (RF) {
   });
 
   const rackSlots = [];
-  const rackSt = site('rack','The curing rack','rack', pix('fish',13), (g) => {
+  site('rack','The curing rack','rack', pix('fish',13), (g) => {
     for(const s of [-1.05, 1.05]){ g.add(at(vox(0.14,1.7,0.14, 0x6b4a2a), s, 0.85, 0));
       g.add(at(vox(0.5,0.1,0.1, 0x6b4a2a), s, 1.62, 0)); }
     g.add(at(vox(2.3,0.1,0.1, 0x7a5530), 0, 1.62, 0));
     g.add(at(vox(2.3,0.06,0.06, 0x7a5530), 0, 1.36, 0.2));
     for(let k = 0; k < 3; k++){ const h = new T.Group(); h.position.set((k-1)*0.72, 1.62, 0); h.visible = false;
-      const line = vox(0.03,0.3,0.03, 0xd9d2c4); at(line, 0, -0.15, 0); h.add(line);
+      h.add(at(vox(0.03,0.3,0.03, 0xd9d2c4), 0, -0.15, 0));
       const item = voxE(0.3,0.42,0.13, 0xcccccc, 0x000000, 0); at(item, 0, -0.5, 0); h.add(item);
       g.add(h); rackSlots.push({g:h, item:item}); }
   });
 
   const benchLures = [];
-  const benchSt = site('bench','The lure bench','bench', pix('rod',13), (g) => {
-    for(const [a,b] of [[-0.72,-0.38],[0.72,-0.38],[-0.72,0.38],[0.72,0.38]])
-      g.add(at(vox(0.14,0.78,0.14, 0x6b4a2a), a, 0.39, b));
+  site('bench','The lure bench','bench', pix('rod',13), (g) => {
+    for(const c of [[-0.72,-0.38],[0.72,-0.38],[-0.72,0.38],[0.72,0.38]])
+      g.add(at(vox(0.14,0.78,0.14, 0x6b4a2a), c[0], 0.39, c[1]));
     g.add(at(vox(1.85,0.14,1.1, 0xa8763f), 0, 0.85, 0));
     g.add(at(vox(0.3,0.26,0.3, 0x8a97a0), -0.6, 1.05, 0.18));      // the vise
     g.add(at(vox(0.22,0.22,0.34, 0xd8483f), 0.42, 1.03, -0.16));   // a spool of thread
     g.add(at(vox(0.5,0.16,0.34, 0x7a5530), 0.1, 0.99, 0.3));       // the tin of hooks
-    const bar = vox(0.06,0.06,1.0, 0x6b4a2a); at(bar, -0.95, 1.5, 0); g.add(bar);
+    g.add(at(vox(0.06,0.06,1.0, 0x6b4a2a), -0.95, 1.5, 0));
     g.add(at(vox(0.1,0.72,0.1, 0x6b4a2a), -0.95, 1.14, -0.48));
     g.add(at(vox(0.1,0.72,0.1, 0x6b4a2a), -0.95, 1.14, 0.48));
     for(let k = 0; k < 5; k++){ const m = voxE(0.1,0.2,0.06, 0x888888, 0x000000, 0);
@@ -331,28 +337,27 @@ RF.mod('06-content', function (RF) {
   });
 
   const tankFish = [], tankG = new T.Group();
-  const tankSt = site('tank','The tank','tank', pix('trophy',13), (g) => {
-    for(const [a,b] of [[-0.78,-0.44],[0.78,-0.44],[-0.78,0.44],[0.78,0.44]])
-      g.add(at(vox(0.16,0.72,0.16, 0x5c3f22), a, 0.36, b));
+  site('tank','The tank','tank', pix('trophy',13), (g) => {
+    for(const c of [[-0.78,-0.44],[0.78,-0.44],[-0.78,0.44],[0.78,0.44]])
+      g.add(at(vox(0.16,0.72,0.16, 0x5c3f22), c[0], 0.36, c[1]));
     g.add(at(vox(2.0,0.14,1.2, 0x8a5d33), 0, 0.79, 0));
-    const water = voxE(1.72,0.86,0.96, hex('#'+(RF.WORLD.water||0x2fc0e8).toString(16).padStart(6,'0')), 0x000000, 0, 0.42);
+    const water = voxE(1.72,0.86,0.96, RF.WORLD.water || 0x2fc0e8, 0x000000, 0, 0.42);
     at(water, 0, 1.32, 0); water.renderOrder = 1; g.add(water);
     const glass = new T.Mesh(G1, new T.MeshLambertMaterial({color:0xcfeef6, transparent:true, opacity:0.16, depthWrite:false}));
     glass.scale.set(1.82,0.96,1.06); at(glass, 0, 1.34, 0); glass.renderOrder = 2; g.add(glass);
-    for(const [a,b] of [[-0.9,-0.52],[0.9,-0.52],[-0.9,0.52],[0.9,0.52]])
-      g.add(at(vox(0.08,1.0,0.08, 0x8a5d33), a, 1.34, b));
+    for(const c of [[-0.9,-0.52],[0.9,-0.52],[-0.9,0.52],[0.9,0.52]])
+      g.add(at(vox(0.08,1.0,0.08, 0x8a5d33), c[0], 1.34, c[1]));
     g.add(at(vox(1.9,0.08,1.12, 0x8a5d33), 0, 1.85, 0));
     g.add(at(vox(1.66,0.1,0.9, 0xd8cba4), 0, 0.92, 0));            // sand floor
     tankG.position.set(0, 1.3, 0); g.add(tankG);
   });
 
-  const boardNotes = [];
-  const boardSt = site('board','The notice board','board', pix('map',13), (g) => {
+  site('board','The notice board','board', pix('map',13), (g) => {
     for(const s of [-0.72, 0.72]) g.add(at(vox(0.16,1.9,0.16, 0x6b4a2a), s, 0.95, 0));
     g.add(at(vox(1.9,1.15,0.12, 0x8a5d33), 0, 1.42, 0));
     g.add(at(vox(2.06,0.14,0.2, 0x5c3f22), 0, 2.06, 0));           // a little roof over the papers
     for(let k = 0; k < 5; k++){ const p = vox(0.34,0.44,0.03, k%2 ? 0xf2ede2 : 0xe6dcc4);
-      at(p, -0.6 + (k%3)*0.6, 1.62 - ((k/3)|0)*0.5, 0.08); p.rotation.z = (k*0.37 % 0.24) - 0.12; g.add(p); boardNotes.push(p); }
+      at(p, -0.6 + (k%3)*0.6, 1.62 - ((k/3)|0)*0.5, 0.08); p.rotation.z = (k*0.37 % 0.24) - 0.12; g.add(p); }
   });
 
   /* ---- the tideline lanterns: dark posts most of the time, a lit shore for
@@ -362,13 +367,12 @@ RF.mod('06-content', function (RF) {
     for(let i = 2; i < N-2; i++) for(let j = 2; j < N-2; j++){
       if(HM[i][j] !== 3 || wdist[i*N+j] > 1) continue;
       if(RF.usedCells.has(keyOf(i,j)) || RF.pathSet.has(keyOf(i,j)) || RF.decorUsed.has(keyOf(i,j))) continue;
-      if(Math.hypot(i - anchor[0], j - anchor[1]) > 16) continue;
+      if(Math.hypot(i - anchor[0], j - anchor[1]) > 26) continue;   // a rocky isle has few clear sand cells; reach further for them
       cand.push([i,j]); }
-    let placed = 0;
-    for(let k = 0; k < cand.length && placed < 9; k++){ const c = cand[k];
+    for(let k = 0; k < cand.length && lanternLamps.length < 9; k++){ const c = cand[k];
       let ok = true;
       for(let n = 0; n < lanternLamps.length; n++){ const L = lanternLamps[n];
-        if(Math.hypot(L.ci - c[0], L.cj - c[1]) < 4){ ok = false; break; } }
+        if(Math.hypot(L.ci - c[0], L.cj - c[1]) < 3){ ok = false; break; } }
       if(!ok) continue;
       RF.decorUsed.add(keyOf(c[0], c[1]));
       const g = new T.Group(); g.position.set(c[0]-HALF, HM[c[0]][c[1]], c[1]-HALF);
@@ -376,23 +380,23 @@ RF.mod('06-content', function (RF) {
       g.add(at(vox(0.34,0.08,0.34, 0x5c3f22), 0, 1.56, 0));
       const lamp = voxE(0.26,0.3,0.26, 0xffd98a, 0xffb320, 0, 0.92);
       at(lamp, 0, 1.36, 0); g.add(lamp);
-      RF.scene.add(g); lanternLamps.push({g:g, lamp:lamp, ci:c[0], cj:c[1]}); placed++; } }
+      g.userData.camp = 'lantern'; RF.scene.add(g);
+      lanternLamps.push({g:g, lamp:lamp, ci:c[0], cj:c[1]}); } }
 
   /* ==================================================================
      THE SHORE — forage that regrows, bottles that wash in, pots that soak.
      ================================================================== */
   const nodes = [];
-  { // deterministic: seeded shuffle of the tideline so every reload plants the
-    // same beds, and a returning player finds the shore they remember
+  { // deterministic: a seeded shuffle of the tideline, so every reload plants
+    // the same beds and a returning player finds the shore they remember
     const rnd = fn.mulberry32(((RF.WORLD.seed || 0) * 2654435761 + 40503) | 0);
     const cells = [];
     for(let i = 2; i < N-2; i++) for(let j = 2; j < N-2; j++){
       if(HM[i][j] !== 3 || wdist[i*N+j] > 1) continue;
       const k = keyOf(i,j);
       if(RF.usedCells.has(k) || RF.pathSet.has(k) || RF.decorUsed.has(k)) continue;
-      if(!fn.reachable(i,j)) continue;
-      cells.push([i,j]); }
-    for(let i = cells.length - 1; i > 0; i--){ const r = (rnd()*(i+1))|0; const t2 = cells[i]; cells[i] = cells[r]; cells[r] = t2; }
+      if(fn.reachable(i,j)) cells.push([i,j]); }
+    for(let i = cells.length - 1; i > 0; i--){ const r = (rnd()*(i+1))|0, t2 = cells[i]; cells[i] = cells[r]; cells[r] = t2; }
     const pick = [];
     for(let k = 0; k < cells.length && pick.length < FORAGE_MAX; k++){ const c = cells[k];
       let ok = true;
@@ -407,11 +411,11 @@ RF.mod('06-content', function (RF) {
           at(m, (b-1)*0.16, (0.42 + b*0.1)/2, b*0.06); m.rotation.z = (b-1)*0.22; g.add(m); } }
       else if(type.k === 'clam'){ g.add(at(vox(0.3,0.13,0.24, type.col), 0, 0.07, 0));
         g.add(at(vox(0.22,0.1,0.18, 0xf2ead6), 0.14, 0.06, 0.1)); }
-      else if(type.k === 'samphire'){ for(let b = 0; b < 4; b++){ const m = vox(0.07,0.3,0.07, type.col);
-          at(m, (b%2?0.11:-0.11), 0.15, (b<2?0.1:-0.1)); g.add(m); } }
+      else if(type.k === 'samphire'){ for(let b = 0; b < 4; b++)
+          g.add(at(vox(0.07,0.3,0.07, type.col), (b%2?0.11:-0.11), 0.15, (b<2?0.1:-0.1))); }
       else if(type.k === 'drift'){ const m = vox(0.72,0.15,0.17, type.col); at(m, 0, 0.08, 0); m.rotation.y = 0.4; g.add(m);
         g.add(at(vox(0.26,0.12,0.13, 0x8f7a5c), 0.28, 0.16, 0.08)); }
-      else { const m = voxE(0.16,0.12,0.16, type.col, type.col, 0.35, 0.85); at(m, 0, 0.07, 0); g.add(m); }
+      else g.add(at(voxE(0.16,0.12,0.16, type.col, type.col, 0.35, 0.85), 0, 0.07, 0));
       g.userData.camp = 'node:' + type.k; RF.scene.add(g);
       nodes.push({g:g, k:type.k, i:c[0], j:c[1], x:c[0]-HALF, z:c[1]-HALF, idx:k, live:true}); } }
 
@@ -430,18 +434,18 @@ RF.mod('06-content', function (RF) {
 
   /* ---- Barnacle ---- */
   const gull = new T.Group();
-  { const body = vox(0.34,0.24,0.2, 0xf2f2ee); at(body, 0, 0, 0); gull.add(body);
-    const head = vox(0.17,0.16,0.15, 0xf2f2ee); at(head, 0.2, 0.09, 0); gull.add(head);
+  { gull.add(at(vox(0.34,0.24,0.2, 0xf2f2ee), 0, 0, 0));
+    gull.add(at(vox(0.17,0.16,0.15, 0xf2f2ee), 0.2, 0.09, 0));
     gull.add(at(vox(0.11,0.05,0.05, 0xffb347), 0.32, 0.07, 0));
     const wL = vox(0.26,0.05,0.3, 0xdfe6e4); at(wL, -0.02, 0.08, -0.2); gull.add(wL);
     const wR = vox(0.26,0.05,0.3, 0xdfe6e4); at(wR, -0.02, 0.08, 0.2); gull.add(wR);
     const lamp = voxE(0.1,0.12,0.1, 0xffd98a, 0xffb320, 0, 0.9); at(lamp, -0.16, -0.12, 0); gull.add(lamp);
-    gull.userData = {wL:wL, wR:wR, lamp:lamp};
+    gull.userData = {wL:wL, wR:wR, lamp:lamp, camp:'gull'};
     gull.visible = false; RF.scene.add(gull); }
 
   const marker = new T.Group();
-  { const m = voxE(0.2,0.2,0.2, 0x39d7c4, 0x39d7c4, 0.9); at(m, 0, 0, 0); m.rotation.y = 0.78; marker.add(m);
-    const beam = voxE(0.05,1.2,0.05, 0x39d7c4, 0x39d7c4, 0.6, 0.35); at(beam, 0, -0.75, 0); marker.add(beam);
+  { const m = voxE(0.2,0.2,0.2, 0x39d7c4, 0x39d7c4, 0.9); m.rotation.y = 0.78; marker.add(at(m, 0, 0, 0));
+    marker.add(at(voxE(0.05,1.2,0.05, 0x39d7c4, 0x39d7c4, 0.6, 0.35), 0, -0.75, 0));
     marker.visible = false; RF.scene.add(marker); }
   let markerT = 0;
 
@@ -478,11 +482,11 @@ RF.mod('06-content', function (RF) {
       const n = S.lures[L.id] | 0, eq = S.lureId === L.id && S.lureUses > 0;
       m.visible = n > 0 || eq;
       if(!m.visible) continue;
-      const c = eq ? '#39d7c4' : '#c9b48a';
-      m.material.color.set(c); m.material.emissive.set(eq ? '#39d7c4' : '#000000');
+      m.material.color.set(eq ? '#39d7c4' : '#c9b48a');
+      m.material.emissive.set(eq ? '#39d7c4' : '#000000');
       m.material.emissiveIntensity = eq ? 0.5 : 0; } }
   function rebuildTank(){
-    while(tankG.children.length) tankG.remove(tankG.children[0]);
+    while(tankG.children.length) tankG.remove(tankG.children[0]);   // geometry + materials are shared and cached: nothing to dispose
     tankFish.length = 0;
     for(let k = 0; k < S.tank.length && k < 6; k++){ const e = S.tank[k];
       const col = hex(RF.RAR[e.r] || '#b9c6c4'), g = new T.Group();
@@ -493,7 +497,7 @@ RF.mod('06-content', function (RF) {
       tankFish.push({g:g, ph:k*1.15, sp:0.42 + (k%4)*0.09, rz:0.24 + (k%3)*0.07, y:((k%3)-1)*0.2}); }
     recalc(); }
 
-  syncNodes(); syncBottles(); syncPots(); syncRack(); syncBench(); rebuildTank(); recalc();
+  syncNodes(); syncBottles(); syncPots(); syncRack(); syncBench(); rebuildTank();
 
   /* ==================================================================
      ACTIONS
@@ -510,21 +514,16 @@ RF.mod('06-content', function (RF) {
     say(`${goodPipT(n.k)} +${amt} ${GOODS[n.k].n}`, 'good');
     persist(); paintHud(); if(panelOn) renderPanel(); }
 
-  // toasts are innerHTML, so the larder pip can ride along inside one
-  const goodPipT = k => `<span style="display:inline-block;width:9px;height:9px;border-radius:3px;background:${GOODS[k].c};vertical-align:-1px"></span>`;
-
   function readBottle(idx){
     const b = WS.bottles[idx]; if(!b) return;
     WS.bottles.splice(idx, 1); syncBottles();
-    const id = clamp(b.id | 0, 0, LORE.length - 1);
-    const first = !S.lore[id];
+    const id = clamp(b.id | 0, 0, LORE.length - 1), first = !S.lore[id];
     S.lore[id] = now();
     RF.sfx.sparkle(); fn.addShake(0.06);
     if(Math.random() < 0.5) give('glass', 1);
-    showNote(first ? 'A MESSAGE IN A BOTTLE · ' + (Object.keys(S.lore).length) + '/' + LORE.length
-      : 'THIS ONE AGAIN · ' + (Object.keys(S.lore).length) + '/' + LORE.length, LORE[id]);
-    if(first && Object.keys(S.lore).length === LORE.length)
-      say('📜 the ledger of small facts is complete. it explains nothing.', 'gold');
+    const read = Object.keys(S.lore).length;
+    showNote((first ? 'A MESSAGE IN A BOTTLE · ' : 'THIS ONE AGAIN · ') + read + '/' + LORE.length, LORE[id]);
+    if(first && read === LORE.length) say('📜 the ledger of small facts is complete. it explains nothing.', 'gold');
     persist(); paintHud(); if(panelOn) renderPanel(); }
 
   function setPot(c){
@@ -540,16 +539,14 @@ RF.mod('06-content', function (RF) {
     const p = WS.pots[idx]; if(!p) return;
     const soak = now() - p.at;
     if(soak < POT_SOAK){ RF.sfx.deny(); say(`still soaking · ${clockTxt(POT_SOAK - soak)} to go`); return; }
-    const frac = Math.min(1, soak / POT_FULL);
-    let count = 1 + Math.floor(frac * 4) + (festOn() ? 1 : 0);
+    const count = 1 + Math.floor(Math.min(1, soak / POT_FULL) * 4) + (festOn() ? 1 : 0);
     WS.pots.splice(idx, 1);
     give('pot', 1);                                            // the pot always comes home
     const got = {};
     for(let k = 0; k < count; k++){ const g = wroll(POT_TABLE); give(g, 1); got[g] = (got[g]|0) + 1; }
     syncPots(); RF.sfx.splash(0.09); RF.sfx.ore(); fn.addShake(0.12);
     fn.fxBurst(p.i-HALF, RF.WATER_TOP + 0.3, p.j-HALF, {n:20, cols:[0xff9f7a, 0xe07a4a, 0xcfeef6], speed:3, up:3.6, size:0.8});
-    const list = Object.keys(got).map(k => goodPipT(k) + ' ' + got[k] + '× ' + GOODS[k].n).join(' · ');
-    say(`the pot came up: ${list}`, 'gold');
+    say('the pot came up: ' + Object.keys(got).map(k => goodPipT(k) + ' ' + got[k] + '× ' + GOODS[k].n).join(' · '), 'gold');
     persist(); paintHud(); if(panelOn) renderPanel(); }
 
   function cook(d){
@@ -605,7 +602,7 @@ RF.mod('06-content', function (RF) {
 
   function feedGull(key){
     if(have(key) < 2){ RF.sfx.deny(); return; }
-    take(key, 2); S.gull = 1; gull.visible = true;
+    take(key, 2); S.gull = 1;
     RF.sfx.win(); fn.addShake(0.14);
     say('a gull lands on the rack and refuses to leave. his name is <b>Barnacle</b> now.', 'gold');
     persist(); if(panelOn) renderPanel(); }
@@ -626,12 +623,11 @@ RF.mod('06-content', function (RF) {
     border-radius:12px;padding:10px 13px;margin-bottom:7px;box-shadow:inset 0 1px 0 rgba(255,255,255,.07);}
   .lard-row .nm{flex:1;font-size:13px;font-weight:600;color:var(--ink);min-width:0;}
   .lard-row .nm small{display:block;font-size:10.5px;color:var(--muted);font-weight:400;line-height:1.5;}
-  .lard-row .cost{font-size:10.5px;color:var(--faint);text-align:right;max-width:210px;}
-  .lard-row .cost.no{color:var(--rose);}
+  .lard-row .cost{font-size:10.5px;color:var(--faint);text-align:right;max-width:220px;}
   .lard-row.on{border-color:rgba(57,215,196,.55);box-shadow:inset 0 0 0 1px rgba(57,215,196,.22);}
   .lard-row.gold{border-color:rgba(255,207,92,.5);}
   .lard-row .btn{flex:0 0 auto;}
-  .lard-hint{font-size:11px;color:var(--faint);line-height:1.6;margin:2px 0 10px;}
+  .lard-hint{font-size:11px;color:var(--faint);line-height:1.65;margin:2px 0 10px;}
   .lard-hint b{color:var(--teal);font-weight:600;}
   .lard-empty{font-size:11.5px;color:var(--faint);padding:12px 2px 16px;line-height:1.7;}
   .lard-lore{display:flex;gap:11px;background:var(--glass-row);border:1px solid var(--glass-bd-soft);
@@ -655,7 +651,8 @@ RF.mod('06-content', function (RF) {
   .lard-chip.fest b{color:var(--gold);}
   .lard-chip.warn{border-color:rgba(255,93,122,.5);color:var(--rose);}
   .lard-chip.warn b{color:var(--rose);}
-  @keyframes lardPulse{0%,100%{box-shadow:var(--glass-hi),0 0 12px rgba(255,207,92,.12);}50%{box-shadow:var(--glass-hi),0 0 22px rgba(255,207,92,.34);}}
+  @keyframes lardPulse{0%,100%{box-shadow:var(--glass-hi),0 0 12px rgba(255,207,92,.12);}
+                        50%{box-shadow:var(--glass-hi),0 0 22px rgba(255,207,92,.34);}}
   @media (prefers-reduced-motion:reduce){
     .lard-note{transition:none;}
     .lard-chip.fest{animation:none;}
@@ -682,39 +679,26 @@ RF.mod('06-content', function (RF) {
         tabsEl = ov.querySelector('#lardTabs'), bodyEl = ov.querySelector('#lardBody');
   let panelOn = false, curTab = 'fire';
 
-  function openPanel(tab){ if(panelOn){ if(tab) curTab = tab; renderPanel(); return; }
-    panelOn = true; if(tab) curTab = tab;
+  function openPanel(tab){ if(tab) curTab = tab;
+    if(panelOn){ renderPanel(); return; }
+    panelOn = true;
     for(const k in RF.keys) RF.keys[k] = false;               // whatever was held stays behind at the door
     fn.hint(''); ov.classList.add('on'); RF.sfx.open(); renderPanel(); paintHud(); }
-  function closePanel(){ if(!panelOn) return; panelOn = false; ov.classList.remove('on'); RF.sfx.close(); persistNow(); paintHud(); }
+  function closePanel(){ if(!panelOn) return;
+    panelOn = false; ov.classList.remove('on'); RF.sfx.close(); persistNow(); paintHud(); }
   RF.on('panel', (n, open) => { if(open && panelOn) closePanel(); });
 
   /* ==================================================================
      PANEL CONTENT
      ================================================================== */
-  const row = (cls, name, sub, right, btn) => `<div class="lard-row${cls?' '+cls:''}">`
+  const row = (cls, name, sub, right, btns) => `<div class="lard-row${cls?' '+cls:''}">`
     + `<div class="nm">${name}<small>${sub}</small></div>`
-    + (right ? `<div class="cost">${right}</div>` : '')
-    + (btn || '') + '</div>';
+    + (right ? `<div class="cost">${right}</div>` : '') + (btns || '') + '</div>';
   const btn = (act, v, label, cls, dis) =>
     `<button class="btn${cls?' '+cls:''}" data-act="${act}" data-v="${v}"${dis?' disabled':''}>${label}</button>`;
   const costTxt = r => { const parts = [];
     for(const k in r) parts.push(`<span style="color:${have(k) >= r[k] ? 'var(--muted)' : 'var(--rose)'}">${r[k]}× ${GOODS[k].n}</span>`);
     return parts.join(' + '); };
-
-  function rFire(){
-    let h = '<div class="lard-hint">the fire turns a haul into a while. cooking again refreshes the same dish rather than stacking it.'
-      + (RF.online ? ' <b>signed in</b>, the server rolls your catches and your ore — so luck and yield stay home, but a faster bite and quicker feet still count.' : '') + '</div>';
-    if(S.buffs.length){ h += '<div class="seclab">on the go</div>';
-      for(let i = 0; i < S.buffs.length; i++){ const b = S.buffs[i];
-        h += row('on', b.n, effTxt(b.e), '<b style="color:var(--teal)">' + clockTxt(b.until - now()) + '</b>'); } }
-    h += '<div class="seclab">the pot</div>';
-    for(let i = 0; i < DISHES.length; i++){ const d = DISHES[i];
-      const locked = d.fest && !festOn(), ok = canPay(d.req) && !locked;
-      h += row(locked ? '' : (ok ? 'gold' : ''), d.n + (locked ? ' <span style="color:var(--gold);font-size:10px">· lantern tide only</span>' : ''),
-        d.s + ' — ' + d.blurb + ' · ' + Math.round(d.ms/MIN) + ' min',
-        costTxt(d.req), btn('cook', d.id, 'COOK', ok ? 'gold' : '', !ok)); }
-    return h; }
   function effTxt(e){ const p = [];
     if(e.bite) p.push('bites ' + Math.round((1 - e.bite)*100) + '% sooner');
     if(e.luck) p.push('luck +' + e.luck.toFixed(2));
@@ -723,6 +707,21 @@ RF.mod('06-content', function (RF) {
     if(e.speed) p.push(Math.round((e.speed - 1)*100) + '% quicker on foot');
     if(e.pearl) p.push('+' + e.pearl + ' ◉ a catch');
     return p.join(' · ') || 'no effect'; }
+
+  function rFire(){
+    let h = '<div class="lard-hint">the fire turns a haul into a while. cooking a dish again refreshes it rather than stacking it.'
+      + (RF.online ? ' <b>signed in</b>, the server rolls your catches and your ore — so luck and yield stay home, but a faster bite and quicker feet still count.' : '') + '</div>';
+    if(S.buffs.length){ h += '<div class="seclab">on the go</div>';
+      for(let i = 0; i < S.buffs.length; i++){ const b = S.buffs[i];
+        h += row('on', b.n, effTxt(b.e), '<b style="color:var(--teal)">' + clockTxt(b.until - now()) + '</b>'); } }
+    h += '<div class="seclab">the pot</div>';
+    for(let i = 0; i < DISHES.length; i++){ const d = DISHES[i];
+      const locked = d.fest && !festOn(), ok = canPay(d.req) && !locked;
+      h += row(ok ? 'gold' : '',
+        d.n + (locked ? ' <span style="color:var(--gold);font-size:10px">· lantern tide only</span>' : ''),
+        d.s + ' — ' + d.blurb + ' · ' + Math.round(d.ms/MIN) + ' min',
+        costTxt(d.req), btn('cook', d.id, 'COOK', ok ? 'gold' : '', !ok)); }
+    return h; }
 
   function rRack(){
     let h = '<div class="lard-hint">three lines and no hurry. the rack cures on the <b>real clock</b> — close the game, come back, it kept going.</div>';
@@ -734,19 +733,19 @@ RF.mod('06-content', function (RF) {
           btn('racktake', k, done ? 'TAKE' : 'WAIT', done ? 'gold' : '', !done)); }
       else { const opts = CURE_ORDER.filter(x => have(x) > 0);
         h += row('', `line ${k+1} · empty`,
-          opts.length ? 'hang something on it' : 'nothing in the larder cures — forage, or land a fish for a Trim',
+          opts.length ? 'hang something on it' : 'nothing in the larder cures yet — forage, or land a fish for a Trim',
           '', opts.map(x => btn('rackput', k + ':' + x, GOODS[x].n)).join(' ')); } }
     h += '<div class="seclab">what cures into what</div>';
     for(let i = 0; i < CURE_ORDER.length; i++){ const x = CURE_ORDER[i], c = CURES[x];
       h += row('', `${GOODS[x].n} → ${GOODS[c.out].n}`, c.n, Math.round(c.ms/MIN) + ' min'); }
     return h; }
 
+  const POT_REQ = {drift:3, kelp:1};
   function rPots(){
-    const potReq = {drift:3, kelp:1};
     let h = '<div class="lard-hint">weave a pot, stand at the water and press <b>G</b> to sink it. it fishes while you do not.'
       + ' six minutes gets you something; half an hour gets you a proper haul. the pot always comes back up with the catch.</div>';
-    h += row(canPay(potReq) ? 'gold' : '', 'Weave a crab pot', 'withy and driftwood, an afternoon',
-      costTxt(potReq), btn('weave', '', 'WEAVE', canPay(potReq) ? 'gold' : '', !canPay(potReq)));
+    h += row(canPay(POT_REQ) ? 'gold' : '', 'Weave a crab pot', 'withy and driftwood, an afternoon',
+      costTxt(POT_REQ), btn('weave', '', 'WEAVE', canPay(POT_REQ) ? 'gold' : '', !canPay(POT_REQ)));
     h += `<div class="seclab">pots out · ${WS.pots.length}/${POT_MAX} · ${have('pot')} in the pack</div>`;
     if(!WS.pots.length) h += '<div class="lard-empty">nothing soaking. the bay is full of crabs having an easy week.</div>';
     for(let k = 0; k < WS.pots.length; k++){ const p = WS.pots[k], soak = now() - p.at, ready = soak >= POT_SOAK;
@@ -759,20 +758,18 @@ RF.mod('06-content', function (RF) {
 
   function rBench(){
     const L = liveLure();
-    let h = '<div class="lard-hint">a lure sits on the line under whatever bait you are using and wears out on fish <b>landed</b> — a snapped line costs you nothing here either.</div>';
-    h += L ? row('on', 'on the line · ' + L.n, effTxt(L.e), `<b style="color:var(--teal)">${S.lureUses}</b> fish left`,
-        btn('unequip', '', 'STOW'))
-      : row('', 'nothing on the line', 'tie one below, then put it on', '');
+    let h = '<div class="lard-hint">a lure rides under whatever bait you are using and wears out on fish <b>landed</b> — a snapped line costs you nothing here either.</div>';
+    h += L ? row('on', 'on the line · ' + L.n, effTxt(L.e), `<b style="color:var(--teal)">${S.lureUses}</b> fish left`, btn('unequip', '', 'STOW'))
+           : row('', 'nothing on the line', 'tie one below, then put it on', '');
     h += '<div class="seclab">the tin</div>';
     for(let i = 0; i < LURES.length; i++){ const l = LURES[i], n = S.lures[l.id] | 0, ok = canPay(l.req);
       h += row(n ? 'on' : '', l.n + (n ? ` <span style="color:var(--teal);font-size:11px">×${n}</span>` : ''),
         l.s + ' — ' + effTxt(l.e) + ' · ' + l.uses + ' fish',
-        costTxt(l.req),
-        btn('tie', l.id, 'TIE', ok ? '' : '', !ok) + ' ' + btn('equip', l.id, 'USE', 'gold', n <= 0)); }
+        costTxt(l.req), btn('tie', l.id, 'TIE', '', !ok) + ' ' + btn('equip', l.id, 'USE', 'gold', n <= 0)); }
     return h; }
 
   function rTank(){
-    let h = `<div class="lard-hint">six slots of glass on the shore. a stocked tank is worth <b>+${tankLuck().toFixed(2)}</b> luck — every fish in it adds 0.03, and you can watch them from the path.</div>`;
+    let h = `<div class="lard-hint">six slots of glass on the shore. a stocked tank is worth <b>+${tankLuck().toFixed(2)}</b> luck — every fish adds 0.03 — and you can watch them from the path.</div>`;
     h += `<div class="seclab">in the glass · ${S.tank.length}/6</div>`;
     if(!S.tank.length) h += '<div class="lard-empty">empty water. land something, then mount it.</div>';
     for(let k = 0; k < S.tank.length; k++){ const e = S.tank[k];
@@ -795,7 +792,7 @@ RF.mod('06-content', function (RF) {
     const rs = rumours();
     for(let k = 0; k < rs.length; k++) h += `<div class="lard-lore"><span class="no">${rs[k][0]}</span><span>${rs[k][1]}</span></div>`;
     h += '<div class="seclab">the gull</div>';
-    if(S.gull) h += row('on', 'Barnacle', 'circles you, spots what is worth walking to, and occasionally brings back something he did not earn', '');
+    if(S.gull) h += row('on', 'Barnacle', 'circles you, screams about anything worth walking to, and now and then drops something he did not earn', '');
     else { const opts = ['prawn','f1'].filter(x => have(x) >= 2);
       h += row('', 'a gull, waiting', 'he has been watching the rack for an hour. two of anything and he is yours.',
         '2× Prawn or 2× Trim',
@@ -808,24 +805,28 @@ RF.mod('06-content', function (RF) {
     let h = `<div class="lard-hint">bottles wash up on the tideline. <b>${got}/${LORE.length}</b> read. none of it is useful.</div>`;
     for(let k = 0; k < LORE.length; k++)
       h += `<div class="lard-lore${S.lore[k] ? '' : ' locked'}"><span class="no">${String(k+1).padStart(2,'0')}</span>`
-        + `<span>${S.lore[k] ? LORE[k] : '— — — — — — — — — — — — —'}</span></div>`;
+        + `<span>${S.lore[k] ? LORE[k] : '— — — — — — — — — — — — — —'}</span></div>`;
     return h; }
 
   const RENDER = {fire:rFire, rack:rRack, pots:rPots, bench:rBench, tank:rTank, board:rBoard, ledger:rLedger};
 
+  /* Rumours are read off the live world, never invented: every line here points
+     at something the player can go and act on this minute. */
   function rumours(){
     const out = [], m = fn.mktMods(), w = RF.weather;
     out.push([pix('chart',13), `the market is paying over the odds for <b style="color:var(--gold)">${fn.catLabel(m.hot)}</b> and is sick of the sight of <b>${fn.catLabel(m.cold)}</b>.`]);
     out.push([pix(w === 'storm' ? 'storm' : w === 'rain' ? 'rain' : fn.isNight() ? 'moon' : 'sun', 13),
       w === 'storm' ? 'a storm is on. the quarry loosens up and the big weather fish are awake. go out anyway.'
-      : w === 'rain' ? 'rain. the fish bite quicker in it and the rainrunners are only here while it lasts.'
+      : w === 'rain' ? 'rain. the fish bite quicker in it, and the rainrunners are only here while it lasts.'
       : fn.isNight() ? 'dark. the night species are up, and nobody else is.'
-      : 'flat and bright. good day to walk the shore and let the pots do the fishing.']);
+      : 'flat and bright. a good day to walk the shore and let the pots do the fishing.']);
     out.push([pix('moon',13), `moon: <b>${MOON[Math.floor(RF.dayCount) % 8]}</b>. it changes nothing. people still plan around it.`]);
-    if(festOn()) out.push(['◉', `<b style="color:var(--gold)">LANTERN TIDE</b> · lit for another ${clockTxt(festLeft())}. the shore regrows three times over and the stew is on.`]);
-    else out.push(['◉', `lantern tide in <b>${clockTxt(festLeft())}</b>. the lamps along the sand go up for nine minutes.`]);
+    out.push(['◉', festOn()
+      ? `<b style="color:var(--gold)">LANTERN TIDE</b> · lit for another ${clockTxt(festLeft())}. the shore regrows three times over and the stew is on.`
+      : `lantern tide in <b>${clockTxt(festLeft())}</b>. the lamps along the sand go up for nine minutes.`]);
     let ready = 0; for(let k = 0; k < WS.pots.length; k++) if(now() - WS.pots[k].at >= POT_SOAK) ready++;
-    if(WS.pots.length) out.push([pix('boat',13), ready ? `<b style="color:var(--gold)">${ready}</b> of your ${WS.pots.length} pots are worth pulling.`
+    if(WS.pots.length) out.push([pix('boat',13), ready
+      ? `<b style="color:var(--gold)">${ready}</b> of your ${WS.pots.length} pots are worth pulling.`
       : `${WS.pots.length} pot${WS.pots.length>1?'s':''} still soaking. leave them.`]);
     let live = 0; for(let k = 0; k < nodes.length; k++) if(nodes[k].live) live++;
     out.push([pix('island',13), `<b>${live}</b> of ${nodes.length} beds on the tideline have grown back. press <b>G</b> at one.`]);
@@ -837,14 +838,13 @@ RF.mod('06-content', function (RF) {
     if(miss.length){ const e = miss[Math.floor(now() / (5*MIN)) % miss.length];
       out.push([pix('fish',13), `nobody here has landed a <b style="color:${RF.RAR[e[0].rar]}">${e[0].name}</b> yet`
         + (e[2] === 'night' ? '. it only comes up after dark.' : e[2] === 'rain' ? '. it wants rain.'
-          : e[2] === 'storm' ? '. it wants a storm, which is asking a lot.' : '. no excuse, it is always down there.')]); }
+          : e[2] === 'storm' ? '. it wants a storm, which is asking a lot.' : '. no excuse — it is always down there.')]); }
     const unread = LORE.length - Object.keys(S.lore).length;
     if(unread > 0) out.push([pix('map',13), `${unread} bottle${unread>1?'s':''} still out there with something in them.`]);
     if(RF.online) out.push([pix('crew',13), 'signed in. the server keeps the coins; the camp keeps the larder.']);
     return out; }
 
   function renderPanel(){ if(!panelOn) return;
-    const st = curTab;
     subEl.innerHTML = (festOn() ? '<span style="color:var(--gold)">LANTERN TIDE</span> · ' : '') + RF.WORLD.name;
     const chips = [];
     for(let k = 0; k < GOOD_ORDER.length; k++){ const g = GOOD_ORDER[k], n = have(g);
@@ -852,8 +852,8 @@ RF.mod('06-content', function (RF) {
     stripEl.innerHTML = chips.length ? chips.join('')
       : '<span class="lard-good" style="color:var(--faint)">the larder is bare · press <b>G</b> on the tideline</span>';
     const bs = tabsEl.children;
-    for(let k = 0; k < bs.length; k++) bs[k].classList.toggle('sel', bs[k].getAttribute('data-v') === st);
-    bodyEl.innerHTML = (RENDER[st] || rFire)(); }
+    for(let k = 0; k < bs.length; k++) bs[k].classList.toggle('sel', bs[k].getAttribute('data-v') === curTab);
+    bodyEl.innerHTML = (RENDER[curTab] || rFire)(); }
 
   ov.addEventListener('click', e => {
     const b = (e.target && e.target.closest) ? e.target.closest('[data-act]') : null;
@@ -865,9 +865,10 @@ RF.mod('06-content', function (RF) {
       if(a === 'cook'){ for(let i=0;i<DISHES.length;i++) if(DISHES[i].id===v) cook(DISHES[i]); return; }
       if(a === 'rackput'){ const p = v.split(':'); rackPut(+p[0], p[1]); return; }
       if(a === 'racktake'){ rackTake(+v); return; }
-      if(a === 'weave'){ const r = {drift:3, kelp:1};
-        if(!canPay(r)){ RF.sfx.deny(); say('the bench is short: ' + reqTxt(r), 'bad'); return; }
-        pay(r); give('pot', 1); RF.sfx.craft(); say(`${goodPipT('pot')} a pot, woven. now go and sink it.`, 'good');
+      if(a === 'weave'){
+        if(!canPay(POT_REQ)){ RF.sfx.deny(); say('the bench is short: ' + reqTxt(POT_REQ), 'bad'); return; }
+        pay(POT_REQ); give('pot', 1); RF.sfx.craft();
+        say(`${goodPipT('pot')} a pot, woven. now go and sink it.`, 'good');
         persist(); renderPanel(); return; }
       if(a === 'haul'){ haulPot(+v); return; }
       if(a === 'tie'){ const l = lureById(v); if(l) tieLure(l); return; }
@@ -899,7 +900,7 @@ RF.mod('06-content', function (RF) {
 
   /* ==================================================================
      WHAT G IS POINTING AT — recomputed on the interact hook (once a frame,
-     only when the hero is idle) and again on the keypress, so a stale
+     and only while the hero is idle) and again on the keypress, so a stale
      target can never be acted on.
      ================================================================== */
   function freeWaterCell(){
@@ -909,13 +910,13 @@ RF.mod('06-content', function (RF) {
     for(let a = -4; a <= 4; a++) for(let b = -4; b <= 4; b++){
       const i = ci + a, j = cj + b;
       if(i < 1 || j < 1 || i >= N-1 || j >= N-1 || HM[i][j] > 2) continue;
-      // shallow only: it has to touch land, or you are dropping it off a cliff into the deep
+      // shallow only: it has to touch land, or you are dropping it off a shelf into the deep
       if(HM[i-1][j] < 3 && HM[i+1][j] < 3 && HM[i][j-1] < 3 && HM[i][j+1] < 3) continue;
       let taken = false;
       for(let k = 0; k < WS.pots.length; k++) if(WS.pots[k].i === i && WS.pots[k].j === j){ taken = true; break; }
       if(taken) continue;
       const d = Math.hypot(px - (i - HALF), pz - (j - HALF));
-      if(d >= 1.1 && d <= 3.4 && d < bd){ bd = d; best = [i, j]; } }
+      if(d >= 0.8 && d <= 3.4 && d < bd){ bd = d; best = [i, j]; } }
     return best; }
 
   function findGather(){
@@ -962,7 +963,7 @@ RF.mod('06-content', function (RF) {
     if(RF.actEdge){ fn.initAudio(); openPanel(st.tab); }
     return true; });
 
-  /* Ride along on the core hint rather than claiming it: standing on the
+  /* Ride along on the core hint instead of claiming it: standing on the
      tideline you still get "E Cast your line", with the gather prompt after it. */
   RF.modify('hint', h => {
     if(!gHint || panelOn || RF.panelOpen || !RF.running) return h;
@@ -976,6 +977,7 @@ RF.mod('06-content', function (RF) {
     if(tag === 'INPUT' || tag === 'TEXTAREA') return false;
     if(panelOn){
       if(e.code === 'Escape' || e.code === 'KeyL'){ closePanel(); return true; }
+      // the world must not move behind an open card
       if(MOVEK[e.code] || e.code === 'KeyE' || e.code === 'Space' || e.code === 'KeyF'
          || e.code === 'KeyI' || e.code === 'Tab' || e.code === 'KeyC' || e.code === 'KeyT'
          || e.code === 'KeyG' || e.code === 'KeyP'){ e.preventDefault(); return true; }
@@ -987,7 +989,7 @@ RF.mod('06-content', function (RF) {
 
   /* ==================================================================
      THE CUT — every landed fish leaves something behind on the board.
-     Mod-owned, so it works identically signed in or off.
+     Mod-owned, so it reads the same signed in or off.
      ================================================================== */
   RF.on('catch', (f) => {
     if(!f) return;
@@ -1013,7 +1015,7 @@ RF.mod('06-content', function (RF) {
     if(RF.usedCells.has(k) || RF.pathSet.has(k) || RF.decorUsed.has(k)) continue;
     if(fn.reachable(i,j)) tideCells.push([i,j]); }
 
-  let festWas = festOn(), announced = false;
+  let festWas = festOn();
   RF.every(4, () => {
     syncNodes(); syncPots(); syncRack();
     const fest = festOn();
@@ -1044,32 +1046,31 @@ RF.mod('06-content', function (RF) {
     const px = RF.pWorld.x, pz = RF.pWorld.z;
     let bx = 0, bz = 0, by = 0, bd = 1e9, what = '';
     for(let k = 0; k < nodes.length; k++){ const n = nodes[k]; if(!n.live) continue;
-      const d = Math.hypot(px - n.x, pz - n.z); if(d > 4 && d < bd){ bd = d; bx = n.x; bz = n.z; by = HM[n.i][n.j]; what = GOODS[n.k].n.toLowerCase(); } }
+      const d = Math.hypot(px - n.x, pz - n.z);
+      if(d > 4 && d < bd){ bd = d; bx = n.x; bz = n.z; by = HM[n.i][n.j]; what = GOODS[n.k].n.toLowerCase(); } }
     for(let k = 0; k < WS.bottles.length; k++){ const b = WS.bottles[k];
-      const d = Math.hypot(px - (b.i-HALF), pz - (b.j-HALF));
-      if(d < bd){ bd = d * 0.4; bx = b.i-HALF; bz = b.j-HALF; by = HM[b.i][b.j]; what = 'a bottle'; } }
+      const d = Math.hypot(px - (b.i-HALF), pz - (b.j-HALF)) * 0.4;   // he rates a bottle over a bed
+      if(d < bd){ bd = d; bx = b.i-HALF; bz = b.j-HALF; by = HM[b.i][b.j]; what = 'a bottle'; } }
     for(let k = 0; k < WS.pots.length; k++){ const p = WS.pots[k]; if(now() - p.at < POT_SOAK) continue;
-      const d = Math.hypot(px - (p.i-HALF), pz - (p.j-HALF));
-      if(d * 0.3 < bd){ bd = d * 0.3; bx = p.i-HALF; bz = p.j-HALF; by = RF.WATER_TOP; what = 'a full pot'; } }
+      const d = Math.hypot(px - (p.i-HALF), pz - (p.j-HALF)) * 0.3;
+      if(d < bd){ bd = d; bx = p.i-HALF; bz = p.j-HALF; by = RF.WATER_TOP; what = 'a full pot'; } }
     if(!what) return;
     marker.position.set(bx, by + 2.2, bz); marker.visible = true; markerT = 14;
     RF.sfx.sparkle(); say(`${pix('crew',13)} Barnacle screams about <b>${what}</b> and will not stop`, 'good'); });
 
   RF.every(163, () => {
     if(!S.gull || !RF.running) return;
-    const pool = ['kelp','clam','drift','samphire','prawn'];
-    const g = pool[(Math.random()*pool.length)|0];
+    const pool = ['kelp','clam','drift','samphire','prawn'], g = pool[(Math.random()*pool.length)|0];
     give(g, 1); persist(); paintHud(); if(panelOn) renderPanel();
     say(`${goodPipT(g)} Barnacle drops a ${GOODS[g].n.toLowerCase()} at your feet. no explanation.`, 'good'); });
 
   RF.every(1, () => { recalc(); paintHud(); });
 
   /* ==================================================================
-     THE FRAME — hoisted temporaries only; nothing here allocates.
+     THE FRAME — hoisted temporaries only; nothing in here allocates.
      ================================================================== */
-  let lastFestCol = null;
+  let lastFestCol = null, gullA = 0;
   const FIRE_WARM = {c:0xffb347, e:0xff6a1a}, FIRE_TIDE = {c:0x9ad8ff, e:0x39d7c4};
-  let gullA = 0;
   RF.on('frame', dt => {
     if(saveDue > 0){ saveDue -= dt; if(saveDue <= 0) persistNow(); }
     const t = RF.clock, fest = festOn();
@@ -1077,7 +1078,7 @@ RF.mod('06-content', function (RF) {
     if(noteT > 0){ noteT -= dt; if(noteT <= 0) noteEl.classList.remove('on'); }
     if(markerT > 0){ markerT -= dt;
       if(markerT <= 0) marker.visible = false;
-      else marker.rotation.y = t * 1.4, marker.position.y += Math.sin(t * 2.6) * (RM ? 0 : 0.004); }
+      else { marker.rotation.y = t * 1.4; marker.position.y += Math.sin(t * 2.6) * (RM ? 0 : 0.004); } }
 
     if(fest !== lastFestCol){ lastFestCol = fest;
       const C = fest ? FIRE_TIDE : FIRE_WARM;
@@ -1099,20 +1100,19 @@ RF.mod('06-content', function (RF) {
         e.position.set(p.x + Math.sin(t * 2.4 + k) * 0.06, p.y, p.z + Math.cos(t * 1.9 + k) * 0.06);
         e.scale.setScalar(0.075 * Math.max(0.12, Math.min(1, p.t / 1.1))); } }
 
-    for(let k = 0; k < lanternLamps.length; k++){ const L = lanternLamps[k];
-      L.lamp.material.emissiveIntensity = fest ? 0.55 + Math.sin(t * 2.6 + k * 1.3) * 0.22 : 0; }
+    for(let k = 0; k < lanternLamps.length; k++)
+      lanternLamps[k].lamp.material.emissiveIntensity = fest ? 0.55 + Math.sin(t * 2.6 + k * 1.3) * 0.22 : 0;
 
-    if(tankFish.length){ for(let k = 0; k < tankFish.length; k++){ const f = tankFish[k];
-        const a = t * f.sp + f.ph;
-        f.g.position.set(Math.cos(a) * 0.62, f.y + (RM ? 0 : Math.sin(a * 2.1) * 0.06), Math.sin(a) * f.rz);
-        f.g.rotation.y = -a - Math.PI/2; } }
+    for(let k = 0; k < tankFish.length; k++){ const f = tankFish[k], a = t * f.sp + f.ph;
+      f.g.position.set(Math.cos(a) * 0.62, f.y + (RM ? 0 : Math.sin(a * 2.1) * 0.06), Math.sin(a) * f.rz);
+      f.g.rotation.y = -a - Math.PI/2; }
 
     for(let k = 0; k < buoys.length; k++){ const B = buoys[k]; if(!B.g.visible) continue;
       B.g.position.y = RF.WATER_TOP - 0.1 + (RM ? 0 : Math.sin(t * 1.8 + k) * 0.06);
       B.g.rotation.z = RM ? 0 : Math.sin(t * 1.3 + k) * 0.09; }
 
     if(S.gull){
-      const want = RF.running;
+      const want = !!RF.running;
       if(gull.visible !== want) gull.visible = want;
       if(want){ gullA += dt * 0.85;
         gull.position.set(RF.pWorld.x + Math.cos(gullA) * 2.5,
@@ -1123,11 +1123,8 @@ RF.mod('06-content', function (RF) {
         gull.userData.wL.rotation.x = flap; gull.userData.wR.rotation.x = -flap;
         gull.userData.lamp.material.emissiveIntensity = fest ? 0.8 : 0; } } });
 
-  /* ==================================================================
-     BOOT
-     ================================================================== */
-  uiReady = true; recalc(); paintHud(); syncBench();
-  if(S.gull) gull.visible = false;                              // only once the game is actually running
+  /* ================================ BOOT ================================ */
+  uiReady = true; recalc(); paintHud();
 
   RF.on('start', () => {
     paintHud();

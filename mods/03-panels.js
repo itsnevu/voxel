@@ -109,6 +109,9 @@ RF.mod('03-panels', function (RF) {
   .p3-dexbar b{font-family:"Chakra Petch";color:var(--ink);font-size:11px;float:right;}
   .p3-big{font-family:"Chakra Petch";font-weight:700;font-size:20px;color:var(--ink);font-variant-numeric:tabular-nums;}
   .p3-note{font-size:10.5px;color:var(--faint);line-height:1.5;margin-top:6px;}
+  .p3-none{display:none;font-size:11.5px;color:var(--faint);text-align:center;padding:10px 12px;
+    border:1px dashed var(--glass-bd-soft);border-radius:11px;margin-bottom:7px;}
+  .p3-none b{color:var(--teal);font-weight:600;}
   .p3-sell{gap:6px;}
   .p3-sell .p3-chip{padding:7px 11px;font-size:11.5px;}
   .p3-sell .p3-chip.go{color:var(--gold);border-color:rgba(255,207,92,.5);}
@@ -137,7 +140,7 @@ RF.mod('03-panels', function (RF) {
   D.addEventListener('mouseover', e => {
     const t = e.target && e.target.closest ? e.target.closest('[data-p3tip]') : null;
     if (t === tipNode) return;
-    if (t) showTip(t); else hideTip();
+    if (t && P.tips) showTip(t); else hideTip();   // tips off: never leave a stale target behind
   }, true);
   D.addEventListener('mousedown', hideTip, true);
   addEventListener('scroll', hideTip, true);
@@ -170,7 +173,7 @@ RF.mod('03-panels', function (RF) {
   const isRecord = f => { const d = RF.state.dex[dexName(f)]; return !!(d && d.n > 1 && f.kg && f.kg >= d.best); };
   const hhm = s => { s = Math.max(0, Math.round(s)); const h = (s / 3600) | 0, m = ((s % 3600) / 60) | 0;
     return h ? h + 'h ' + m + 'm' : m ? m + 'm' : Math.max(1, s) + 's'; };
-  const etaTxt = min => !isFinite(min) || min <= 0 ? '—' : min < 1 ? 'under a minute' :
+  const etaTxt = min => !isFinite(min) || min <= 0 ? '…' : min < 1 ? 'under a minute' :
     min < 90 ? Math.round(min) + ' min' : (min / 60).toFixed(1) + ' hr';
 
   /* ---------------------------------------------------------------- rate meter.
@@ -186,9 +189,13 @@ RF.mod('03-panels', function (RF) {
   }
   function rebase() { SESS.base = snap(); SESS.prev = snap(); ORE_KEYS.forEach(k => { SESS.ore[k] = 0; }); }
   rebase();
+  let wasOnline = RF.online;
   RF.every(2, () => {
     if (RF.running) SESS.t += 2;
     const now = snap(), b = SESS.base, p = SESS.prev;
+    /* signing in hands us the server's whole history in one go — that is not a
+       session's worth of fishing, so start counting again from there */
+    if (RF.online !== wasOnline) { wasOnline = RF.online; rebase(); return; }
     if (now.caught < b.caught || now.earned < b.earned || now.mined < b.mined) { rebase(); return; }
     ORE_KEYS.forEach(k => { const d = now.ores[k] - p.ores[k]; if (d > 0) SESS.ore[k] += d; });
     SESS.prev = now;
@@ -229,8 +236,9 @@ RF.mod('03-panels', function (RF) {
     const root = RF.el('<div class="p3-tools"><div class="p3-haul"></div>' +
       '<div class="p3-row"><input class="p3-q" type="text" spellcheck="false" placeholder="search the bucket…">' +
       '<span class="p3-chips-rar"></span><span class="p3-sep"></span><span class="p3-chips-sort"></span></div>' +
-      (kind === 'market' ? '<div class="p3-row p3-sell"></div>' : '') + '</div>', null);
-    const haul = $('.p3-haul', root), q = $('.p3-q', root);
+      (kind === 'market' ? '<div class="p3-row p3-sell"></div>' : '') +
+      '<div class="p3-none">nothing in the bucket matches those filters · <b>ESC</b> clears them</div>' + '</div>', null);
+    const haul = $('.p3-haul', root), q = $('.p3-q', root), none = $('.p3-none', root);
     const rarBox = $('.p3-chips-rar', root), sortBox = $('.p3-chips-sort', root), sellBox = $('.p3-sell', root);
     /* the input must swallow its own keys or WASD would walk the hero around behind the panel */
     q.addEventListener('keydown', e => {
@@ -247,7 +255,7 @@ RF.mod('03-panels', function (RF) {
       h += `<button class="p3-chip sub" data-rar="${c[0]}" type="button" style="min-width:26px${col}">${c[1]}</button>`;
     });
     h += `<button class="p3-chip sub" data-tog="star" type="button" data-p3tip="${attr('<b>★ only</b><br>fish that survived a spin at the Eel. Every win doubles what the fishmonger pays, so these are the ones worth carrying.')}">★</button>`;
-    h += `<button class="p3-chip sub" data-tog="rec" type="button" data-p3tip="${attr('<b>records only</b><br>the heaviest of its species you have ever landed. The Fishdex keeps the number whether you sell it or not — but the fish itself is gone once you do.')}">REC</button>`;
+    h += `<button class="p3-chip sub" data-tog="rec" type="button" data-p3tip="${attr('<b>records only</b><br>the heaviest of its species you have ever landed. The Fishdex keeps the number whether you sell it or not · but the fish itself is gone once you do.')}">REC</button>`;
     rarBox.innerHTML = h;
     sortBox.innerHTML = SORTCHIPS.map(c =>
       `<button class="p3-chip sub" data-sort="${c[0]}" type="button">${c[1]}</button>`).join('');
@@ -264,7 +272,7 @@ RF.mod('03-panels', function (RF) {
       if (RF.sfx && RF.sfx.tab) RF.sfx.tab();
       savePref(); paintAll();
     });
-    return { root, haul, q, rarBox, sortBox, sellBox };
+    return { root, haul, q, none, rarBox, sortBox, sellBox };
   }
   const TOOLS = { market: null, inv: null };
 
@@ -300,7 +308,7 @@ RF.mod('03-panels', function (RF) {
     const col = isHot ? 'var(--gold)' : isCold ? 'var(--rose)' : 'var(--muted)';
     const word = isHot ? '▲ fish HOT ×1.6' : isCold ? '▼ fish SURPLUS ×0.75' : 'fish ×1 · HOT is ' + F.catLabel(m.hot);
     return `<span class="p3-pill p3-flip" style="color:${col};border-color:${col}55"
-      data-p3tip="${attr('Demand rotates every three minutes: one category pays ×1.6, one pays ×0.75. Your bucket does not rot — waiting for fish to go HOT is a real strategy.')}">${word} · flips ${mm}:${String(ss).padStart(2, '0')}</span>`;
+      data-p3tip="${attr('Demand rotates every three minutes: one category pays ×1.6, one pays ×0.75. Your bucket does not rot · waiting for fish to go HOT is a real strategy.')}">${word} · flips ${mm}:${String(ss).padStart(2, '0')}</span>`;
   }
 
   /* ------- the sell affordances ------------------------------------------- */
@@ -308,11 +316,14 @@ RF.mod('03-panels', function (RF) {
   function keepGuard(f) { return P.keep && (f.wins > 0 || isRecord(f)); }
   function sellSet(which) {
     const b = RF.state.bucket || [], out = [];
+    let kept = 0;
     for (let i = 0; i < b.length; i++) {
       const f = b[i];
-      if (keepGuard(f)) continue;
-      if (which === 'junk' ? JUNK(f) : passes(f)) out.push(f);
+      if (!(which === 'junk' ? JUNK(f) : passes(f))) continue;
+      if (keepGuard(f)) { kept++; continue; }
+      out.push(f);
     }
+    out.kept = kept;                    // so the button can say WHY it is empty
     return out;
   }
   function sellHTML() {
@@ -322,9 +333,10 @@ RF.mod('03-panels', function (RF) {
       const set = sellSet(which); let v = 0; set.forEach(f => { v += Math.round(f.val * pm); });
       return `<button class="p3-chip go" type="button" data-sell="${which}" ${set.length ? '' : 'disabled'}
         data-p3tip="${attr(which === 'junk'
-          ? 'Commons and uncommons only. The bucket cap is the real enemy — this clears it without touching anything you meant to keep.'
+          ? 'Commons and uncommons only. The bucket cap is the real enemy · this clears it without touching anything you meant to keep.'
           : 'Everything the filters above are currently showing. Sold one at a time through the fishmonger’s own buttons, so it works signed in too.')}"
-        >${label} ${set.length ? '(' + set.length + ') ◈ ' + fmt(v) : '· nothing'}</button>`;
+        >${label} ${set.length ? '(' + set.length + ') ◈ ' + fmt(v)
+          : set.kept ? '· all ' + set.kept + ' kept' : '· nothing'}</button>`;
     };
     return mk('junk', 'SELL JUNK') + mk('filtered', 'SELL FILTERED') +
       `<button class="p3-chip${P.keep ? ' on' : ''}" type="button" data-tog="keep"
@@ -385,7 +397,7 @@ RF.mod('03-panels', function (RF) {
     row.setAttribute('data-p3tip',
       `<b>${esc(dexName(f))}</b> · <span style="color:${RAR[f.rar]}">${esc(f.rar)}</span><br>` +
       `${f.kg || '?'} kg · base ◈${fmt(f.val)} → <u>◈${fmt(Math.round(f.val * pm))}</u> at today's prices<br>` +
-      (big ? `<i>★${f.wins} — survived ${f.wins} spin${f.wins > 1 ? 's' : ''}; the value already includes the ×${Math.pow(2, f.wins)}.</i><br>` : '') +
+      (big ? `<i>★${f.wins} · survived ${f.wins} spin${f.wins > 1 ? 's' : ''}; the value already includes the ×${Math.pow(2, f.wins)}.</i><br>` : '') +
       (rec ? `<i>your heaviest ${esc(dexName(f))}. Selling it keeps the Fishdex number, not the fish.</i><br>` : '') +
       `<i>swims off ${esc(worlds.join(' · ') || 'these waters')}</i>`);
     row.style.display = passes(f) ? '' : 'none';
@@ -402,6 +414,14 @@ RF.mod('03-panels', function (RF) {
       if (f) pack.push({ i, f, row });
     });
     reflow(list, pack);
+    showNone(TOOLS.market, pack);
+  }
+  /* A bucket with fish in it and nothing on screen is the one state a filter UI
+     owes you an explanation for. */
+  function showNone(T, pack) {
+    if (!T || !T.none) return;
+    const vis = pack.filter(p => p.row.style.display !== 'none').length;
+    T.none.style.display = (pack.length && !vis) ? 'block' : 'none';
   }
   /* Re-appending rows that are already in the right order would spam the
      MutationObserver forever, so only touch the DOM when the order really moved. */
@@ -413,12 +433,25 @@ RF.mod('03-panels', function (RF) {
       return;
     }
   }
+  /* The Market rows carry data-sellone, so their bucket index survives our
+     reordering. The bag cards carry nothing — once we have shuffled them, DOM
+     position is a lie. Stamp the index on a freshly rendered grid (they all lose
+     the attribute together, because renderInv replaces the whole innerHTML) and
+     read it back on every pass after that. */
   function paintBagFish() {
     const grid = $('#invFish .invgrid'); if (!grid) return;
     const pm = F.priceMult('fish'), b = RF.state.bucket || [];
-    const cards = $$('.invcard', grid), pack = [];
-    cards.forEach((c, i) => { const f = b[i]; decorateFishRow(c, f, i, pm); if (f) pack.push({ i, f, row: c }); });
+    const cards = $$('.invcard', grid);
+    const fresh = cards.some(c => !c.hasAttribute('data-p3i'));
+    if (fresh) cards.forEach((c, i) => c.setAttribute('data-p3i', i));
+    const pack = [];
+    cards.forEach(c => {
+      const i = +c.getAttribute('data-p3i'), f = b[i];
+      decorateFishRow(c, f, i, pm);
+      if (f) pack.push({ i, f, row: c });
+    });
     reflow(grid, pack);
+    showNone(TOOLS.inv, pack);
   }
 
   /* ---------------------------------------------------------------- craft planner.
@@ -472,9 +505,9 @@ RF.mod('03-panels', function (RF) {
         : `<span class="eta" style="color:${worstMin === Infinity ? 'var(--faint)' : 'var(--gold)'}">${worstMin === Infinity ? 'no rate yet' : '~' + etaTxt(worstMin)}</span>`;
       const shortTxt = short.length ? short.join(' + ') : (missCoin ? '◈ ' + fmt(missCoin) : 'nothing');
       h += `<div class="p3-pr" data-p3tip="${attr((r.kind === 'rod'
-          ? 'Rod luck bends the catch table toward the top — it does not make bites come sooner. Bait stacks on top of it.'
+          ? 'Rod luck bends the catch table toward the top · it does not make bites come sooner. Bait stacks on top of it.'
           : r.kind === 'pick' ? 'A better pick swings faster and pulls more ore per node. It does not change which ore is in the rock.'
-          : 'A better axe fells a tree in fewer swings. Wood is a 6-coin commodity — the axe pays for itself in time, not price.')
+          : 'A better axe fells a tree in fewer swings. Wood is a 6-coin commodity · the axe pays for itself in time, not price.')
         + '<br><i>road to Lv.' + MAXLVL + ' from here: ◈' + fmt(roadCost(r)) + ' in coins alone.</i>')}">
         <span class="nm">${pix(TOOL_ICO[r.kind], 14)} ${esc(r.next || r.kind)} <span style="color:var(--faint);font-size:10.5px">Lv.${r.lvl}→${r.lvl + 1}</span>
           <span class="p3-hint">${needH}<span class="p3-need ${missCoin ? 'no' : 'ok'}">◈ ${fmt(RF.state.coins)}/${fmt(r.cost)}</span>${ready ? '' : ' · short ' + esc(shortTxt)}</span></span>
@@ -576,12 +609,12 @@ RF.mod('03-panels', function (RF) {
 
   /* ---------------------------------------------------------------- stats page */
   const STATTIP = [
-    ['Fish caught', 'Every fish you have ever landed — the lazy line counts too.'],
+    ['Fish caught', 'Every fish you have ever landed · the lazy line counts too.'],
     ['Ores mined', 'Ore blocks broken. Selling in one lump pays a bulk bonus: +5% at 20, +10% at 50, +15% at 100.'],
     ['Coins earned', 'Gross, lifetime. Spending never takes it back down, which is why it is the leaderboard number.'],
     ['Roulette spins', 'W·L is wins and losses at the Eel. The eel eats the profits.'],
     ['Biggest win', 'The largest single payout you have taken off the wheel.'],
-    ['Pearls earned', 'Activity points. Never bought, never sold — the Pearl Kiosk is the only door they open.'],
+    ['Pearls earned', 'Activity points. Never bought, never sold · the Pearl Kiosk is the only door they open.'],
     ['Portfolio value', 'What your shares would fetch at the BID right now, spread and fee already taken off.'],
     ['Unrealized', 'Paper only. Nothing is real until you press Sell.'],
     ['Dividends', 'Paid hourly on shares you hold through the quarter, even while you are away.']
@@ -608,26 +641,26 @@ RF.mod('03-panels', function (RF) {
 
     statBlk.innerHTML =
       `<div class="p3-tiles">
-        ${tile('on the isle', hhm(sec), sec > 60 ? 'this session' : 'just arrived', 'Counts only the time the world was actually running — the title screen is free.')}
-        ${tile('coins / hr', sec > 25 ? '◈ ' + fmt(Math.round(perMin(earnS) * 60)) : '—', 'this session’s pace', 'Measured off your own earnings since you set sail, not a design target.')}
-        ${tile('fish / min', sec > 25 ? perMin(fishS).toFixed(1) : '—', fishS + ' landed', 'Includes anything the auto-rig brought in while you were elsewhere.')}
+        ${tile('on the isle', hhm(sec), sec > 60 ? 'this session' : 'just arrived', 'Counts only the time the world was actually running · the title screen is free.')}
+        ${tile('coins / hr', sec > 25 ? '◈ ' + fmt(Math.round(perMin(earnS) * 60)) : '…', 'this session’s pace', 'Measured off your own earnings since you set sail, not a design target.')}
+        ${tile('fish / min', sec > 25 ? perMin(fishS).toFixed(1) : '…', fishS + ' landed', 'Includes anything the auto-rig brought in while you were elsewhere.')}
         ${tile('bucket', fmt(bucketVal), (s.bucket || []).length + '/' + F.cap() + ' · ◈ at today’s prices', 'What the fishmonger would hand you if you walked in right now.')}
       </div>
       <div class="p3-cols"><span>counter</span><span>session</span><span>lifetime</span></div>
       ${cmp(pix('fish', 13) + ' fish landed', fmt(fishS), fmt(st.caught), 'Session is since you pressed Set sail; lifetime survives the browser.')}
       ${cmp(pix('pick', 13) + ' ore mined', fmt(mineS), fmt(st.mined), 'Ore blocks broken. Wood is counted separately below.')}
-      ${cmp(pix('wood', 13) + ' ore &amp; wood gathered', fmt(oreS), fmt((st.mined | 0) + (st.wood | 0)), 'Everything that landed in the pouch, wood included — the number the craft planner divides by.')}
+      ${cmp(pix('wood', 13) + ' ore &amp; wood gathered', fmt(oreS), fmt((st.mined | 0) + (st.wood | 0)), 'Everything that landed in the pouch, wood included · the number the craft planner divides by.')}
       ${cmp('◈ coins earned', fmt(earnS), fmt(st.earned), 'Gross earnings. This is the leaderboard number.')}
       ${cmp('◉ pearls earned', fmt(prlS), fmt(s.pearlsLife), 'Pearls come from activity only. No coin ever turns into one.')}
       <div class="p3-note" style="margin:9px 0 4px">
         heaviest ever: <b style="color:var(--ink)">${heavy ? esc(heavy.name) + ' · ' + heavy.kg + ' kg' : 'nothing yet'}</b>
         · best single spin: <b style="color:var(--gold)">◈ ${fmt(st.bestWin)}</b>
-        · the wheel owes you ${st.spins ? Math.round(st.winsCt / Math.max(1, st.spins) * 100) + '% of ' + fmt(st.spins) + ' spins' : 'nothing — you have never played'}
+        · ${st.spins ? 'the wheel has paid you ' + Math.round(st.winsCt / Math.max(1, st.spins) * 100) + '% of ' + fmt(st.spins) + ' spins' : 'the wheel has never been spun'}
       </div>
       <div class="p3-tiles">
         ${tile('fishdex', dexN + '/' + all.length, bar(dexN, all.length, 'var(--teal)'), 'Every species across every isle, night and storm species included.')}
         ${tile('achievements', achN + '/' + achT, bar(achN, achT, 'var(--gold)'), 'Each one pays coins once, the moment it trips.')}
-        ${tile('deeds', deedN + '/' + deedT, bar(deedN, deedT, 'var(--c-epic)'), 'The Ledger tab. No wallet, no chain, no value — a trophy wall with hash cosplay.')}
+        ${tile('deeds', deedN + '/' + deedT, bar(deedN, deedT, 'var(--c-epic)'), 'The Ledger tab. No wallet, no chain, no value · a trophy wall with hash cosplay.')}
         ${tile('tools', (s.rodLvl + s.pickLvl + s.axeLvl) + '/' + (MAXLVL * 3), bar(s.rodLvl + s.pickLvl + s.axeLvl, MAXLVL * 3, 'var(--c-rare)'), 'Rod + pick + axe levels together. The Market has the planner for what is next.')}
       </div>`;
 
@@ -651,23 +684,23 @@ RF.mod('03-panels', function (RF) {
       row.setAttribute('data-p3tip',
         `<b>${esc(ORE[k].name)}</b> · ◈${fmt(ORE[k].price)} a piece before demand<br>` +
         `bulk pays +5% at 20, +10% at 50, +15% at 100. ${nxt ? '<u>' + (nxt - n) + ' more</u> to the next tier.' : 'you are at the top tier.'}<br>` +
-        `<i>${m.hot === k ? 'HOT right now — sell it.' : m.cold === k ? 'SURPLUS right now — hold if you can.' : 'ordinary demand this rotation.'}</i>`);
+        `<i>${m.hot === k ? 'HOT right now · sell it.' : m.cold === k ? 'SURPLUS right now · hold if you can.' : 'ordinary demand this rotation.'}</i>`);
     });
     $$('#baitList .fishrow').forEach(row => {
       const b = $('[data-baitbuy]', row); if (!b) return;
       const id = b.getAttribute('data-baitbuy'), bt = (RF.BAITS || {})[id]; if (!bt) return;
       row.setAttribute('data-p3tip',
-        `<b>${esc(bt.name)}</b><br>luck <u>+${bt.luck.toFixed(1)}</u> on top of your rod — it thins the commons out and swells the top of the table.<br>` +
+        `<b>${esc(bt.name)}</b><br>luck <u>+${bt.luck.toFixed(1)}</u> on top of your rod · it thins the commons out and swells the top of the table.<br>` +
         (bt.min ? `floor: nothing under <b>${esc(bt.min)}</b> can even be drawn.<br>` : 'no rarity floor.<br>') +
-        `<i>one spent per fish LANDED — a snapped line costs you nothing.</i>`);
+        `<i>one spent per fish LANDED · a snapped line costs you nothing.</i>`);
     });
     $$('#stockList .fishrow').forEach(row => {
       const b = $('[data-buystk]', row); if (!b) return;
       const k = b.getAttribute('data-buystk'), s = (RF.STOCKS || {})[k]; if (!s) return;
       const e = F.mktEpochNow(), ask = F.stockAsk(k, e), bid = F.stockBid(k, e);
       row.setAttribute('data-p3tip',
-        `<b>${esc(k)}</b> — ${esc(s.name)}<br>you buy at <u>◈${fmt(ask)}</u> and sell at <u>◈${fmt(bid)}</u>: a ${Math.round((1 - bid / ask) * 100)}% round trip before the price moves at all.<br>` +
-        (s.yield ? `pays <b>${(s.yield * 100).toFixed(1)}%/hr</b> in dividends on quarters you hold through — and three quarters in four actually pay.<br>` : 'pays no dividend. Pure price.<br>') +
+        `<b>${esc(k)}</b> · ${esc(s.name)}<br>you buy at <u>◈${fmt(ask)}</u> and sell at <u>◈${fmt(bid)}</u>: a ${Math.round((1 - bid / ask) * 100)}% round trip before the price moves at all.<br>` +
+        (s.yield ? `pays <b>${(s.yield * 100).toFixed(1)}%/hr</b> in dividends on quarters you hold through, and three in four quarters actually pay.<br>` : 'pays no dividend. Pure price.<br>') +
         `<i>the price is a function of the wall clock. Nobody is on the other side of the trade.</i>`);
     });
     $$('#kioskList .fishrow').forEach(row => {
@@ -684,7 +717,7 @@ RF.mod('03-panels', function (RF) {
     });
     $$('#bountyList .fishrow').forEach(row => {
       row.setAttribute('data-p3tip',
-        'Three objectives, rerolled every market rotation. Progress counts from the moment the bounty was issued — a lifetime counter you already passed does not pay.');
+        'Three objectives, rerolled every market rotation. Progress counts from the moment the bounty was issued · a lifetime counter you already passed does not pay.');
     });
     const bn = $('#mktBanner');
     if (bn) bn.setAttribute('data-p3tip',
@@ -797,7 +830,7 @@ RF.mod('03-panels', function (RF) {
           $$('.p3-chip', TOOLS.market.sellBox).forEach(b => { if (selling) b.disabled = true; });
         }
         paintMarketFish();
-        if (planBlk) planBlk.innerHTML = planHTML();
+        if (planBlk && !selling) planBlk.innerHTML = planHTML();
         decorateMarket();
         railActive();
       }

@@ -24,15 +24,17 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
      1. LOOK — one style block, keyed so a reload replaces it
      ====================================================================== */
   RF.css(`
+  /* below coins/pearls/bait/derby on the right rail. Newest sits on top, so a
+     storm pushes the OLD cards off the bottom of the screen, never the new one. */
   #rf-notify-stack{position:fixed;top:186px;right:12px;z-index:35;width:min(330px,44vw);
     display:flex;flex-direction:column;gap:8px;pointer-events:none;
-    font-size:calc(12px*var(--rf-ui-scale,1));max-height:calc(100vh - 208px);}
+    font-size:calc(12px*var(--rf-ui-scale,1));}
   .rf-notify-card{pointer-events:auto;position:relative;overflow:hidden;--rf-c:var(--teal);
     background:var(--glass-sheen),var(--glass-strong);
     backdrop-filter:blur(18px) saturate(1.6);-webkit-backdrop-filter:blur(18px) saturate(1.6);
     border:1px solid var(--glass-bd);border-left:2px solid var(--rf-c);border-radius:14px;
     padding:9px 11px 8px;box-shadow:var(--glass-hi),0 8px 28px rgba(2,8,10,.35);
-    animation:rf-n-in .3s cubic-bezier(.16,1,.3,1);}
+    animation:rf-notify-in .3s cubic-bezier(.16,1,.3,1);}
   .rf-notify-card.lv-info{--rf-c:var(--c-rare);}
   .rf-notify-card.lv-success{--rf-c:var(--c-uncommon);}
   .rf-notify-card.lv-warn{--rf-c:var(--gold);}
@@ -40,38 +42,40 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
   .rf-notify-card.lv-fatal{border-color:rgba(255,93,122,.5);
     box-shadow:var(--glass-hi),0 0 24px rgba(255,93,122,.24),0 8px 28px rgba(2,8,10,.4);}
   .rf-notify-card.go{opacity:0;transform:translateX(20px);transition:opacity .2s,transform .2s;}
-  @keyframes rf-n-in{from{opacity:0;transform:translateX(26px) scale(.97);}to{opacity:1;transform:none;}}
-  .rf-n-top{display:flex;align-items:baseline;gap:7px;}
-  .rf-n-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:var(--rf-c);
+  @keyframes rf-notify-in{from{opacity:0;transform:translateX(26px) scale(.97);}to{opacity:1;transform:none;}}
+  .rf-notify-top{display:flex;align-items:baseline;gap:7px;}
+  .rf-notify-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:var(--rf-c);
     box-shadow:0 0 8px var(--rf-c);align-self:center;}
-  .rf-n-ico{flex:0 0 auto;display:flex;align-items:center;align-self:center;}
-  .rf-n-title{flex:1;font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:1.09em;
+  .rf-notify-ico{flex:0 0 auto;display:flex;align-items:center;align-self:center;}
+  .rf-notify-title{flex:1;font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:1.09em;
     color:var(--ink);line-height:1.25;overflow:hidden;text-overflow:ellipsis;}
-  .rf-n-mult{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:.86em;color:var(--rf-c);
+  .rf-notify-mult{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:.86em;color:var(--rf-c);
     font-variant-numeric:tabular-nums;display:none;}
-  .rf-n-mult.on{display:inline;}
-  .rf-n-time{font-size:.78em;color:var(--faint);font-variant-numeric:tabular-nums;letter-spacing:.04em;}
-  .rf-n-x{background:none;border:none;color:var(--faint);cursor:pointer;font:inherit;font-size:.92em;
+  .rf-notify-mult.on{display:inline;}
+  .rf-notify-time{font-size:.78em;color:var(--faint);font-variant-numeric:tabular-nums;letter-spacing:.04em;}
+  .rf-notify-x{background:none;border:none;color:var(--faint);cursor:pointer;font:inherit;font-size:.92em;
     padding:0 1px;line-height:1;transition:color .12s;}
-  .rf-n-x:hover{color:var(--rose);}
-  .rf-n-body{font-size:.94em;line-height:1.5;color:var(--muted);margin:3px 0 0;word-break:break-word;}
-  .rf-n-body:empty{display:none;}
-  .rf-n-where{font-size:.76em;color:var(--faint);letter-spacing:.06em;margin-top:2px;}
-  .rf-n-where:empty{display:none;}
-  .rf-n-acts{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px;}
-  .rf-n-b{font-family:"IBM Plex Mono",monospace;font-size:.8em;letter-spacing:.08em;cursor:pointer;
+  .rf-notify-x:hover{color:var(--rose);}
+  /* three lines is the most a card may ever be: the rest lives in Details */
+  .rf-notify-body{font-size:.94em;line-height:1.45;color:var(--muted);margin:3px 0 0;word-break:break-word;
+    display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+  .rf-notify-body:empty{display:none;}
+  .rf-notify-where{font-size:.76em;color:var(--faint);letter-spacing:.06em;margin-top:2px;}
+  .rf-notify-where:empty{display:none;}
+  .rf-notify-acts{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px;}
+  .rf-notify-b{font-family:"IBM Plex Mono",monospace;font-size:.8em;letter-spacing:.08em;cursor:pointer;
     color:var(--muted);background:var(--glass-row);border:1px solid var(--glass-bd-soft);
     border-radius:7px;padding:4px 9px;transition:color .12s,border-color .12s;}
-  .rf-n-b:hover{color:var(--ink);border-color:var(--glass-bd);}
-  .rf-n-b.key{color:var(--rf-c);border-color:var(--rf-c);}
-  .rf-n-pre{display:none;margin-top:7px;padding:7px 8px;max-height:132px;overflow:auto;
+  .rf-notify-b:hover{color:var(--ink);border-color:var(--glass-bd);}
+  .rf-notify-b.key{color:var(--rf-c);border-color:var(--rf-c);}
+  .rf-notify-pre{display:none;margin-top:7px;padding:7px 8px;max-height:132px;overflow:auto;
     background:rgba(2,8,10,.42);border:1px solid var(--glass-bd-soft);border-radius:8px;
     font-family:"IBM Plex Mono",monospace;font-size:.76em;line-height:1.5;color:var(--lab);
     white-space:pre-wrap;word-break:break-word;}
-  .rf-notify-card.open .rf-n-pre{display:block;}
-  .rf-n-bar{position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--rf-c);opacity:.5;
+  .rf-notify-card.open .rf-notify-pre{display:block;}
+  .rf-notify-bar{position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--rf-c);opacity:.5;
     transform-origin:left center;transform:scaleX(1);}
-  #rf-notify-more{pointer-events:auto;align-self:flex-end;cursor:pointer;font-family:"Chakra Petch",sans-serif;
+  #rf-notify-more{pointer-events:auto;align-self:flex-end;order:-1;cursor:pointer;font-family:"Chakra Petch",sans-serif;
     font-weight:700;font-size:.85em;letter-spacing:.1em;color:var(--gold);background:var(--glass-hud);
     backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
     border:1px solid rgba(255,207,92,.45);border-radius:9px;padding:5px 11px;display:none;
@@ -87,9 +91,9 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
   #rf-notify-pill.on{display:flex;}
   #rf-notify-pill:hover{border-color:var(--rf-c,var(--teal));}
   #rf-notify-pill .pd{width:8px;height:8px;border-radius:50%;background:var(--rf-c,var(--teal));
-    box-shadow:0 0 9px var(--rf-c,var(--teal));animation:rf-n-pulse 2.2s ease-in-out infinite;}
+    box-shadow:0 0 9px var(--rf-c,var(--teal));animation:rf-notify-pulse 2.2s ease-in-out infinite;}
   #rf-notify-pill .pk{font-family:"IBM Plex Mono",monospace;font-weight:500;font-size:9px;color:var(--faint);letter-spacing:.2em;}
-  @keyframes rf-n-pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+  @keyframes rf-notify-pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
 
   #rf-notify-scrim{position:fixed;inset:0;z-index:25;display:none;background:rgba(3,10,12,.4);
     backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);}
@@ -101,83 +105,84 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
     -webkit-backdrop-filter:blur(18px) saturate(1.6);border-left:1px solid var(--glass-bd);
     box-shadow:-18px 0 48px rgba(2,8,10,.5);}
   #rf-notify-drawer.on{transform:none;}
-  .rf-nd-head{display:flex;align-items:center;gap:9px;padding:14px 15px 10px;}
-  .rf-nd-head h3{flex:1;font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:1.45em;color:var(--ink);
+  .rf-notify-dhead{display:flex;align-items:center;gap:9px;padding:14px 15px 10px;}
+  .rf-notify-dhead h3{flex:1;font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:1.45em;color:var(--ink);
     display:flex;align-items:center;gap:8px;}
-  .rf-nd-head h3 small{font-family:"IBM Plex Mono",monospace;font-weight:500;font-size:.5em;
+  .rf-notify-dhead h3 small{font-family:"IBM Plex Mono",monospace;font-weight:500;font-size:.5em;
     letter-spacing:.26em;color:var(--faint);}
-  .rf-nd-counts{display:flex;flex-wrap:wrap;gap:5px;padding:0 15px 9px;}
-  .rf-nc{font-size:.76em;letter-spacing:.1em;color:var(--muted);background:var(--glass-row);
+  .rf-notify-dcounts{display:flex;flex-wrap:wrap;gap:5px;padding:0 15px 9px;}
+  .rf-notify-chip{font-size:.76em;letter-spacing:.1em;color:var(--muted);background:var(--glass-row);
     border:1px solid var(--glass-bd-soft);border-radius:7px;padding:3px 8px;cursor:pointer;
     font-variant-numeric:tabular-nums;transition:color .12s,border-color .12s;}
-  .rf-nc:hover{color:var(--ink);}
-  .rf-nc.sel{color:var(--ink);border-color:var(--teal);box-shadow:inset 0 0 0 1px rgba(57,215,196,.28);}
-  .rf-nc b{font-family:"Chakra Petch",sans-serif;font-weight:700;color:var(--cc,var(--ink));}
-  .rf-nd-tools{padding:0 15px 10px;}
+  .rf-notify-chip:hover{color:var(--ink);}
+  .rf-notify-chip.sel{color:var(--ink);border-color:var(--teal);box-shadow:inset 0 0 0 1px rgba(57,215,196,.28);}
+  .rf-notify-chip b{font-family:"Chakra Petch",sans-serif;font-weight:700;color:var(--cc,var(--ink));}
+  .rf-notify-dtools{padding:0 15px 10px;}
   #rf-notify-search{width:100%;font-family:"IBM Plex Mono",monospace;font-size:1em;color:var(--ink);
     background:var(--glass-row);border:1px solid var(--glass-bd-soft);border-radius:9px;
     padding:7px 10px;outline:none;}
   #rf-notify-search:focus{border-color:rgba(57,215,196,.6);}
-  .rf-nd-list{flex:1;overflow-y:auto;padding:0 15px 12px;}
-  .rf-nd-day{font-size:.74em;letter-spacing:.24em;text-transform:uppercase;color:var(--faint);
-    margin:12px 0 6px;position:sticky;top:0;background:linear-gradient(180deg,rgba(10,20,26,.92),rgba(10,20,26,.6));
+  .rf-notify-dlist{flex:1;overflow-y:auto;padding:0 15px 12px;}
+  .rf-notify-dday{font-size:.74em;letter-spacing:.24em;text-transform:uppercase;color:var(--faint);
+    margin:12px 0 6px;position:sticky;top:0;background:var(--glass-hud);
     padding:4px 0;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);}
-  .rf-nd-row{display:flex;align-items:flex-start;gap:8px;background:var(--glass-row);
+  .rf-notify-drow{display:flex;align-items:flex-start;gap:8px;background:var(--glass-row);
     border:1px solid var(--glass-bd-soft);border-left:2px solid var(--rf-c,var(--teal));border-radius:10px;
     padding:7px 10px;margin-bottom:5px;cursor:pointer;transition:border-color .12s,background .12s;}
-  .rf-nd-row:hover{background:rgba(255,255,255,.08);}
-  .rf-nd-row.lv-info{--rf-c:var(--c-rare);}.rf-nd-row.lv-success{--rf-c:var(--c-uncommon);}
-  .rf-nd-row.lv-warn{--rf-c:var(--gold);}.rf-nd-row.lv-error,.rf-nd-row.lv-fatal{--rf-c:var(--rose);}
-  .rf-nd-row .rt{font-size:.74em;color:var(--faint);font-variant-numeric:tabular-nums;
+  .rf-notify-drow:hover{background:rgba(255,255,255,.08);}
+  .rf-notify-drow.lv-info{--rf-c:var(--c-rare);}.rf-notify-drow.lv-success{--rf-c:var(--c-uncommon);}
+  .rf-notify-drow.lv-warn{--rf-c:var(--gold);}.rf-notify-drow.lv-error,.rf-notify-drow.lv-fatal{--rf-c:var(--rose);}
+  .rf-notify-drow .rt{font-size:.74em;color:var(--faint);font-variant-numeric:tabular-nums;
     letter-spacing:.02em;flex:0 0 auto;padding-top:2px;}
-  .rf-nd-row .rm{flex:1;min-width:0;}
-  .rf-nd-row .rh{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:1em;color:var(--ink);
+  .rf-notify-drow .rm{flex:1;min-width:0;display:block;}
+  .rf-notify-drow .rh{display:block;font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:1em;color:var(--ink);
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .rf-nd-row.open .rh{white-space:normal;}
-  .rf-nd-row .rb{font-size:.86em;color:var(--muted);line-height:1.45;overflow:hidden;
+  .rf-notify-drow.open .rh{white-space:normal;}
+  .rf-notify-drow .rb{display:block;font-size:.86em;color:var(--muted);line-height:1.45;overflow:hidden;
     text-overflow:ellipsis;white-space:nowrap;}
-  .rf-nd-row.open .rb{white-space:normal;word-break:break-word;}
-  .rf-nd-row .rx{display:none;margin-top:5px;padding:6px 7px;background:rgba(2,8,10,.42);
+  .rf-notify-drow.open .rb{white-space:normal;word-break:break-word;}
+  .rf-notify-drow .rx{display:none;margin-top:5px;padding:6px 7px;background:rgba(2,8,10,.42);
     border-radius:7px;font-size:.76em;line-height:1.5;color:var(--lab);white-space:pre-wrap;
     word-break:break-word;max-height:200px;overflow:auto;}
-  .rf-nd-row.open .rx{display:block;}
-  .rf-nd-row .rn{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:.8em;color:var(--rf-c);
+  .rf-notify-drow.open .rx{display:block;}
+  .rf-notify-drow .rn{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:.8em;color:var(--rf-c);
     flex:0 0 auto;font-variant-numeric:tabular-nums;}
-  .rf-nd-empty{color:var(--faint);font-size:.95em;text-align:center;padding:26px 10px;line-height:1.7;}
-  .rf-nd-foot{display:flex;gap:7px;padding:10px 15px 14px;border-top:1px solid var(--glass-bd-soft);}
-  .rf-nd-foot .rf-n-b{flex:1;text-align:center;padding:8px 6px;}
+  .rf-notify-dempty{color:var(--faint);font-size:.95em;text-align:center;padding:26px 10px;line-height:1.7;}
+  .rf-notify-dfoot{display:flex;gap:7px;padding:10px 15px 14px;border-top:1px solid var(--glass-bd-soft);}
+  .rf-notify-dfoot .rf-notify-b{flex:1;text-align:center;padding:8px 6px;}
 
   #rf-notify-modal{position:fixed;inset:0;z-index:36;display:none;align-items:center;justify-content:center;
     background:radial-gradient(130% 100% at 50% -10%,rgba(14,26,32,.42),rgba(3,8,10,.68));
     backdrop-filter:blur(7px) saturate(1.2);-webkit-backdrop-filter:blur(7px) saturate(1.2);
     font-size:calc(13px*var(--rf-ui-scale,1));}
   #rf-notify-modal.on{display:flex;}
-  .rf-nm-box{width:min(420px,92vw);background:var(--glass-sheen),var(--glass-strong);
+  .rf-notify-mbox{width:min(420px,92vw);background:var(--glass-sheen),var(--glass-strong);
     backdrop-filter:blur(18px) saturate(1.6);-webkit-backdrop-filter:blur(18px) saturate(1.6);
     border:1px solid var(--glass-bd);border-radius:18px;padding:20px 22px 17px;
-    box-shadow:var(--glass-hi),0 30px 80px rgba(0,0,0,.5);animation:rf-n-pop .26s cubic-bezier(.16,1,.3,1);}
-  @keyframes rf-n-pop{from{opacity:0;transform:translateY(14px) scale(.97);}to{opacity:1;transform:none;}}
-  .rf-nm-t{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:1.5em;color:var(--ink);line-height:1.2;}
-  .rf-nm-b{font-size:1em;line-height:1.6;color:var(--muted);margin-top:7px;word-break:break-word;}
-  .rf-nm-b:empty{display:none;}
-  .rf-nm-r{display:flex;gap:9px;justify-content:flex-end;margin-top:17px;}
-  .rf-nm-r button{font-family:"Chakra Petch",sans-serif;font-weight:600;font-size:1em;letter-spacing:.04em;
+    box-shadow:var(--glass-hi),0 30px 80px rgba(0,0,0,.5);animation:rf-notify-pop .26s cubic-bezier(.16,1,.3,1);}
+  @keyframes rf-notify-pop{from{opacity:0;transform:translateY(14px) scale(.97);}to{opacity:1;transform:none;}}
+  .rf-notify-mt{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:1.5em;color:var(--ink);line-height:1.2;}
+  .rf-notify-mb{font-size:1em;line-height:1.6;color:var(--muted);margin-top:7px;word-break:break-word;}
+  .rf-notify-mb:empty{display:none;}
+  .rf-notify-mr{display:flex;gap:9px;justify-content:flex-end;margin-top:17px;}
+  .rf-notify-mr button{font-family:"Chakra Petch",sans-serif;font-weight:600;font-size:1em;letter-spacing:.04em;
     cursor:pointer;border-radius:10px;padding:9px 17px;border:1px solid var(--glass-bd-soft);
     background:var(--glass-row);color:var(--ink);
     box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 2px 6px rgba(2,6,7,.3);transition:border-color .12s,box-shadow .12s;}
-  .rf-nm-r button:hover{border-color:rgba(57,215,196,.6);box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 0 12px rgba(57,215,196,.2);}
-  .rf-nm-r .ok{border-color:var(--teal);color:var(--teal);}
-  .rf-nm-r .ok.danger{border-color:var(--rose);color:var(--rose);}
-  .rf-nm-r .ok.danger:hover{box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 0 12px rgba(255,93,122,.28);}
+  .rf-notify-mr button:hover{border-color:rgba(57,215,196,.6);box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 0 12px rgba(57,215,196,.2);}
+  .rf-notify-mr .ok{border-color:var(--teal);color:var(--teal);}
+  .rf-notify-mr .ok.danger{border-color:var(--rose);color:var(--rose);}
+  .rf-notify-mr .ok.danger:hover{box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 0 12px rgba(255,93,122,.28);}
 
+  /* the drawer says everything the stack does, and says it better — stand aside */
+  body.rf-notify-open #rf-notify-stack{display:none;}
   /* photo mode is for screenshots — only a real failure is allowed to survive it */
   body.photo #rf-notify-pill,body.capcam #rf-notify-pill{display:none!important;}
   body.photo #rf-notify-more{display:none!important;}
   body.photo #rf-notify-stack .rf-notify-card:not(.lv-error):not(.lv-fatal){display:none!important;}
-  body.rf-reduced .rf-notify-card,body.rf-reduced .rf-nm-box{animation:none;}
+  body.rf-reduced .rf-notify-card,body.rf-reduced .rf-notify-mbox{animation:none;}
   body.rf-reduced #rf-notify-drawer{transition:none;}
   body.rf-reduced #rf-notify-pill .pd{animation:none;}
-  @media (max-height:660px){#rf-notify-stack{top:150px;max-height:calc(100vh - 172px);}}
   `, 'rf-notify-css');
 
   /* ======================================================================
@@ -195,24 +200,25 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
   const scrim = RF.el('<div id="rf-notify-scrim"></div>');
   const drawer = RF.el(
     '<div id="rf-notify-drawer" aria-hidden="true">' +
-      '<div class="rf-nd-head"><h3>' + pix('storm', 17) + 'Notices <small>N</small></h3>' +
-        '<button class="rf-n-b rf-nd-close" type="button">CLOSE</button></div>' +
-      '<div class="rf-nd-counts"></div>' +
-      '<div class="rf-nd-tools"><input id="rf-notify-search" type="text" placeholder="search notices…" maxlength="60" spellcheck="false"></div>' +
-      '<div class="rf-nd-list"></div>' +
-      '<div class="rf-nd-foot">' +
-        '<button class="rf-n-b rf-nd-diag" type="button">COPY DIAGNOSTICS</button>' +
-        '<button class="rf-n-b rf-nd-clear" type="button">CLEAR</button></div>' +
+      '<div class="rf-notify-dhead"><h3>' + pix('storm', 17) + 'Notices <small>N</small></h3>' +
+        '<button class="rf-notify-b rf-notify-dclose" type="button">CLOSE</button></div>' +
+      '<div class="rf-notify-dcounts"></div>' +
+      '<div class="rf-notify-dtools"><input id="rf-notify-search" type="text" placeholder="search notices…" maxlength="60" spellcheck="false"></div>' +
+      '<div class="rf-notify-dlist"></div>' +
+      '<div class="rf-notify-dfoot">' +
+        '<button class="rf-notify-b rf-notify-ddiag" type="button">COPY DIAGNOSTICS</button>' +
+        '<button class="rf-notify-b rf-notify-dclear" type="button">CLEAR</button></div>' +
     '</div>');
-  const modal = RF.el('<div id="rf-notify-modal" aria-hidden="true"><div class="rf-nm-box" role="dialog" aria-modal="true">' +
-    '<div class="rf-nm-t"></div><div class="rf-nm-b"></div>' +
-    '<div class="rf-nm-r"><button type="button" class="cancel"></button><button type="button" class="ok"></button></div>' +
+  const modal = RF.el('<div id="rf-notify-modal" aria-hidden="true"><div class="rf-notify-mbox" role="dialog" aria-modal="true">' +
+    '<div class="rf-notify-mt"></div><div class="rf-notify-mb"></div>' +
+    '<div class="rf-notify-mr"><button type="button" class="cancel"></button><button type="button" class="ok"></button></div>' +
     '</div></div>');
 
-  const dCounts = drawer.querySelector('.rf-nd-counts'), dList = drawer.querySelector('.rf-nd-list');
+  if (!stack || !moreChip || !pill || !drawer || !modal) return;   // nothing to hang off
+  const dCounts = drawer.querySelector('.rf-notify-dcounts'), dList = drawer.querySelector('.rf-notify-dlist');
   const searchEl = drawer.querySelector('#rf-notify-search');
   const pillN = pill.querySelector('.pn');
-  const mTitle = modal.querySelector('.rf-nm-t'), mBody = modal.querySelector('.rf-nm-b');
+  const mTitle = modal.querySelector('.rf-notify-mt'), mBody = modal.querySelector('.rf-notify-mb');
   const mOk = modal.querySelector('.ok'), mCancel = modal.querySelector('.cancel');
 
   /* ======================================================================
@@ -223,8 +229,10 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
   const queue = [];                     // waiting for a slot
   const byTag = Object.create(null);    // tag -> card, so a card can be replaced
   const pool = [];                      // recycled card elements
+  const COL = { info: 'var(--c-rare)', success: 'var(--c-uncommon)', warn: 'var(--gold)',
+    error: 'var(--rose)', fatal: 'var(--rose)' };
   let seq = 0, unread = 0, unreadTop = 'info', drawerOpen = false, filter = 'all', lastSfx = 0;
-  let recDepth = 0, softDepth = 0;      // funnel re-entry guards
+  let recDepth = 0, softDepth = 0, replaying = false;   // funnel re-entry guards
   const prefs = RF.store.get('00-notify', null) || {};
   if (prefs.filter && (prefs.filter === 'all' || RANK[prefs.filter] !== undefined)) filter = prefs.filter;
 
@@ -251,7 +259,7 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
      4. SOUND — one voice per level, never more than one per SFX_GAP
      ====================================================================== */
   function blip(level) {
-    if (RF.muted || RANK[level] === undefined || level === 'info') return;
+    if (replaying || RF.muted || RANK[level] === undefined || level === 'info') return;
     const now = Date.now(); if (now - lastSfx < SFX_GAP) return; lastSfx = now;
     const f = RF.fn; if (!f || !f.beep) return;
     try {
@@ -268,23 +276,23 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
   function buildCard() {
     const el = document.createElement('div');
     el.className = 'rf-notify-card';
-    el.innerHTML = '<div class="rf-n-top"><span class="rf-n-dot"></span><span class="rf-n-ico"></span>' +
-      '<span class="rf-n-title"></span><span class="rf-n-mult"></span><span class="rf-n-time"></span>' +
-      '<button class="rf-n-x" type="button" title="Dismiss" aria-label="Dismiss">✕</button></div>' +
-      '<div class="rf-n-body"></div><div class="rf-n-where"></div>' +
-      '<div class="rf-n-acts"></div><pre class="rf-n-pre"></pre><div class="rf-n-bar"></div>';
-    el._n = { dot: el.querySelector('.rf-n-dot'), ico: el.querySelector('.rf-n-ico'),
-      title: el.querySelector('.rf-n-title'), mult: el.querySelector('.rf-n-mult'),
-      time: el.querySelector('.rf-n-time'), body: el.querySelector('.rf-n-body'),
-      where: el.querySelector('.rf-n-where'), acts: el.querySelector('.rf-n-acts'),
-      pre: el.querySelector('.rf-n-pre'), bar: el.querySelector('.rf-n-bar'), x: el.querySelector('.rf-n-x') };
+    el.innerHTML = '<div class="rf-notify-top"><span class="rf-notify-dot"></span><span class="rf-notify-ico"></span>' +
+      '<span class="rf-notify-title"></span><span class="rf-notify-mult"></span><span class="rf-notify-time"></span>' +
+      '<button class="rf-notify-x" type="button" title="Dismiss" aria-label="Dismiss">✕</button></div>' +
+      '<div class="rf-notify-body"></div><div class="rf-notify-where"></div>' +
+      '<div class="rf-notify-acts"></div><pre class="rf-notify-pre"></pre><div class="rf-notify-bar"></div>';
+    el._n = { dot: el.querySelector('.rf-notify-dot'), ico: el.querySelector('.rf-notify-ico'),
+      title: el.querySelector('.rf-notify-title'), mult: el.querySelector('.rf-notify-mult'),
+      time: el.querySelector('.rf-notify-time'), body: el.querySelector('.rf-notify-body'),
+      where: el.querySelector('.rf-notify-where'), acts: el.querySelector('.rf-notify-acts'),
+      pre: el.querySelector('.rf-notify-pre'), bar: el.querySelector('.rf-notify-bar'), x: el.querySelector('.rf-notify-x') };
     return el;
   }
   const takeCard = () => pool.pop() || buildCard();
   function freeCard(el) {
     el.className = 'rf-notify-card'; el.style.display = '';
     el._n.acts.innerHTML = ''; el._n.pre.textContent = ''; el._n.ico.innerHTML = '';
-    el._n.mult.className = 'rf-n-mult'; el._n.bar.style.transform = 'scaleX(1)';
+    el._n.mult.className = 'rf-notify-mult'; el._n.bar.style.transform = 'scaleX(1)';
     el.onmouseenter = el.onmouseleave = null; el._n.x.onclick = null;
     if (pool.length < 6) pool.push(el);
   }
@@ -312,17 +320,18 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
     n.body.textContent = c.body;
     n.where.textContent = c.where;
     n.mult.textContent = '×' + c.count;
-    n.mult.className = 'rf-n-mult' + (c.count > 1 ? ' on' : '');
+    n.mult.className = 'rf-notify-mult' + (c.count > 1 ? ' on' : '');
     n.time.textContent = ago(c.t);
     n.ico.innerHTML = c.icon ? pix(c.icon, 15) : '';
     n.pre.textContent = detailText(c);
+    n.bar.style.display = c.ttl ? '' : 'none';   // a sticky card has nothing to count down
     n.acts.innerHTML = '';
     const btn = (label, key, fn) => { const b = document.createElement('button');
-      b.type = 'button'; b.className = 'rf-n-b' + (key ? ' key' : ''); b.textContent = label;
+      b.type = 'button'; b.className = 'rf-notify-b' + (key ? ' key' : ''); b.textContent = label;
       b.onclick = ev => { ev.stopPropagation(); try { fn(); } catch (e) { soft('notify:action', e); } };
       n.acts.appendChild(b); return b; };
     for (const a of c.actions) btn(a.label, a.key, () => { a.fn(c.handle); });
-    if (c.retry) c.retryBtn = btn('Retry', true, () => doRetry(c));
+    if (c.retry) btn('Retry', true, () => doRetry(c));
     btn('Copy', false, () => copyCard(c));
     if (n.pre.textContent) btn(c.open ? 'Hide' : 'Details', false, () => { c.open = !c.open; paint(c); });
   }
@@ -341,18 +350,24 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
     c.el.onmouseenter = () => { c.hover = true; };
     c.el.onmouseleave = () => { c.hover = false; };
     paint(c);
-    stack.insertBefore(c.el, moreChip);
+    stack.insertBefore(c.el, moreChip.nextSibling);   // the chip keeps the top slot
     live.push(c);
-    if (c.tag) byTag[c.tag] = c;
     trimStack();
   }
 
+  /* Four cards need roughly 460px of rail; a 640px-tall window has 454 below the
+     HUD, so it shows three. Anything that does not fit waits behind the chip. */
+  const capNow = () => innerHeight < 700 ? 3 : MAXCARDS;
+
   /* Never let a storm push the game off screen: extra cards wait behind the chip. */
   function trimStack() {
-    while (live.length > MAXCARDS) { const old = live.find(x => RANK[x.level] < 3) || live[0]; close(old, true); }
+    let guard = MAXCARDS + 2;
+    while (live.length > capNow() && guard-- > 0) { close(live.find(x => RANK[x.level] < 3) || live[0], true); }
     moreChip.textContent = '+' + queue.length + ' more';
     moreChip.classList.toggle('on', queue.length > 0);
   }
+  /* the rail grows and shrinks with the window; cards follow it either way */
+  addEventListener('resize', () => { try { trimStack(); pump(); } catch (e) {} });
 
   function close(c, silent) {
     if (c.dead) return; c.dead = true;
@@ -367,7 +382,7 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
 
   /* Promote whatever has been waiting the longest. */
   function pump() {
-    while (live.length < MAXCARDS && queue.length) { const c = queue.shift(); if (!c.dead) mount(c); }
+    while (live.length < capNow() && queue.length) { const c = queue.shift(); if (!c.dead) mount(c); }
     trimStack();
   }
 
@@ -384,6 +399,8 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
 
     if (o.tag && byTag[o.tag]) {           // tagged notices replace, they never stack
       const c = byTag[o.tag];
+      c.count = (c.title === o.title && c.body === o.body) ? c.count + 1 : 1;
+      if (c.rec) c.rec.count = c.count;
       c.level = o.level; c.title = o.title; c.body = o.body; c.where = o.where;
       c.details = o.details; c.icon = o.icon; c.ttl = o.ttl; c.life = o.ttl;
       c.retry = o.retry; c.actions = o.actions; c.t = now;
@@ -406,6 +423,7 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
     c.rec = { id: c.id, t: now, level: c.level, title: c.title, body: c.body, where: c.where,
       details: c.details, count: 1 };
     log.push(c.rec); if (log.length > LOGCAP) log.shift();
+    if (c.tag) byTag[c.tag] = c;           // addressable even while it waits in the queue
 
     c.handle = { id: c.id,
       update(patch) { try { if (c.dead) return c.handle;
@@ -420,8 +438,17 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
         } catch (e) { soft('notify:update', e); } return c.handle; },
       close() { try { close(c); } catch (e) { soft('notify:close', e); } } };
 
-    if (live.length < MAXCARDS) mount(c);
-    else { queue.push(c); if (queue.length > MAXQUEUE) queue.shift(); trimStack(); }
+    if (live.length < capNow()) mount(c);
+    else {
+      /* A real failure never waits behind chatter: the dullest card that was
+         going to dismiss itself anyway gives up its slot. Only chatter is
+         evicted — an error or fatal on screen keeps its place. */
+      let victim = null;
+      for (const l of live) if (l.ttl && RANK[l.level] < RANK[c.level] &&
+        (!victim || RANK[l.level] < RANK[victim.level] || (RANK[l.level] === RANK[victim.level] && l.t < victim.t))) victim = l;
+      if (victim) { close(victim, true); mount(c); }
+      else { queue.push(c); if (queue.length > MAXQUEUE) queue.shift(); trimStack(); }
+    }
     markUnread(o.level);
     blip(o.level);
     if (drawerOpen) renderList();
@@ -433,9 +460,7 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
     unread++;
     if (RANK[level] > RANK[unreadTop]) unreadTop = level;
     pillN.textContent = unread > 99 ? '99+' : String(unread);
-    pill.style.setProperty('--rf-c', level === 'success' ? 'var(--c-uncommon)' :
-      level === 'warn' ? 'var(--gold)' : RANK[unreadTop] >= 3 ? 'var(--rose)' :
-      unreadTop === 'warn' ? 'var(--gold)' : 'var(--c-rare)');
+    pill.style.setProperty('--rf-c', COL[unreadTop]);
     pill.classList.add('on');
   }
   function clearUnread() { unread = 0; unreadTop = 'info'; pill.classList.remove('on'); }
@@ -447,7 +472,7 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
       for (let i = live.length - 1; i >= 0; i--) {
         const c = live[i];
         if (c.el) c.el._n.time.textContent = ago(c.t);
-        if (!c.ttl || c.hover || c.dead) { if (c.el && c.hover) c.el._n.bar.style.transform = 'scaleX(1)'; continue; }
+        if (!c.ttl || c.hover || c.dead) continue;   // hovering freezes the bar where it stands
         c.life -= 250;
         if (c.el) c.el._n.bar.style.transform = 'scaleX(' + Math.max(0, c.life / c.ttl).toFixed(3) + ')';
         if (c.life <= 0) close(c);
@@ -458,13 +483,14 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
   /* ======================================================================
      6. COPY — clipboard with a file:// fallback
      ====================================================================== */
+  const copied = (ok, okMsg) => flash(ok ? okMsg : 'Copy blocked · open Details and select it by hand',
+    ok ? 'success' : 'warn');
   function copyText(text, okMsg) {
-    let done = false;
     try { if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(() => flash(okMsg), () => { if (!legacyCopy(text)) flash('Copy blocked · select the details by hand', 'warn'); else flash(okMsg); });
+        navigator.clipboard.writeText(text).then(() => copied(true, okMsg),
+          () => copied(legacyCopy(text), okMsg));
         return; } } catch (e) {}
-    done = legacyCopy(text);
-    flash(done ? okMsg : 'Copy blocked · select the details by hand', done ? 'success' : 'warn');
+    copied(legacyCopy(text), okMsg);       // file:// usually refuses the async API outright
   }
   function legacyCopy(text) {              // file:// often refuses the async API
     try {
@@ -512,7 +538,7 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
     L.push('screen     ' + screen.width + 'x' + screen.height + ' @' + (window.devicePixelRatio || 1) +
       ' · window ' + innerWidth + 'x' + innerHeight);
     L.push('webgl      ' + glRenderer());
-    L.push('storage    ' + (storageOK ? 'ok' : 'UNAVAILABLE — progress is not being saved'));
+    L.push('storage    ' + (storageOK ? 'ok' : 'UNAVAILABLE · progress is not being saved'));
     L.push('quality    ' + (document.body.dataset.rfQuality || 'high') +
       (document.body.classList.contains('rf-reduced') ? ' · reduced motion' : ''));
     L.push('');
@@ -541,12 +567,11 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
   function renderCounts() {
     const n = { all: log.length, info: 0, success: 0, warn: 0, error: 0, fatal: 0 };
     for (const r of log) n[r.level] = (n[r.level] || 0) + 1;
-    const col = { all: 'var(--ink)', info: 'var(--c-rare)', success: 'var(--c-uncommon)',
-      warn: 'var(--gold)', error: 'var(--rose)', fatal: 'var(--rose)' };
     let h = '';
     for (const k of ['all', 'error', 'fatal', 'warn', 'success', 'info']) {
       if (k !== 'all' && !n[k]) continue;
-      h += '<button type="button" class="rf-nc' + (filter === k ? ' sel' : '') + '" data-f="' + k + '" style="--cc:' + col[k] + '">' +
+      h += '<button type="button" class="rf-notify-chip' + (filter === k ? ' sel' : '') + '" data-f="' + k +
+        '" style="--cc:' + (k === 'all' ? 'var(--ink)' : COL[k]) + '">' +
         (k === 'all' ? 'ALL' : LNAME[k]) + ' <b>' + n[k] + '</b></button>';
     }
     dCounts.innerHTML = h;
@@ -563,16 +588,16 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
       rows.push(r);
     }
     if (!rows.length) {
-      dList.innerHTML = '<div class="rf-nd-empty">' + (log.length ? 'Nothing matches that filter.' :
+      dList.innerHTML = '<div class="rf-notify-dempty">' + (log.length ? 'Nothing matches that filter.' :
         'Nothing has gone wrong yet.<br><span style="color:var(--faint);font-size:.9em">Errors, failed loads and rejected server actions will collect here.</span>') + '</div>';
       return;
     }
     let h = '', day = '';
     for (const r of rows) {
       const k = dayKey(r.t);
-      if (k !== day) { day = k; h += '<div class="rf-nd-day">' + esc(dayLabel(r.t)) + '</div>'; }
+      if (k !== day) { day = k; h += '<div class="rf-notify-dday">' + esc(dayLabel(r.t)) + '</div>'; }
       const detail = [r.where ? 'where  ' + r.where : '', r.details || ''].filter(Boolean).join('\n');
-      h += '<div class="rf-nd-row lv-' + r.level + '" data-id="' + r.id + '">' +
+      h += '<div class="rf-notify-drow lv-' + r.level + '" data-id="' + r.id + '">' +
         '<span class="rt">' + hhmm(r.t) + '</span><span class="rm">' +
         '<span class="rh">' + esc(r.title) + '</span>' +
         (r.body ? '<span class="rb">' + esc(r.body) + '</span>' : '') +
@@ -585,13 +610,13 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
   function openDrawer() {
     if (drawerOpen) return; drawerOpen = true;
     drawer.classList.add('on'); drawer.setAttribute('aria-hidden', 'false');
-    scrim.classList.add('on');
+    scrim.classList.add('on'); document.body.classList.add('rf-notify-open');
     clearUnread(); renderList();
   }
   function closeDrawer() {
     if (!drawerOpen) return; drawerOpen = false;
     drawer.classList.remove('on'); drawer.setAttribute('aria-hidden', 'true');
-    scrim.classList.remove('on');
+    scrim.classList.remove('on'); document.body.classList.remove('rf-notify-open');
     try { searchEl.blur(); } catch (e) {}
   }
   const toggleDrawer = () => drawerOpen ? closeDrawer() : openDrawer();
@@ -600,13 +625,13 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
   pill.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDrawer(); } };
   moreChip.onclick = openDrawer;
   scrim.onclick = closeDrawer;
-  drawer.querySelector('.rf-nd-close').onclick = closeDrawer;
-  dCounts.onclick = e => { const b = e.target.closest('.rf-nc'); if (!b) return;
+  drawer.querySelector('.rf-notify-dclose').onclick = closeDrawer;
+  dCounts.onclick = e => { const b = e.target.closest('.rf-notify-chip'); if (!b) return;
     filter = b.getAttribute('data-f'); prefs.filter = filter; saveP(); renderList(); };
-  dList.onclick = e => { const row = e.target.closest('.rf-nd-row'); if (row) row.classList.toggle('open'); };
+  dList.onclick = e => { const row = e.target.closest('.rf-notify-drow'); if (row) row.classList.toggle('open'); };
   searchEl.oninput = () => { try { renderList(); } catch (err) { soft('notify:search', err); } };
-  drawer.querySelector('.rf-nd-diag').onclick = () => copyText(diagnostics(), 'Diagnostics copied · paste it when asking for help');
-  drawer.querySelector('.rf-nd-clear').onclick = () => {
+  drawer.querySelector('.rf-notify-ddiag').onclick = () => copyText(diagnostics(), 'Diagnostics copied · paste it when asking for help');
+  drawer.querySelector('.rf-notify-dclear').onclick = () => {
     confirmBox({ title: 'Clear the notice history?', body: 'The ' + log.length + ' entries listed here are removed. Nothing else changes.',
       ok: 'Clear', danger: true }).then(yes => { if (!yes) return;
         log.length = 0; renderList(); notify({ level: 'info', title: 'History cleared', ttl: 2600 }); });
@@ -743,7 +768,8 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
   RF.on('error', onErrRec);
 
   /* Anything the funnel caught before this file parsed is still in the ring buffer. */
-  try { const pre = (RF.errors || []).slice(); for (let i = 0; i < pre.length; i++) onErrRec(pre[i], true); } catch (e) {}
+  try { replaying = true; const pre = (RF.errors || []).slice();
+    for (let i = 0; i < pre.length; i++) onErrRec(pre[i], true); } catch (e) {} finally { replaying = false; }
 
   /* ---- WebGL: a lost context is a frozen game with no message today ---- */
   try {
@@ -846,7 +872,7 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
 
   /* The canary above proves storage accepts a tiny write; a quota that is merely
      FULL still fails on the real save, so check the game's own key landed too. */
-  let saveWarned = false, lastSaveCheck = 0;
+  let saveWarned = false;
   function saveCheck() {
     if (RF.online || !RF.running || !storageOK || saveWarned) return;
     const s = RF.state && RF.state.stats;
@@ -856,7 +882,7 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
     if (present) return;
     saveWarned = true;
     notify({ level: 'error', tag: 'rf-save', title: 'Your save is not landing', ttl: 0,
-      body: 'The game has caught and mined this session but nothing has been written to disk.',
+      body: 'You have been working the isle this session, but nothing has reached the disk.',
       where: 'save', details: 'key     ' + RF.SAVE + '\nreason  storage is most likely full.\n' +
         'Free some browser storage for this page, or sign in so the server keeps your island.' });
   }
@@ -900,10 +926,8 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
       where: 'ach:' + id });
   } catch (e) {} });
 
-  /* ---- housekeeping: cheap, and never on the frame's critical path ---- */
-  RF.every(6, () => { try { storageCheck(false); saveCheck();
-    if (drawerOpen && Date.now() - lastSaveCheck > 30000) { lastSaveCheck = Date.now(); renderCounts(); }
-  } catch (e) { soft('notify:health', e); } });
+  /* ---- housekeeping: two cheap probes, well off the frame's critical path ---- */
+  RF.every(20, () => { try { storageCheck(false); saveCheck(); } catch (e) { soft('notify:health', e); } });
 
   /* ======================================================================
      11. THE PUBLISHED API — ten other slots call these, so nothing throws out

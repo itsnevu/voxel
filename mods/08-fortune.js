@@ -139,21 +139,21 @@ RF.mod('08-fortune', function (RF) {
     background:var(--glass-row);color:var(--muted);box-shadow:inset 0 1px 0 rgba(255,255,255,.07);}
   .ef-tabs button.sel{color:var(--teal);border-color:rgba(57,215,196,.55);box-shadow:inset 0 0 0 1px rgba(57,215,196,.28);}
   .ef-pane{font-size:11px;color:var(--muted);line-height:1.55;}
-  .ef-pane .lab{font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin:8px 0 5px;}
+  .ef-pane .lab{font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:#6f8f8a;margin:9px 0 5px;}
   .ef-tape{display:flex;gap:3px;flex-wrap:wrap;margin-bottom:6px;}
   .ef-tape i{width:13px;height:15px;border-radius:3px;display:flex;align-items:center;justify-content:center;
     font-style:normal;font-size:8px;font-weight:700;color:rgba(255,255,255,.85);box-shadow:inset 0 0 0 1px rgba(0,0,0,.4);}
   .ef-tape i.last{outline:1.5px solid var(--gold);outline-offset:1px;}
-  .ef-freq{display:flex;align-items:flex-end;gap:2px;height:44px;margin-bottom:3px;}
+  .ef-freq{display:flex;align-items:flex-end;gap:2px;height:50px;margin-bottom:3px;}
   .ef-freq .fb{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;}
   .ef-freq .fb u{display:block;width:100%;border-radius:2px 2px 0 0;text-decoration:none;min-height:1px;}
-  .ef-freq .fb s{font-size:7px;color:var(--faint);text-decoration:none;margin-top:2px;}
+  .ef-freq .fb s{font-size:8px;color:#6f8f8a;text-decoration:none;margin-top:3px;font-variant-numeric:tabular-nums;}
   .ef-row{display:flex;justify-content:space-between;gap:8px;padding:4px 0;
     border-top:1px solid var(--glass-bd-soft);font-variant-numeric:tabular-nums;}
   .ef-row:first-child{border-top:0;}
   .ef-row b{color:var(--ink);font-family:"Chakra Petch",sans-serif;font-weight:700;}
   .ef-good{color:var(--teal);}.ef-bad{color:var(--rose);}.ef-gold{color:var(--gold);}
-  .ef-note{font-size:9.5px;color:var(--faint);line-height:1.55;margin-top:7px;}
+  .ef-note{font-size:10px;color:#6f8f8a;line-height:1.6;margin-top:7px;}
   .ef-in{width:74px;font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink);
     background:rgba(0,0,0,.28);border:1px solid var(--glass-bd-soft);border-radius:7px;padding:4px 7px;}
   .ef-in:focus{outline:none;border-color:var(--teal);}
@@ -176,9 +176,10 @@ RF.mod('08-fortune', function (RF) {
   .ef-chd .p{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:22px;color:var(--gold);
     font-variant-numeric:tabular-nums;text-align:right;line-height:1.1;}
   .ef-cv{width:100%;display:block;margin:10px 0 4px;border-radius:9px;background:rgba(0,0,0,.2);}
-  .ef-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:5px;margin-top:7px;}
+  .ef-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:5px;margin-top:7px;}
   .ef-cell{background:rgba(255,255,255,.04);border:1px solid var(--glass-bd-soft);border-radius:8px;padding:6px 9px;}
-  .ef-cell .k{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);}
+  .ef-cell .k{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#6f8f8a;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis;}
   .ef-cell .v{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:13px;color:var(--ink);
     font-variant-numeric:tabular-nums;}
   .ef-why{font-size:11px;color:var(--muted);line-height:1.6;margin-top:9px;
@@ -188,7 +189,9 @@ RF.mod('08-fortune', function (RF) {
   .ef-star{cursor:pointer;font-size:14px;line-height:1;color:var(--faint);background:none;border:0;padding:0 2px;}
   .ef-star.on{color:var(--gold);}
   /* ---------- the rail ---------- */
-  .ef-rail{position:fixed;top:196px;right:12px;z-index:5;width:184px;padding:8px 10px 7px;
+  /* bottom-right: the top-right column is already four HUD chips deep and the
+     notification stack grows down through it — this corner stays quiet. */
+  .ef-rail{position:fixed;bottom:92px;right:12px;z-index:5;width:184px;padding:8px 10px 7px;
     background:var(--glass-hud);backdrop-filter:blur(14px) saturate(1.6);-webkit-backdrop-filter:blur(14px) saturate(1.6);
     border:1px solid var(--glass-bd);border-radius:11px;box-shadow:var(--glass-hi),0 8px 24px rgba(2,8,10,.35);
     font-size:10.5px;color:var(--muted);display:none;}
@@ -197,7 +200,7 @@ RF.mod('08-fortune', function (RF) {
     font-weight:700;font-size:9.5px;letter-spacing:.16em;color:var(--faint);margin-bottom:5px;}
   .ef-rail .hd u{text-decoration:none;border:1px solid var(--glass-bd-soft);border-radius:5px;padding:0 4px;font-size:9px;}
   .ef-rr{display:flex;align-items:center;gap:6px;padding:2.5px 0;font-variant-numeric:tabular-nums;}
-  .ef-rr .tk{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:11px;color:var(--ink);width:38px;}
+  .ef-rr .tk{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:11px;color:var(--ink);width:46px;}
   .ef-rr .pr{flex:1;text-align:right;color:var(--ink);}
   .ef-rr .dl{width:50px;text-align:right;font-size:9.5px;}
   .ef-rr .ow{width:22px;text-align:right;font-size:9px;color:var(--teal);}
@@ -205,6 +208,7 @@ RF.mod('08-fortune', function (RF) {
   .ef-rail .ft{margin-top:5px;padding-top:5px;border-top:1px solid var(--glass-bd-soft);font-size:9.5px;line-height:1.5;}
   @keyframes efflash{0%{background:rgba(57,215,196,.28);}100%{background:transparent;}}
   body.capcam .ef-rail{opacity:0;pointer-events:none;}
+  @media (max-width:860px){ .ef-rail{display:none!important;} }
   body:has(#start.on) .ef-rail{opacity:0;pointer-events:none;}
   @media (prefers-reduced-motion:no-preference){
     .ef-pot.hot .amt{animation:efpulse 2.4s ease-in-out infinite;}
@@ -311,7 +315,7 @@ RF.mod('08-fortune', function (RF) {
       for (let i = 0; i < Math.min(12, db.hist.length); i++) run.push(db.hist[i]);
       const chips = run.map(i => `<i style="background:${PKC[SEG[i]]}" title="pocket ${i}"></i>`).join('');
       const cf = freeCall ? (freeCall.mode === 'pocket' ? 'calling <b>' + freeCall.pk + '</b> straight'
-        : 'calling <b>' + freeCall.pk + '</b> ± 1') : 'click a pocket to call it — free';
+        : 'calling <b>' + freeCall.pk + '</b> ± 1') : 'click a pocket to call it · free';
       const rc = runCall ? `<br><span style="color:${PKI[runCall.col]}">run: ${runCall.col} ${runCall.got}/3</span>` : '';
       side.innerHTML = `<b>${sel.bet ? BETLBL[sel.bet] : 'no bet yet'}</b>${sel.bet ? ' covers ' + coverOf(sel.bet).length + '/' + NSEG : ''}
         <br><span style="color:#6f8f8a">${cf}</span>${rc}
@@ -345,7 +349,7 @@ RF.mod('08-fortune', function (RF) {
       <div class="r"><span>expected on this spin</span><b class="${edgeCls}">${m.ev >= 0 ? '+' : '−'}◈ ${fmt(Math.abs(m.ev))} · ${pct(m.edge)}</b></div>
       <div class="r"><span>tonight so far</span><b class="${netS >= 0 ? 'eg' : 'ed'}">${netS >= 0 ? '+' : '−'}◈ ${fmt(Math.abs(netS))}</b></div>
       <div class="note">${m.bet === 'green' && !RF.online
-        ? 'green is a donation until the pot clears your chip — at ◈' + fmt(m.stake) + ' staked it turns even at a pot of ◈' + fmt(m.stake) + '.'
+        ? 'green is a donation until the pot clears your chip · at ◈' + fmt(m.stake) + ' staked it turns even at a pot of ◈' + fmt(m.stake) + '.'
         : m.isFish ? 'a lost fish is gone from the bucket, not sold. the eel does not pay scrap.'
         : 'the house keeps ◈1 of every ◈15 wagered. that is the whole trick; there is no second one.'}</div>`;
   }
@@ -610,9 +614,9 @@ RF.mod('08-fortune', function (RF) {
      ====================================================================== */
   const WHY = {
     DIGG: 'a pick-and-shovel outfit: it rides <b>coal, iron, gold and diamond</b> demand, so any ore going HOT lifts it ~8% and a SURPLUS ore knocks ~6% off. Middling volatility, a thin dividend.',
-    REEL: 'the cannery. It tracks <b>fish</b> and nothing else, so it moves exactly when your bucket does — HOT fish is a good day for both of you.',
+    REEL: 'the cannery. It tracks <b>fish</b> and nothing else, so it moves exactly when your bucket does · HOT fish is a good day for both of you.',
     LUMB: 'timber. Follows <b>wood</b> alone, drifts the least of the five, and pays the second-fattest dividend. Dull on purpose.',
-    EEL: 'the casino itself. Tracks <b>no commodity at all</b> and pays <b>no dividend</b> — it is pure mood, swinging nearly twice as hard as anything else. Green pockets mint its shares, which tells you who is really long this stock.',
+    EEL: 'the casino itself. Tracks <b>no commodity at all</b> and pays <b>no dividend</b> · it is pure mood, swinging nearly twice as hard as anything else. Green pockets mint its shares, which tells you who is really long this stock.',
     HARB: 'a shipping line. Tracks <b>nothing</b>, barely moves, and pays the best dividend on the board. You buy it to be bored and paid.'
   };
   const mktEl = $('market'), mktCard = mktEl ? mktEl.querySelector('.card') : null;
@@ -689,7 +693,7 @@ RF.mod('08-fortune', function (RF) {
     const e = eNow(), N = 120, pts = []; let lo = Infinity, hi = 0;
     for (let i = N - 1; i >= 0; i--) { const v = holdVal(e - i); pts.push(v); if (v < lo) lo = v; if (v > hi) hi = v; }
     if (hi <= 0) { g.fillStyle = '#5c7a76'; g.font = '11px "IBM Plex Mono",monospace'; g.textAlign = 'center';
-      g.fillText('no shares yet — the line starts when you own something', w / 2, h / 2); return; }
+      g.fillText('no shares yet · the line starts when you own something', w / 2, h / 2); return; }
     const pad = Math.max(1, (hi - lo) * 0.14); lo = Math.max(0, lo - pad); hi += pad;
     const L = 46, R = w - 8, T = 10, B = h - 16, Y = v => B - (v - lo) / Math.max(1e-6, hi - lo) * (B - T);
     g.strokeStyle = 'rgba(255,255,255,.07)'; g.fillStyle = '#5c7a76';
@@ -703,7 +707,7 @@ RF.mod('08-fortune', function (RF) {
     g.beginPath(); pts.forEach((v, i) => { const x = L + i / (N - 1) * (R - L), y = Y(v); i ? g.lineTo(x, y) : g.moveTo(x, y); });
     g.strokeStyle = '#39d7c4'; g.lineWidth = 1.6; g.stroke();
     g.fillStyle = '#5c7a76'; g.textAlign = 'left'; g.font = '9px "IBM Plex Mono",monospace';
-    g.fillText('6 h · TODAY’S holdings priced at past marks — not what you actually held', L, h - 4);
+    g.fillText('6 h · TODAY’S holdings priced at past marks · not what you actually held', L, h - 4);
   }
 
   function tickerCard(k) {
@@ -730,13 +734,13 @@ RF.mod('08-fortune', function (RF) {
       <canvas class="ef-cv" data-efcv="${k}" height="172"></canvas>
       <div class="ef-grid">
         <div class="ef-cell"><div class="k">buy / sell</div><div class="v">◈${fmt(ask)} <span style="color:var(--faint)">/</span> ◈${fmt(bid)}</div></div>
-        <div class="ef-cell"><div class="k">round trip cost</div><div class="v ef-bad">◈${fmt(ask - bid)} · ${((ask - bid) / Math.max(1, p) * 100).toFixed(0)}%</div></div>
+        <div class="ef-cell"><div class="k">round trip</div><div class="v ef-bad">◈${fmt(ask - bid)} · ${((ask - bid) / Math.max(1, p) * 100).toFixed(0)}%</div></div>
         <div class="ef-cell"><div class="k">last hour</div><div class="v">◈${fmt(lo1)}–${fmt(hi1)}</div></div>
         <div class="ef-cell"><div class="k">last 24 h</div><div class="v">◈${fmt(lo24)}–${fmt(hi24)}</div></div>
         <div class="ef-cell"><div class="k">dividend</div><div class="v">${s.yield ? (s.yield * 100).toFixed(1) + '% / hr' : 'none'}</div></div>
         <div class="ef-cell"><div class="k">regime now</div><div class="v">${regime}</div></div>
         ${own ? `<div class="ef-cell"><div class="k">you hold</div><div class="v">${own} / ${STOCK_CAP}</div></div>
-        <div class="ef-cell"><div class="k">break even at</div><div class="v ${away <= 0 ? 'ef-good' : ''}">◈${fmt(evenAt)} · ${away <= 0 ? 'clear' : '+' + away.toFixed(0) + '%'}</div></div>` : ''}
+        <div class="ef-cell"><div class="k">break even</div><div class="v ${away <= 0 ? 'ef-good' : ''}">◈${fmt(evenAt)} · ${away <= 0 ? 'clear' : '+' + away.toFixed(0) + '%'}</div></div>` : ''}
       </div>
       <div class="ef-why">${WHY[k] || 'no notes on this one.'}</div>
       <div class="ef-alert">alert me when it goes
@@ -762,7 +766,7 @@ RF.mod('08-fortune', function (RF) {
       rows += `<div class="ef-row"><span><b>${k}</b> × ${n} <span style="color:var(--faint)">· paid ≈◈${fmt(paid)}</span></span>
         <b class="${d >= 0 ? 'ef-good' : 'ef-bad'}">◈${fmt(bidv)} · ${d >= 0 ? '+' : '−'}◈${fmt(Math.abs(d))}</b></div>`;
     }
-    if (!rows) rows = '<div class="ef-note">no shares. they drop from diamonds, gold, deep water and green pockets — or you buy them above.</div>';
+    if (!rows) rows = '<div class="ef-note">no shares. they drop from diamonds, gold, deep water and green pockets · or you buy them above.</div>';
     const net = mark - cost;
     let proj = 0;
     for (const k of SKEYS) { const n = (S.stocks && S.stocks.own[k]) | 0, s = STOCKS[k];
@@ -831,7 +835,7 @@ RF.mod('08-fortune', function (RF) {
       <span style="color:var(--faint)">turns in ${mm}:${String(ss).padStart(2, '0')}</span></div>
       ${rows.length ? body + `<div class="ef-row"><span>your stock, right now</span>
         <b class="${swing >= 0 ? 'ef-good' : 'ef-bad'}">◈${fmt(total)} · ${swing >= 0 ? '+' : '−'}◈${fmt(Math.abs(swing))} vs flat</b></div>`
-      : '<div class="ef-note">nothing in the bucket or the ore sacks — the rotation costs you nothing today.</div>'}
+      : '<div class="ef-note">nothing in the bucket or the ore sacks · the rotation costs you nothing today.</div>'}
       ${past ? `<div class="ef-note">last rotations seen: ${esc(past)}</div>` : ''}`;
   }
 

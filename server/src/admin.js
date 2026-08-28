@@ -839,14 +839,14 @@ export function mountAdmin(app, deps = {}) {
       res.status(404).json({ error: 'not found' });
     });
     app.use('/api/admin', dead);
-    log.warn('ADMIN_TOKEN is not set — the moderation console is disabled (all /api/admin routes answer 404)', {
+    log.warn('ADMIN_TOKEN is not set · the moderation console is disabled (all /api/admin routes answer 404)', {
       admin: true, action: 'disabled', target: '-', minutes: null,
     });
     return { enabled: false };
   }
 
   if (adminToken.length < 24) {
-    log.warn(`ADMIN_TOKEN is only ${adminToken.length} characters — use at least 32 random ones (openssl rand -hex 24)`, {
+    log.warn(`ADMIN_TOKEN is only ${adminToken.length} characters · use at least 32 random ones (openssl rand -hex 24)`, {
       admin: true, action: 'weak-token', target: '-', minutes: null,
     });
   }
@@ -854,7 +854,7 @@ export function mountAdmin(app, deps = {}) {
   // The table is created at mount so the first ban is not also the first
   // CREATE TABLE, and so a broken database shouts at boot rather than later.
   if (!ensureSchema()) {
-    log.error('sanctions table could not be created — mutes and bans will not persist', {
+    log.error('sanctions table could not be created · mutes and bans will not persist', {
       admin: true, action: 'schema-failed', target: '-', minutes: null,
     });
   }
@@ -1035,7 +1035,7 @@ export function mountAdmin(app, deps = {}) {
       }
     } else {
       payload.worlds = null;
-      payload.note = 'realtime exposes head-counts only — see ENFORCEMENT WIRING (4e) in admin.js '
+      payload.note = 'realtime exposes head-counts only · see ENFORCEMENT WIRING (4e) in admin.js '
                    + 'for the presence() export that turns this into names';
     }
 
@@ -1134,7 +1134,7 @@ export function mountAdmin(app, deps = {}) {
       sessionsRevoked: revoked,
       kicked,
       ...(kicked ? {} : {
-        note: 'realtime has no kick hook — any open socket drops on its next '
+        note: 'realtime has no kick hook · any open socket drops on its next '
             + 'heartbeat or reconnect (see ENFORCEMENT WIRING 4c/4d in admin.js)',
       }),
     });

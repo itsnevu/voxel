@@ -47,15 +47,30 @@ const BOOT_TIMEOUT_MS = 20_000;
 const BOOT_POLL_MS = 50;
 const BOOT_ATTEMPTS = 4;
 
-/** Every server this process started, so the exit hook can still reap them. */
+/** Every server this process started, so the exit hooks can still reap them. */
 const live = new Set();
 
-process.on('exit', () => {
+/** Synchronous, idempotent teardown — the only kind an exit hook may do. */
+function reapAll() {
   for (const handle of live) {
     try { handle.child.kill('SIGKILL'); } catch { /* already gone */ }
     try { fs.rmSync(handle.dir, { recursive: true, force: true }); } catch { /* best effort */ }
   }
-});
+  live.clear();
+}
+
+process.on('exit', reapAll);
+
+/* A plain `exit` hook is not enough. Node's DEFAULT signal handling terminates
+   without running exit hooks at all, so a Ctrl+C halfway through a run would
+   leave both a live server and its temp database behind. Installing handlers
+   overrides that default: reap first, then leave by the conventional
+   128+signal code so a CI runner still sees an interrupt as an interrupt.
+   (`node --test --watch` also stops file processes with SIGTERM, so this is
+   what keeps watch mode from accumulating servers on every rerun.) */
+for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
+  process.on(sig, () => { reapAll(); process.exit(code); });
+}
 
 /* ------------------------------------------------------------- utilities -- */
 

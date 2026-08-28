@@ -3952,7 +3952,7 @@ function paintBoard(){
         ${r.title?`<small>${esc(r.title)}</small>`:''}</span>
       <span class="prl">◉ ${fmt(r.pearls||0)}</span>
       <span class="amt">◈ ${fmt(r.earned)}</span></div>`; }).join('')
-    + (me&&!mine?`<div class="empty">You are not in the top ${lbRows.length} yet — keep fishing.</div>`:'');
+    + (me&&!mine?`<div class="empty">You are not in the top ${lbRows.length} yet · keep fishing.</div>`:'');
 }
 invTabs.forEach(b=>b.addEventListener('click',()=>{sfx.tab();setInvTab(b.getAttribute('data-tab'));}));
 function openInv(){ if(marketOpen||casinoOpen||harborOpen)return; invOpen=true; RF.emit('panel','inventory',true); sfx.open(); invEl.classList.add('on'); renderInv(); setInvTab('bag'); }
@@ -4224,7 +4224,7 @@ function animate(now){
     if(frameFails>240){ frameDead=true;
       fail('The render loop failed 240 frames in a row and was stopped.<br><b>'
         +String((e&&e.message)||e).replace(/[<>]/g,'')+'</b><br>'
-        +'<small>Reload the page to try again — your save is untouched.</small>');
+        +'<small>Reload the page to try again · your save is untouched.</small>');
       return; }
     requestAnimationFrame(animate); }
 }

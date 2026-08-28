@@ -4,14 +4,16 @@
    2.  Bucket meter — a fill bar under the count that ambers at three-quarters and burns at full.
    3.  Status rail — one pill per live effect (chum, hot market, weather, vein, rig, dark) with real timers.
    4.  Toast director — one managed stack: repeats fold into ×N, gold jumps the queue, never more than four.
-   5.  The log — nothing is lost; L (or the chip) opens the backlog with an unread count.
+   5.  Messages — nothing is lost; L (or the chip) replays the backlog with an unread count.
    6.  World floats — +ore over the rock you broke, ◈ over the bobber, ◉ over your own head.
    7.  Waypoint ring — edge chevrons to trader, casino, harbor, portal and the X, with distance.
    8.  Bite forecast — what the clock and the weather are actually putting in the water tonight.
-   9.  Action bars — the hint line's ▰▱ blocks become real progress bars with an activity rail.
-   10. Richer minimap — hillshaded base, live ore, peers, a facing wedge and a pulsing X. */
+   9.  Action bars — the hint line's ▰▱ blocks become real progress bars.
+   10. Richer minimap — hillshaded base, live ore, peers, a facing wedge and a pulsing X.
+   Every strip is individually switchable through RF.api.hud, so a settings panel
+   can drive them without knowing anything about how they are built. */
 RF.mod('02-hud', function (RF) {
-  const S = RF.state, F = RF.fn, fmt = F.fmt, pix = F.pixSVG, TAU = RF.TAU;
+  const S = RF.state, F = RF.fn, fmt = F.fmt, pix = F.pixSVG, TAU = RF.TAU || Math.PI * 2;
   const clamp = F.clamp, byId = function (id) { return document.getElementById(id); };
   /* Continuous motion is the only thing reduced-motion actually objects to; a
      number settling once is information, so those stay either way. */
@@ -23,6 +25,31 @@ RF.mod('02-hud', function (RF) {
   const ago = function (ms) { const s = Math.round((Date.now() - ms) / 1000);
     return s < 5 ? 'now' : s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : Math.floor(s / 3600) + 'h'; };
   const dist = function (p) { return p ? Math.round(Math.hypot(p.x - RF.pWorld.x, p.z - RF.pWorld.z)) : 0; };
+  /* One broken strip must never take the other nine with it. */
+  const guard = function (name, fn) { try { fn(); } catch (e) { RF.warn('02-hud/' + name, e); } };
+
+  /* ---- persisted switches + the nudge snooze, one record ---- */
+  const STORE = '02-hud';
+  const SECTIONS = [
+    { id: 'counters',  label: 'rolling counters & gain chips' },
+    { id: 'rail',      label: 'status effect rail' },
+    { id: 'toasts',    label: 'managed toast stack' },
+    { id: 'floats',    label: 'floating world numbers' },
+    { id: 'waypoints', label: 'waypoint chevrons' },
+    { id: 'forecast',  label: 'bite forecast' },
+    { id: 'nudge',     label: 'what-next nudge' },
+    { id: 'hintbars',  label: 'hint progress bars' },
+    { id: 'minimap',   label: 'enhanced minimap' }
+  ];
+  const DEF = { counters: 1, rail: 1, toasts: 1, floats: 1, waypoints: 1, forecast: 1, nudge: 1, hintbars: 1, minimap: 1 };
+  const cfg = {}; for (const k in DEF) cfg[k] = DEF[k];
+  let snoozeUntil = 0;
+  guard('load', function () {
+    const s = RF.store.get(STORE, null); if (!s) return;
+    if (s.cfg) for (const k in DEF) if (s.cfg[k] === 0 || s.cfg[k] === 1) cfg[k] = s.cfg[k];
+    snoozeUntil = +s.snooze || 0;
+  });
+  const persist = function () { RF.store.set(STORE, { cfg: cfg, snooze: snoozeUntil }); };
 
   /* ---------------------------------------------------------------- styling */
   RF.css(`
@@ -30,6 +57,7 @@ RF.mod('02-hud', function (RF) {
   .hd-glass{background:var(--glass-hud);backdrop-filter:blur(14px) saturate(1.6);
     -webkit-backdrop-filter:blur(14px) saturate(1.6);border:1px solid var(--glass-bd);
     border-radius:11px;box-shadow:var(--glass-hi),0 8px 24px rgba(2,8,10,.35);}
+  .hd-off{display:none!important;}
 
   /* 1 · counters ---------------------------------------------------------- */
   .hd-delta{position:fixed;z-index:21;pointer-events:none;font-family:"Chakra Petch",sans-serif;
@@ -49,7 +77,7 @@ RF.mod('02-hud', function (RF) {
   .hd-fill.warn{background:var(--gold);color:var(--gold);}
   .hd-fill.hot{background:var(--rose);color:var(--rose);}
 
-  /* 3 · status rail ------------------------------------------------------- */
+  /* 3 + 8 · the left column: effects on top, the forecast under them ------- */
   .hd-col{left:12px;top:292px;z-index:5;width:190px;display:flex;flex-direction:column;gap:6px;}
   .hd-rail{display:flex;flex-direction:column;gap:5px;}
   .hd-fx{display:flex;gap:7px;align-items:center;padding:5px 8px 6px;position:relative;overflow:hidden;
@@ -71,11 +99,21 @@ RF.mod('02-hud', function (RF) {
   .hd-fx.r{color:var(--rose);border-color:rgba(255,93,122,.42);}
   .hd-fx.b{color:#57b7ff;border-color:rgba(87,183,255,.42);}
   .hd-fx.p{color:#c490ff;border-color:rgba(196,144,255,.42);}
+  .hd-cast{padding:8px 11px 9px;}
+  .hd-cast .hd-c1{display:flex;align-items:center;gap:6px;font-family:"Chakra Petch",sans-serif;
+    font-size:11px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;}
+  .hd-cast .hd-c1 em{margin-left:auto;font-style:normal;font-family:"IBM Plex Mono",monospace;
+    font-size:10px;letter-spacing:.04em;color:var(--muted);font-variant-numeric:tabular-nums;}
+  .hd-cast .hd-c2{font-size:10px;line-height:1.4;color:var(--muted);margin-top:3px;}
+  .hd-cast .hd-c2 b{color:var(--ink);font-weight:600;}
+  .hd-cast .hd-c3{font-size:9.5px;line-height:1.4;margin-top:4px;padding-top:4px;
+    border-top:1px solid var(--glass-bd-soft);color:var(--faint);}
+  .hd-cast .hd-c3 b{font-weight:600;}
 
   /* 4 · toast stack ------------------------------------------------------- */
   .hd-toasts{left:50%;bottom:134px;transform:translateX(-50%);z-index:20;display:flex;
     flex-direction:column;gap:6px;align-items:center;}
-  /* the toast stack is NOT .hud on purpose: core's #toasts still speaks over the
+  /* the stack is deliberately NOT .hud: core's #toasts still speaks over the
      title screen, so ours must too — it only bows out of the camera modes */
   body.photo .hd-toasts,body.capcam .hd-toasts,
   body.photo .hd-delta,body.capcam .hd-delta{opacity:0!important;pointer-events:none!important;}
@@ -95,7 +133,7 @@ RF.mod('02-hud', function (RF) {
     background:rgba(255,255,255,.12);border-radius:6px;padding:1px 6px;flex:0 0 auto;
     font-variant-numeric:tabular-nums;}
 
-  /* 5 · the log ----------------------------------------------------------- */
+  /* 5 · messages ---------------------------------------------------------- */
   .hd-logbtn{position:fixed;right:12px;bottom:48px;z-index:21;pointer-events:auto;cursor:pointer;
     display:flex;gap:7px;align-items:center;font-family:"IBM Plex Mono",monospace;font-size:10px;
     letter-spacing:.12em;color:var(--muted);background:var(--glass);border:1px solid var(--glass-bd-soft);
@@ -149,20 +187,8 @@ RF.mod('02-hud', function (RF) {
     background:rgba(4,12,15,.62);border-radius:5px;padding:0 4px;font-variant-numeric:tabular-nums;
     text-shadow:0 1px 4px rgba(0,0,0,.8);}
 
-  /* 8 · bite forecast ----------------------------------------------------- */
-  .hd-cast{padding:8px 11px 9px;}
-  .hd-cast .hd-c1{display:flex;align-items:center;gap:6px;font-family:"Chakra Petch",sans-serif;
-    font-size:11px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;}
-  .hd-cast .hd-c1 em{margin-left:auto;font-style:normal;font-family:"IBM Plex Mono",monospace;
-    font-size:10px;letter-spacing:.04em;color:var(--muted);font-variant-numeric:tabular-nums;}
-  .hd-cast .hd-c2{font-size:10px;line-height:1.4;color:var(--muted);margin-top:3px;}
-  .hd-cast .hd-c2 b{color:var(--ink);font-weight:600;}
-  .hd-cast .hd-c3{font-size:9.5px;line-height:1.4;margin-top:4px;padding-top:4px;
-    border-top:1px solid var(--glass-bd-soft);color:var(--faint);}
-  .hd-cast .hd-c3 b{font-weight:600;}
-
   /* 9 · hint action bars -------------------------------------------------- */
-  .hd-bar{display:inline-block;vertical-align:0px;width:88px;height:7px;border-radius:4px;margin:0 3px;
+  .hd-bar{display:inline-block;vertical-align:0;width:88px;height:7px;border-radius:4px;margin:0 3px;
     background:rgba(255,255,255,.11);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);
     position:relative;overflow:hidden;}
   .hd-bar::after{content:'';position:absolute;left:0;top:0;bottom:0;width:var(--p,0%);border-radius:4px;
@@ -187,15 +213,11 @@ RF.mod('02-hud', function (RF) {
   }
   `, 'hd-css-02-hud');
 
-  /* Everything below is torn into small guarded blocks: one broken subsystem
-     must not take the other nine with it. */
-  const guard = function (name, fn) { try { fn(); } catch (e) { RF.warn('02-hud/' + name, e); } };
-
   /* ======================================================================
-     1 + 2 — LIVING COUNTERS, DELTA CHIPS, BUCKET METER
-     The two headline numbers (coins, pearls) are re-written from the frame
-     hook while a tween runs, which always lands AFTER core's updateHUD() in
-     the same frame, so we win without ever removing core's nodes.
+     1 + 2 — LIVING COUNTERS, GAIN CHIPS, BUCKET METER
+     The two headline numbers are re-written from the frame hook while a tween
+     runs, which always lands AFTER core's updateHUD() in the same frame, so we
+     win the number without ever removing core's nodes.
      ====================================================================== */
   const counters = [];
   let bucketFill = null, bucketP = -1;
@@ -222,8 +244,8 @@ RF.mod('02-hud', function (RF) {
     setTimeout(function () { d.remove(); }, 1000);
   };
 
-  /* ore chips flash their own ore colour — the row is otherwise five identical
-     grey pills and you can never tell which one just moved */
+  /* the ore row is five identical grey pills — without a flash you can never
+     tell which one just moved */
   const oreRow = [];
   guard('orerow', function () {
     const ids = { wood: 'oreW', coal: 'oreC', iron: 'oreI', gold: 'oreG', diamond: 'oreD' };
@@ -264,8 +286,8 @@ RF.mod('02-hud', function (RF) {
   /* ======================================================================
      3 — STATUS RAIL
      Every timed thing the game currently keeps to itself: the chum you paid
-     80 pearls for, the market window that is about to close, the vein that
-     goes cold in four seconds. One pill each, sorted by urgency.
+     eighty pearls for, the market window about to close, the vein that goes
+     cold in four seconds. One pill each, sorted by urgency.
      ====================================================================== */
   const colEl = RF.el('<div class="hd-l hd-col hud"></div>');
   const railEl = RF.el('<div class="hd-rail"></div>', colEl);
@@ -278,7 +300,7 @@ RF.mod('02-hud', function (RF) {
   RF.on('mined', function (m) { if (m && m.combo) { combo = m.combo; comboT = COMBO_WINDOW; } });
 
   const activeBait = function () {
-    const b = RF.BAITS[S.baitId];
+    const b = RF.BAITS ? RF.BAITS[S.baitId] : null;
     return (b && (S.bait[S.baitId] | 0) > 0) ? b : null;
   };
 
@@ -319,8 +341,8 @@ RF.mod('02-hud', function (RF) {
   };
 
   const paintRail = function () {
-    if (!RF.running) { colEl.style.display = 'none'; return; }
-    colEl.style.display = '';
+    if (!RF.running || !cfg.rail) { railEl.classList.add('hd-off'); return; }
+    railEl.classList.remove('hd-off');
     const fx = effects();
     let key = ''; for (let i = 0; i < fx.length; i++) key += fx[i].id + '|';
     if (key !== railKey) {
@@ -347,10 +369,11 @@ RF.mod('02-hud', function (RF) {
   };
 
   /* ======================================================================
-     4 + 5 — TOAST DIRECTOR AND THE LOG
-     Core builds the toast and emits it; we adopt the payload, drop core's
-     node and render our own so we own dwell, order and grouping. Every other
-     'toast' listener still sees the original event exactly once, first.
+     4 + 5 — TOAST DIRECTOR AND MESSAGES
+     Core builds the toast and emits it; we adopt the payload, drop core's node
+     and render our own, so we own dwell, order and grouping. Every other
+     'toast' listener still sees the original event exactly once, first — and
+     if the strip is switched off, core's own stack simply keeps working.
      ====================================================================== */
   const toastEl = RF.el('<div class="hd-l hd-toasts"></div>');
   const MAXLIVE = 4;
@@ -402,6 +425,7 @@ RF.mod('02-hud', function (RF) {
       + '<b class="hd-tn" style="display:none">×1</b></div>', toastEl);
     item.el = d; item.nEl = d.querySelector('.hd-tn');
     item.until = RF.clock + item.dwell;
+    if (item.n > 1 && item.nEl) { item.nEl.style.display = ''; item.nEl.textContent = '×' + item.n; }
     liveT.push(item);
   };
   const bump = function (item) {
@@ -420,7 +444,7 @@ RF.mod('02-hud', function (RF) {
   /* prio 80: run late, so any mod that wants the raw toast (or wants to claim
      it outright) has already had its turn on the untouched element. */
   RF.on('toast', function (m, k, el) {
-    if (!el || !el.parentNode) return;
+    if (!cfg.toasts || !el || !el.parentNode) return;
     const html = el.innerHTML; el.remove();
     guard('toast', function () { ingest(html, k); });
   }, 80);
@@ -435,14 +459,14 @@ RF.mod('02-hud', function (RF) {
     while (free-- > 0 && queue.length) spawnToast(queue.shift());
   };
 
-  /* Achievements and first sightings deserve a log line even when the toast
-     that carried them was one of a hundred that minute. */
+  /* achievements deserve a line even when the toast that carried them was one
+     of a hundred that minute */
   RF.on('ach', function (id, name, rw) { remember(pix('trophy', 13) + ' ' + name + ' · +◈' + fmt(rw || 0), 'gold'); });
 
   /* ======================================================================
      6 — WORLD-SPACE FLOATS
      Numbers belong over the thing that made them. Pooled divs, one hoisted
-     vector, projection done in the frame hook and nothing allocated per frame.
+     vector, projection in the frame hook, nothing allocated per frame.
      ====================================================================== */
   const floatsEl = RF.el('<div class="hd-l hd-floats hud"></div>');
   const POOLN = 22, pool = [], _v = new RF.THREE.Vector3();
@@ -453,6 +477,7 @@ RF.mod('02-hud', function (RF) {
   }
   let poolAt = 0;
   const floatAt = function (x, y, z, html, col, big) {
+    if (!cfg.floats) return;
     let f = null;
     for (let i = 0; i < POOLN; i++) { const c = pool[(poolAt + i) % POOLN]; if (!c.live) { f = c; poolAt = (poolAt + i + 1) % POOLN; break; } }
     if (!f) { f = pool[poolAt]; poolAt = (poolAt + 1) % POOLN; }   // steal the oldest slot rather than drop the news
@@ -477,8 +502,8 @@ RF.mod('02-hud', function (RF) {
   RF.on('pearls', function (n) { if (!(n > 0)) return;
     const p = RF.pWorld; floatAt(p.x, p.y + 2.6, p.z, '+' + n + ' ◉', '#39d7c4', n >= 8); });
   RF.on('dug', function () { const p = RF.pWorld; floatAt(p.x, p.y + 1.6, p.z, pix('map', 13) + ' dug', '#ffcf5c', true); });
-  /* Online, mining is resolved on the server and never fires 'mined' — the
-     server's "+3 Iron" toast is the only signal, so read that instead. */
+  /* Online, mining resolves on the server and never fires 'mined' — the "+3 Iron"
+     toast is the only signal there, so read that instead. */
   const ORE_TOAST = /^\+(\d+)\s+(Wood|Coal|Iron|Gold|Diamond)\b/;
   RF.on('toast', function (m, k, el) {
     if (!el || !RF.online) return;
@@ -522,7 +547,7 @@ RF.mod('02-hud', function (RF) {
     add(RF.CASINO_POS, 'wheel', '#ff5d7a', 'the eel');
     add(RF.HARBOR_POS, 'boat', '#39d7c4', 'harbor');
     add(RF.PORTAL_POS, 'island', '#c490ff', 'portal');
-    /* the X moves with the save, so it gets a slot that is filled per frame */
+    /* the X moves with the save, so it gets a slot filled per frame */
     const el = RF.el('<div class="hd-w" style="color:#ffd24f">'
       + '<span class="hd-wi"><i class="hd-wc"></i>' + pix('map', 14) + '</span>'
       + '<span class="hd-wd">0m</span></div>', wpEl);
@@ -533,8 +558,8 @@ RF.mod('02-hud', function (RF) {
   let wpTextT = 0;
 
   const tickWaypoints = function (dt) {
-    if (!RF.running || RF.panelOpen) { if (wpEl.style.display !== 'none') wpEl.style.display = 'none'; return; }
-    if (wpEl.style.display === 'none') wpEl.style.display = '';
+    if (!RF.running || RF.panelOpen || !cfg.waypoints) { if (!wpEl.classList.contains('hd-off')) wpEl.classList.add('hd-off'); return; }
+    wpEl.classList.remove('hd-off');
     const W = window.innerWidth, H = window.innerHeight, cam = RF.camera;
     const L = 238, R = W - 152, T = 100, B = H - 152;
     const cx = (L + R) / 2, cy = (T + B) / 2;
@@ -571,25 +596,18 @@ RF.mod('02-hud', function (RF) {
 
   /* ======================================================================
      8 — BITE FORECAST
-     The core dial already counts down to dusk. What it cannot say is what
-     the dark is worth, so this names the species the flip actually brings.
+     The core dial already counts down to dusk. What it cannot say is what the
+     dark is worth, so this names the species the flip actually brings.
      ====================================================================== */
   const castEl = RF.el('<div class="hd-cast hd-glass"></div>', colEl);
-  /* DAY_LEN is not on the mod surface, so measure it: the dayT rate over a
-     few seconds settles instantly and survives any future retuning. */
+  /* DAY_LEN is not on the mod surface, so measure it: the dayT rate settles in
+     a few seconds and survives any future retuning of the day length. */
   let dayLen = 420, lastDayT = RF.dayT, dAcc = 0, tAcc = 0;
   const measureDay = function (dt) {
     if (RF.WORLD.cave) return;
     const d = RF.dayT - lastDayT; lastDayT = RF.dayT;
     if (d > 0 && d < 0.02) { dAcc += d; tAcc += dt;
       if (tAcc > 4) { const est = tAcc / dAcc; if (est > 60 && est < 3000) dayLen = dayLen * 0.6 + est * 0.4; tAcc = 0; dAcc = 0; } }
-  };
-  const condNow = function (c) {
-    if (!c) return true;
-    if (c === 'night') return F.isNight();
-    if (c === 'rain') return RF.weather === 'rain' || RF.weather === 'storm';
-    if (c === 'storm') return RF.weather === 'storm';
-    return true;
   };
   const gated = function (cond) {
     const t = RF.WORLD.fish || [], out = [];
@@ -605,8 +623,8 @@ RF.mod('02-hud', function (RF) {
   const nightList = gated('night'), rainList = gated('rain'), stormList = gated('storm');
 
   const paintCast = function () {
-    if (!RF.running) { castEl.style.display = 'none'; return; }
-    castEl.style.display = '';
+    if (!RF.running || !cfg.forecast) { castEl.classList.add('hd-off'); return; }
+    castEl.classList.remove('hd-off');
     if (RF.WORLD.cave) {
       castEl.innerHTML = '<div class="hd-c1" style="color:#57b7ff">' + pix('moon', 13) + ' endless dark</div>'
         + '<div class="hd-c2">no dawn reaches down here — every glow species is <b>always up</b>.</div>';
@@ -616,7 +634,8 @@ RF.mod('02-hud', function (RF) {
     const toNight = ((0.76 - dayT) + 1) % 1, toDay = ((0.12 - dayT) + 1) % 1;
     const left = (night ? toDay : toNight) * dayLen;
     const soon = left < 45;
-    const head = night ? pix('moon', 13) + ' night water' : (dayT > 0.6 || dayT < 0.2 ? pix('dusk', 13) + ' low sun' : pix('sun', 13) + ' daylight');
+    const head = night ? pix('moon', 13) + ' night water'
+      : (dayT > 0.6 || dayT < 0.2 ? pix('dusk', 13) + ' low sun' : pix('sun', 13) + ' daylight');
     let body;
     if (night) body = nightList.length
       ? '<b>' + nightList.length + '</b> species only surface now — ' + names(nightList, 2) + '.'
@@ -644,7 +663,8 @@ RF.mod('02-hud', function (RF) {
      ====================================================================== */
   const BLOCKS = /[▰▱]{3,}/g;
   RF.modify('hint', function (h) {
-    if (typeof h !== 'string' || h.indexOf('▰') < 0 && h.indexOf('▱') < 0) return h;
+    if (!cfg.hintbars || typeof h !== 'string') return h;
+    if (h.indexOf('▰') < 0 && h.indexOf('▱') < 0) return h;
     return h.replace(BLOCKS, function (run) {
       let done = 0;
       for (let i = 0; i < run.length; i++) if (run[i] === '▰') done++;
@@ -656,24 +676,21 @@ RF.mod('02-hud', function (RF) {
 
   /* ======================================================================
      10 — THE NUDGE
-     One line, bottom right, that answers "what now" from the state you are
-     actually in. It shows for eleven seconds, then shuts up for eighteen,
-     never repeats itself back to back, and a click buys five minutes of quiet.
+     One line, bottom right, answering "what now" from the state you are
+     actually in. Eleven seconds on, eighteen off, never the same suggestion
+     twice running, and a click buys five minutes of quiet.
      ====================================================================== */
   const nudgeEl = RF.el('<div class="hd-l hd-nudge hd-glass hud">'
     + '<div class="hd-nk">NEXT</div><div class="hd-nt"></div></div>');
   const nudgeTx = nudgeEl.querySelector('.hd-nt');
-  const STORE = '02-hud';
-  let snoozeUntil = 0, lastNudge = '', nudgeHideAt = 0, nudgeNextAt = 0;
-  guard('nudge-load', function () { const s = RF.store.get(STORE, null); if (s && s.snooze) snoozeUntil = +s.snooze || 0; });
+  let lastNudge = '', nudgeHideAt = 0, nudgeNextAt = 0;
   nudgeEl.addEventListener('click', function () {
-    snoozeUntil = Date.now() + 300000;
-    RF.store.set(STORE, { snooze: snoozeUntil });
-    nudgeEl.classList.remove('on'); nudgeHideAt = 0; nudgeNextAt = RF.clock + 1e9;
+    snoozeUntil = Date.now() + 300000; persist();
+    nudgeEl.classList.remove('on'); nudgeHideAt = 0;
     try { F.toast('quiet for five minutes'); } catch (e) {}
   });
   /* mirrors ROD_BASE/upCost in game.js §9 — informational only, so drift here
-     costs nothing more than a slightly early suggestion */
+     costs nothing worse than a slightly early suggestion */
   const rodCost = function () { return Math.round(250 * Math.pow(1.75, S.rodLvl - 1)); };
 
   const nudges = function () {
@@ -698,7 +715,7 @@ RF.mod('02-hud', function (RF) {
   };
 
   const tickNudge = function () {
-    if (!RF.running || RF.panelOpen || logOpen || Date.now() < snoozeUntil) { nudgeEl.classList.remove('on'); return; }
+    if (!RF.running || RF.panelOpen || logOpen || !cfg.nudge || Date.now() < snoozeUntil) { nudgeEl.classList.remove('on'); return; }
     const now = RF.clock;
     if (nudgeHideAt > 0) { if (now >= nudgeHideAt) { nudgeEl.classList.remove('on'); nudgeHideAt = 0; nudgeNextAt = now + 18; } return; }
     if (now < nudgeNextAt) return;
@@ -711,11 +728,11 @@ RF.mod('02-hud', function (RF) {
   };
 
   /* ======================================================================
-     11 — MINIMAP OVERRIDE
+     11 — MINIMAP
      Core draws a flat four-colour blob with six dots. This rebuilds the base
-     with a cheap hillshade (so the isle reads as terrain), then adds the
-     things you actually navigate by: live ore, the other anglers, a facing
-     wedge, and an X that pulses harder the closer you get.
+     with a cheap hillshade (so the isle reads as terrain) and then adds what
+     you actually navigate by: live ore, the other anglers, a facing wedge and
+     an X that beats faster the closer you get.
      ====================================================================== */
   let mmBase = null, mmDead = false, mmLX = 1e9, mmLZ = 1e9, mmNext = 0;
   const buildBase = function () {
@@ -729,14 +746,14 @@ RF.mod('02-hud', function (RF) {
       // hillshade against a north-west sun: two neighbour reads, no noise, real relief
       if (t !== 'seabed') { const dh = h - hm[i > 0 ? i - 1 : 0][j > 0 ? j - 1 : 0];
         col = F.shade(col, clamp(1 + dh * 0.11, 0.68, 1.32)); }
-      else { const dep = clamp((2 - h) * 0.09, 0, 0.3); col = F.shade(col, 1 - dep); }
+      else { col = F.shade(col, 1 - clamp((2 - h) * 0.09, 0, 0.3)); }
       g.fillStyle = col; g.fillRect(i, j, 1, 1);
     }
     return c;
   };
 
   RF.override.minimap = function (x, canvas) {
-    if (mmDead) return false;
+    if (mmDead || !cfg.minimap) return false;
     try {
       if (!mmBase) mmBase = buildBase();
       const W = canvas.width, N = RF.N, HALF = RF.HALF, p = RF.pWorld;
@@ -750,35 +767,36 @@ RF.mod('02-hud', function (RF) {
       x.imageSmoothingEnabled = false;
       x.drawImage(mmBase, 0, 0, W, W);
       // night cools the whole plate so the lit markers read at a glance
-      if (!RF.WORLD.cave && F.isNight()) { x.fillStyle = 'rgba(16,28,56,.42)'; x.fillRect(-W, -W, W * 3, W * 3); }
-      else if (RF.WORLD.cave) { x.fillStyle = 'rgba(6,10,16,.36)'; x.fillRect(-W, -W, W * 3, W * 3); }
+      if (RF.WORLD.cave) { x.fillStyle = 'rgba(6,10,16,.36)'; x.fillRect(-W, -W, W * 3, W * 3); }
+      else if (F.isNight()) { x.fillStyle = 'rgba(16,28,56,.42)'; x.fillRect(-W, -W, W * 3, W * 3); }
       // live ore: the quarry draws itself, and a worked-out patch visibly empties
       const nodes = RF.oreNodes;
       for (let i = 0; i < nodes.length; i++) { const n = nodes[i];
         if (!n.alive) continue;
         const info = RF.ORE_INFO[n.type];
         x.fillStyle = info ? info.dot : '#cfd8d6';
-        const s = n.geode ? 2.6 : 1.7;
+        const s = n.geode ? 3.2 : 2.2;
         x.fillRect(M(n.x) - s / 2, M(n.z) - s / 2, s, s); }
-      const poi = function (pos, col, r) { if (!pos) return;
-        x.fillStyle = col; x.beginPath(); x.arc(M(pos.x), M(pos.z), r, 0, TAU); x.fill();
-        x.strokeStyle = 'rgba(6,16,20,.85)'; x.lineWidth = 1.4; x.stroke(); };
+      const dot = function (px3, py3, col, r, ring) {
+        x.fillStyle = col; x.beginPath(); x.arc(px3, py3, r, 0, TAU); x.fill();
+        if (ring) { x.strokeStyle = 'rgba(6,16,20,.85)'; x.lineWidth = 1.4; x.stroke(); } };
+      const poi = function (pos, col, r) { if (pos) dot(M(pos.x), M(pos.z), col, r, true); };
       poi(RF.TRADER_POS, '#ffcf5c', 4);
       poi(RF.CASINO_POS, '#ff5d7a', 4);
       poi(RF.PORTAL_POS, '#c490ff', 4);
       poi(RF.HARBOR_POS, '#39d7c4', 4);
       // other anglers, so a crowded isle looks crowded
-      if (RF.peers && RF.peers.size) { x.fillStyle = '#7fdcff';
-        RF.peers.forEach(function (q) { x.beginPath(); x.arc(M(q.x), M(q.z), 2.4, 0, TAU); x.fill(); }); }
+      if (RF.peers && RF.peers.size) RF.peers.forEach(function (q) {
+        if (q && isFinite(q.x) && isFinite(q.z)) dot(M(q.x), M(q.z), '#7fdcff', 3, true); });
       const tr = S.treasure;
       if (tr && tr.w === RF.worldKey) {
         const tx = tr.i / N * W, ty = tr.j / N * W;
         const d = Math.hypot(tr.i - HALF - p.x, tr.j - HALF - p.z);
         const urgency = clamp(1 - d / 40, 0.15, 1);              // it beats faster as you close in
         const pulse = calm ? 1 : 0.55 + 0.45 * Math.sin(RF.clock * (2 + urgency * 6));
-        x.strokeStyle = '#ffd24f'; x.lineWidth = 2 + urgency;
+        x.strokeStyle = '#ffd24f'; x.lineWidth = 2.4 + urgency;
         x.globalAlpha = 0.45 + pulse * 0.55;
-        const a = 4 + urgency * 2;
+        const a = 4.5 + urgency * 2;
         x.beginPath(); x.moveTo(tx - a, ty - a); x.lineTo(tx + a, ty + a);
         x.moveTo(tx + a, ty - a); x.lineTo(tx - a, ty + a); x.stroke();
         x.globalAlpha = 1;
@@ -791,10 +809,9 @@ RF.mod('02-hud', function (RF) {
       x.lineTo(px2 + (dx * 0.94 - dz * 0.34) * 13, py2 + (dz * 0.94 + dx * 0.34) * 13);
       x.lineTo(px2 + (dx * 0.94 + dz * 0.34) * 13, py2 + (dz * 0.94 - dx * 0.34) * 13);
       x.closePath(); x.fill();
-      x.fillStyle = '#ffffff'; x.beginPath(); x.arc(px2, py2, 3.6, 0, TAU); x.fill();
-      x.strokeStyle = '#0a1418'; x.lineWidth = 1.6; x.stroke();
+      dot(px2, py2, '#ffffff', 3.6, true);
       x.restore();
-      // rim: a hairline ring and a north tick, drawn unrotated so north stays put
+      // rim: a hairline ring and a north tick, unrotated so north stays put
       x.strokeStyle = 'rgba(255,255,255,.10)'; x.lineWidth = 1;
       x.beginPath(); x.arc(W / 2, W / 2, W / 2 - 3, 0, TAU); x.stroke();
       x.fillStyle = 'rgba(232,244,242,.55)';
@@ -804,7 +821,7 @@ RF.mod('02-hud', function (RF) {
   };
 
   /* ======================================================================
-     KEYS — L opens the log. Claimed only when we really handled it.
+     KEYS — L replays the messages. Claimed only when we really handled it.
      ====================================================================== */
   RF.on('keydown', function (e) {
     if (e.code !== 'KeyL' || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -816,22 +833,55 @@ RF.mod('02-hud', function (RF) {
   });
 
   /* ======================================================================
+     VISIBILITY + API — a settings panel drives these. Anything switched off
+     falls back to core behaviour rather than leaving a hole.
+     ====================================================================== */
+  const applyVis = function () {
+    colEl.classList.toggle('hd-off', !cfg.rail && !cfg.forecast);
+    railEl.classList.toggle('hd-off', !cfg.rail);
+    castEl.classList.toggle('hd-off', !cfg.forecast);
+    wpEl.classList.toggle('hd-off', !cfg.waypoints);
+    floatsEl.classList.toggle('hd-off', !cfg.floats);
+    logbtn.classList.toggle('hd-off', !cfg.toasts);
+    if (!cfg.toasts) { setLog(false); logEl.classList.add('hd-off'); } else logEl.classList.remove('hd-off');
+    if (!cfg.nudge) nudgeEl.classList.remove('on');
+    if (bucketFill) bucketFill.classList.toggle('hd-off', !cfg.counters);
+    mmLX = 1e9;                                  // force the map to repaint under the new setting
+  };
+  applyVis();
+
+  RF.api = RF.api || {};
+  RF.api.hud = {
+    list: function () { const out = [];
+      for (let i = 0; i < SECTIONS.length; i++) out.push({ id: SECTIONS[i].id, label: SECTIONS[i].label, on: !!cfg[SECTIONS[i].id] });
+      return out; },
+    get: function (id) { return !!cfg[id]; },
+    set: function (id, on) {
+      if (!Object.prototype.hasOwnProperty.call(DEF, id)) return false;
+      cfg[id] = on ? 1 : 0; persist(); applyVis(); return !!cfg[id]; },
+    toggle: function (id) { return this.set(id, !cfg[id]); },
+    reset: function () { for (const k in DEF) cfg[k] = DEF[k]; persist(); applyVis(); },
+    openMessages: function () { setLog(true); },
+    log: function () { return logbook.slice(); }
+  };
+
+  /* ======================================================================
      DRIVE — one frame hook, everything else on a throttle.
      ====================================================================== */
   RF.on('frame', function (dt) {
-    if (dt > 0.25) dt = 0.25;                 // a tab that was backgrounded must not teleport a tween
+    if (dt > 0.25) dt = 0.25;                 // a backgrounded tab must not teleport a tween
     if (comboT > 0 && (comboT -= dt) <= 0) combo = 0;
-    guard('f-count', function () { tickCounters(dt); });
-    guard('f-toast', function () { tickToasts(); });
-    guard('f-float', function () { tickFloats(dt); });
+    if (cfg.counters) guard('f-count', function () { tickCounters(dt); });
+    if (cfg.toasts) guard('f-toast', function () { tickToasts(); });
+    if (cfg.floats) guard('f-float', function () { tickFloats(dt); });
     guard('f-wp', function () { tickWaypoints(dt); });
-    guard('f-day', function () { measureDay(dt); });
+    if (cfg.forecast) guard('f-day', function () { measureDay(dt); });
   });
   RF.every(0.25, function () { guard('t-rail', paintRail); });
   RF.every(1.0, function () { guard('t-cast', paintCast); guard('t-nudge', tickNudge); });
   RF.every(5.0, function () { if (logOpen) guard('t-log', paintLog); });
 
-  /* first paint so nothing appears blank for a quarter second */
+  /* first paint so nothing sits blank for a quarter second */
   guard('boot', function () { paintRail(); paintCast(); paintBadge(); });
   RF.on('start', function () {
     guard('start', function () {

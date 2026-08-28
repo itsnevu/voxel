@@ -260,7 +260,7 @@ RF.mod('05-progress', function (RF) {
   const LADDER = [];
   function rung(cat, icon, cur, rows) {
     rows.forEach((r, i) => LADDER.push({ id: cat + (i + 1), cat: cat, icon: icon, tier: i,
-      name: r[0], need: r[1], flav: r[2], cur: cur, rw: MS_RW[i] })); }
+      name: r[0], need: r[1], flav: r[2], cur: r[3] || cur, rw: MS_RW[i] })); }
 
   rung('Fishing', 'fish', () => st().caught | 0, [
     ['Wet Line', 10, 'Ten fish and the rod stops feeling borrowed.'],
@@ -306,7 +306,8 @@ RF.mod('05-progress', function (RF) {
     ['Second Isle', 2, 'The horizon turned out to have things on it.'],
     ['Third Charter', 3, 'Ash in the rigging, and worth it.'],
     ['Full Archipelago', 4, 'Every isle on the chart is yours to sail to.'],
-    ['Nowhere Left', 4, 'Four isles claimed · the map has no more blanks.']]);
+    ['Deeds of Record', 6, 'Six deeds on the Isle Ledger · a trophy wall with hash cosplay.',
+      () => Object.keys(S.deeds || {}).length]]);
   rung('The Fleet', 'boat', () => S.boatLvl | 0, [
     ['A Real Hull', 1, 'The raft goes in the rafters, not the water.'],
     ['Under Sail', 2, 'Painted hull, single sail, no excuses.'],
@@ -578,12 +579,11 @@ RF.mod('05-progress', function (RF) {
   }
 
   function geodeWatch(oreDelta) {
-    if (!geodeSeen) { geodeSeen = RF.oreNodes.filter(n => n.geode); }
+    if (!geodeSeen) geodeSeen = RF.oreNodes.filter(n => n.geode).map(n => ({ n: n, was: !!n.alive }));
     let cracked = 0;
-    for (const n of geodeSeen) {
-      const was = n._rfpAlive === undefined ? true : n._rfpAlive;
-      if (was && !n.alive) cracked++;
-      n._rfpAlive = !!n.alive;
+    for (const g of geodeSeen) {
+      if (g.was && !g.n.alive) cracked++;
+      g.was = !!g.n.alive;
     }
     // only trust it on a tick that actually paid ore out: a refused server swing
     // puts the node straight back and must not count as a crack
@@ -683,6 +683,8 @@ RF.mod('05-progress', function (RF) {
 
   function applyTheme() {
     if (!root) return;
+    // a wiped shop (or a hand-edited store) must never leave the board on a theme it does not own
+    if (data.theme !== 'deep' && !data.own['th_' + data.theme]) data.theme = 'deep';
     root.setAttribute('data-rfp-theme', data.theme || 'deep');
     buildBadge();
   }
@@ -702,7 +704,7 @@ RF.mod('05-progress', function (RF) {
       '<div class="rf-prog-tabs" id="rf-prog-tabs"></div>' +
       '<div class="rf-prog-body" id="rf-prog-pane"></div>' +
       '<div class="rf-prog-foot"><span>RENOWN IS NOT COINS</span>' +
-        '<span id="rf-prog-foot2">it never converts, and nothing it buys touches <b>luck</b>, <b>yield</b> or <b>price</b></span></div>' +
+        '<span>it never converts, and nothing it buys touches <b>luck</b>, <b>yield</b> or <b>price</b></span></div>' +
     '</div></div>');
 
   const $ = id => document.getElementById(id);
@@ -814,7 +816,6 @@ RF.mod('05-progress', function (RF) {
         '<span class="sd">' + esc(it.d) + '</span></span>' +
         (owned ? '' : '<span class="sc">' + fmt(it.cost) + '</span>') + btn + '</div>';
     }
-    if (!data.own.th_brass && !data.own.th_coral && !data.own.th_aurora && data.theme !== 'deep') data.theme = 'deep';
     h += '<div class="rf-prog-sec">Recent ledger</div>';
     if (!data.hist.length) h += '<div class="rf-prog-empty">Nothing on the ledger yet.</div>';
     else for (const e of data.hist.slice(0, 14)) {
@@ -838,13 +839,11 @@ RF.mod('05-progress', function (RF) {
       const rn = $('rf-prog-ren'); if (rn) rn.textContent = fmt(data.ren);
       const rb = $('rf-prog-rankbar'); if (rb) rb.style.width = (rk.progress * 100).toFixed(1) + '%';
 
-      const nClaim = renownClaimable().length;
       const tb = $('rf-prog-tabs');
       if (tb) tb.innerHTML = TABS.map(t => {
         let pip = '';
         if (t[0] === 'today') { const n = data.dq.filter(q => q.p >= q.n && !q.cl).length; if (n) pip = '<span class="pip">' + n + '</span>'; }
         if (t[0] === 'week') { const n = data.wq.filter(q => q.p >= q.n && !q.cl).length; if (n) pip = '<span class="pip">' + n + '</span>'; }
-        if (t[0] === 'renown' && !nClaim && 0) pip = '';
         return '<button class="rf-prog-tab' + (tab === t[0] ? ' sel' : '') + '" type="button" data-rfp-tab="' + t[0] + '">' +
           t[1] + pip + '</button>';
       }).join('');
@@ -927,7 +926,7 @@ RF.mod('05-progress', function (RF) {
       const n = data.dq.filter(q => q.p >= q.n && !q.cl).length;
       if (n) { data.expWarn = d; touch();
         say({ level: 'warn', title: 'Claim before midnight',
-          body: n + ' finished daily' + (n > 1 ? 'ies' : '') + ' expires in ' + dur(left) + ' · press Q',
+          body: n + (n > 1 ? ' finished dailies expire' : ' finished daily expires') + ' in ' + dur(left) + ' · press Q',
           tag: 'rf-progress-expiry', ttl: 9000 }); }
     }
   } catch (e) { RF.err('05-progress:tick', e, 'warn'); } });

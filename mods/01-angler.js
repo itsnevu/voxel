@@ -1,740 +1,1390 @@
-/* 01-angler — the craft of fishing: place the bait, read the water, feel the fish, land it.
-   1. Charged cast — hold E to load the rod, A/D to swing the aim, release to place the bobber.
-   2. Sweet-spot release — a rod-wide green band on the power meter; hit it for a clean, quiet cast.
-   3. Aim ring — a live target on the water that tells you what is under it before you commit.
-   4. Hot water — a fixed map of ledges, weed beds and wrecks per isle, found by casting into them.
-   5. The shoal — a visible school that wanders the bay, boils at the surface, and pays to chase.
-   6. Bite tells — nibbles before the take, and a rod that reads the weight of what is down there.
-   7. Perfect hookset — a shrinking ring at the bite; set it early and the fish starts tired.
-   8. A fish that runs and tires — stamina, named runs, give-line-to-win, a spent fish that comes easy.
-   9. The drag dial (Q) — light / medium / heavy, and how much you can safely carry is what your rod buys.
-  10. Rhythm and the fight report — a run of clean fights, and a one-line account of every fight you finish.
+/* ============================================================================
+   01-angler — depth for the core loop.
 
-   HOW IT LAYERS: core's updateFishing() is left running exactly as written — it still
-   owns the states, the bait spend, the bucket cap, the streak, the server catch and the
-   hero's animation. This file rides on top of `RF.fishing` from the `tick` hook (which
-   fires AFTER updateFishing every frame), pinning f.cast during the charge, retargeting
-   f.tx/f.tz before the line lands, and adding to f.tens / f.reel during the fight. Every
-   threshold that decides anything — the snap at tens>=1, the landing at reel>=1 — is
-   still core's, so nothing in here can invent a fish or a coin. */
+   Press E, wait, press E, hold E was the whole loop. Ten things are added here.
+   Five make the loop READABLE:
+
+     ·  1 the tell      — a shadow slides in under the water before the bite
+     ·  2 the gauge     — the tug-of-war drawn properly instead of as ASCII bars
+     ·  3 shoals        — gulls mark water that is genuinely worth casting into
+     ·  4 water reading — depth, biome, and every species that can bite RIGHT NOW
+     ·  5 bait command  — swap what is on the hook without walking to the Market
+
+   Five make it a SKILL, so that the water the card describes is water you can
+   actually choose, and the fight the gauge draws is a fight you can win badly:
+
+     ·  6 the charged cast  — hold E to load the rod, A/D to swing the aim,
+                              release to place the bobber where you want it
+     ·  7 the clean cast    — a sweet-spot band on the power meter, as wide as
+                              your rod is good; hit it and the line lands soft
+     ·  8 the aim ring      — a live target on the water reading depth, bottom
+                              and whether you are dropping it under the gulls
+     ·  9 the hookset       — a shrinking ring at the take; set it early and the
+                              fish starts tired, set it late and you start loaded
+     · 10 stamina, runs
+     and drag (Shift+B)  — a fish with a fight left in it that you burn down
+                              by working it or by giving line, and three drag
+                              settings whose safe ceiling IS the rod ladder
+
+   Nothing here rolls a fish or grants a coin. 6-10 ride on top of core's own
+   `updateFishing()` from the frame hook, which runs after it every frame: the
+   charge pins `f.cast`, the aim rewrites `f.tx/f.tz` before the line lands, and
+   the fight only ever ADDS to `f.tens`/`f.reel`. Core still owns the snap at
+   tens>=1 and the landing at reel>=1, so core still decides everything.
+   ========================================================================== */
 RF.mod('01-angler', function (RF) {
+  'use strict';
 
-  const F = RF.fn, T = RF.THREE, S = RF.state;
-  const clamp = F.clamp, lerp = F.lerp, rand = F.rand;
-  const RORD = RF.RORDER, WT = RF.WATER_TOP, N = RF.N, HALF = RF.HALF;
-  const HM = RF.heightMap, FISH = RF.fishing, K = RF.keys, BOB = RF.bobber;
-  const sin = Math.sin, cos = Math.cos, atan2 = Math.atan2, hyp = Math.hypot, PI = Math.PI;
-  const REDUCE = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-  const MAXLVL = RF.MAXLVL || 10;
+  const TH = RF.THREE, fn = RF.fn;
+  const clamp = fn.clamp, lerp = fn.lerp, fmt = fn.fmt;
+  const RARC = RF.RAR || {}, RORD = RF.RORDER || {};
+  const RAR_DOWN = ['legendary', 'epic', 'rare', 'uncommon', 'common'];
+  const TAU = RF.TAU || Math.PI * 2;
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  const esc = s => String(s == null ? '' : s).replace(/[<>&]/g, c => c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&amp;');
 
-  /* ================= persistence — mine only, never RF.state ================= */
-  const KEY = '01-angler';
-  const raw = RF.store.get(KEY, null) || {};
-  const LOG = {
-    landed: Math.max(0, raw.landed | 0), snaps: Math.max(0, raw.snaps | 0),
-    perfect: Math.max(0, raw.perfect | 0), missed: Math.max(0, raw.missed | 0),
-    bestR: Math.max(0, raw.bestR | 0), drag: clamp(raw.drag | 0, 0, 2),
-    found: (raw.found && typeof raw.found === 'object') ? raw.found : {} };
-  let logDirty = false;
-  const mark = () => { logDirty = true; };
-  const flush = () => { if (logDirty) { logDirty = false; RF.store.set(KEY, LOG); } };
-  RF.every(8, flush);
-  window.addEventListener('beforeunload', flush);
+  /* Two game.js constants RF does not hand out: the rarity luck curve and the
+     rod's luck slope. They are used for ONE thing — the "est." percentages in
+     the card. Everything about which species are listed comes from the live
+     fishPool(), so a drift here dulls the odds column and nothing else. */
+  const LUCK_W = { common: -0.55, uncommon: -0.15, rare: 0.9, epic: 1.7, legendary: 2.6 };
+  const luckWeight = (rar, luck) => luck > 0 ? Math.max(0.05, 1 + luck * (LUCK_W[rar] || 0)) : 1;
+  const rodLuckOf = lvl => 0.18 * (clamp((lvl | 0) || 1, 1, RF.MAXLVL || 10) - 1);
 
-  /* ================= look ================= */
-  RF.css([
-'#agRod{position:fixed;left:50%;bottom:126px;z-index:5;width:min(346px,84vw);pointer-events:none;',
-'  transform:translateX(-50%) translateY(7px);opacity:0;transition:opacity .16s ease,transform .16s ease;',
-'  background:var(--glass-hud);backdrop-filter:blur(14px) saturate(1.6);-webkit-backdrop-filter:blur(14px) saturate(1.6);',
-'  border:1px solid var(--glass-bd);border-radius:11px;padding:9px 12px 10px;',
-'  box-shadow:var(--glass-hi),0 8px 24px rgba(2,8,10,.35);}',
-'#agRod.on{opacity:1;transform:translateX(-50%) translateY(0);}',
-'#agRod .ag-hd{display:flex;align-items:baseline;gap:8px;margin-bottom:7px;}',
-'#agRod .ag-ttl{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:12px;letter-spacing:.22em;',
-'  color:var(--teal);text-transform:uppercase;white-space:nowrap;}',
-'#agRod .ag-note{flex:1;text-align:right;font-size:10.5px;color:var(--muted);',
-'  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
-'#agRod .ag-row{display:flex;align-items:center;gap:8px;margin-top:5px;}',
-'#agRod .ag-row.off{display:none;}',
-'#agRod .ag-lab{flex:0 0 44px;font-size:9px;letter-spacing:.2em;color:var(--lab);text-transform:uppercase;}',
-'#agRod .ag-bar{position:relative;flex:1;height:8px;border-radius:5px;overflow:hidden;',
-'  background:rgba(255,255,255,.08);border:1px solid var(--glass-bd-soft);}',
-'#agRod .ag-bar>i{position:absolute;left:0;top:0;bottom:0;right:0;transform-origin:left center;',
-'  transform:scaleX(0);background:var(--teal);transition:background .16s linear;}',
-'#agRod .ag-bar>b{position:absolute;top:0;bottom:0;left:0;width:0;display:none;',
-'  background:rgba(116,224,138,.30);box-shadow:inset 0 0 0 1px rgba(116,224,138,.8);}',
-'#agRod .ag-bar.band>b{display:block;}',
-'#agRod .ag-val{flex:0 0 52px;text-align:right;font-family:"Chakra Petch",sans-serif;font-weight:700;',
-'  font-size:11.5px;color:var(--ink);font-variant-numeric:tabular-nums;}',
-'#agRod .ag-ft{margin-top:8px;font-size:10.5px;color:var(--faint);',
-'  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
-'#agRod .ag-ft b{color:var(--gold);font-weight:600;}',
-'#agRod.hot{border-color:rgba(255,207,92,.5);}',
-'#agRod.danger{border-color:rgba(255,93,122,.6);box-shadow:var(--glass-hi),0 8px 24px rgba(255,93,122,.22);}',
-'#agRep{position:fixed;left:50%;bottom:126px;z-index:6;transform:translateX(-50%) translateY(8px);',
-'  opacity:0;pointer-events:none;transition:opacity .2s ease,transform .2s ease;',
-'  font-size:11.5px;color:var(--ink);white-space:nowrap;max-width:92vw;overflow:hidden;text-overflow:ellipsis;',
-'  background:var(--glass-strong);backdrop-filter:blur(14px) saturate(1.6);-webkit-backdrop-filter:blur(14px) saturate(1.6);',
-'  border:1px solid var(--glass-bd);border-radius:10px;padding:7px 13px;',
-'  box-shadow:var(--glass-hi),0 6px 18px rgba(2,8,10,.35);}',
-'#agRep.on{opacity:1;transform:translateX(-50%) translateY(0);}',
-'#agRep.bad{border-color:var(--rose);} #agRep.good{border-color:var(--teal);}',
-'#agRep .k{font-family:"Chakra Petch",sans-serif;font-weight:700;color:var(--gold);}',
-'#agRep .d{color:var(--faint);}',
-'#agRhy{position:fixed;left:12px;top:300px;z-index:5;display:none;align-items:center;gap:8px;',
-'  background:var(--glass-hud);backdrop-filter:blur(14px) saturate(1.6);-webkit-backdrop-filter:blur(14px) saturate(1.6);',
-'  border:1px solid var(--glass-bd);border-radius:11px;padding:7px 11px;',
-'  box-shadow:var(--glass-hi),0 8px 24px rgba(2,8,10,.35);}',
-'#agRhy.on{display:flex;}',
-'#agRhy .lab{font-size:9px;letter-spacing:.24em;color:var(--lab);}',
-'#agRhy .n{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:14px;color:var(--gold);',
-'  font-variant-numeric:tabular-nums;}',
-'#agRhy .t{font-size:10px;color:var(--teal);letter-spacing:.06em;}',
-'@media (prefers-reduced-motion: reduce){#agRod,#agRep{transition:opacity .16s ease;}}'
-  ].join('\n'), '01-angler-css');
+  /* Mirrors core's condOK() using only published getters, so the card can name
+     WHY a species is greyed out rather than just hiding it. */
+  const condOK = c => !c ? true
+    : c === 'night' ? fn.isNight()
+    : c === 'rain' ? (RF.weather === 'rain' || RF.weather === 'storm')
+    : c === 'storm' ? RF.weather === 'storm' : true;
+  const CONDLAB = { night: 'at night', rain: 'in rain', storm: 'in a storm' };
 
-  const panel = RF.el('<div id="agRod">'
-    + '<div class="ag-hd"><span class="ag-ttl font-d">CAST</span><span class="ag-note"></span></div>'
-    + '<div class="ag-row"><span class="ag-lab">power</span><div class="ag-bar"><i></i><b></b></div><span class="ag-val">-</span></div>'
-    + '<div class="ag-row"><span class="ag-lab">line</span><div class="ag-bar"><i></i><b></b></div><span class="ag-val">-</span></div>'
-    + '<div class="ag-row"><span class="ag-lab">fish</span><div class="ag-bar"><i></i><b></b></div><span class="ag-val">-</span></div>'
-    + '<div class="ag-ft"></div></div>');
-  const repEl = RF.el('<div id="agRep"></div>');
-  const rhyEl = RF.el('<div id="agRhy">' + F.pixSVG('fish', 13)
-    + '<span class="lab">RHYTHM</span><span class="n">0</span><span class="t"></span></div>');
-  const ttlEl = panel.querySelector('.ag-ttl'), noteEl = panel.querySelector('.ag-note'),
-        ftEl = panel.querySelector('.ag-ft');
-  const rhyN = rhyEl.querySelector('.n'), rhyT = rhyEl.querySelector('.t');
-
-  /* Three meter rows, recycled between phases rather than rebuilt: the fight runs
-     this 60x a second and an innerHTML rewrite there costs more than every other
-     line in this file combined. Nothing is written unless the value actually moved. */
-  const rows = [];
-  { const list = panel.querySelectorAll('.ag-row');
-    for (let i = 0; i < list.length; i++) rows.push({
-      el: list[i], lab: list[i].querySelector('.ag-lab'), bar: list[i].querySelector('.ag-bar'),
-      fill: list[i].querySelector('i'), band: list[i].querySelector('b'), val: list[i].querySelector('.ag-val'),
-      v: -9, c: '', l: '', t: '', bs: '' }); }
-
-  function setRow(i, label, v, col, text, bandCss) {
-    const r = rows[i];
-    if (r.l !== label) { r.l = label; r.lab.textContent = label; }
-    if (Math.abs(v - r.v) > 0.006) { r.v = v; r.fill.style.transform = 'scaleX(' + clamp(v, 0, 1).toFixed(3) + ')'; }
-    if (r.c !== col) { r.c = col; r.fill.style.background = col; }
-    if (r.t !== text) { r.t = text; r.val.textContent = text; }
-    const bc = bandCss || '';
-    if (r.bs !== bc) { r.bs = bc;
-      if (bc) { const p = bc.split(',');
-        r.band.style.left = p[0]; r.band.style.width = p[1]; r.bar.classList.add('band'); }
-      else r.bar.classList.remove('band'); }
-    if (r.el.className !== 'ag-row') r.el.className = 'ag-row';
+  /* the bait actually on the hook — an equipped bait you ran out of is none */
+  function liveBait() {
+    try {
+      const id = RF.state.baitId, B = RF.BAITS[id];
+      return (B && RF.state.bait && RF.state.bait[id] > 0) ? { id: id, b: B, n: RF.state.bait[id] } : null;
+    } catch (e) { return null; }
   }
-  function hideRow(i) { const r = rows[i]; if (r.el.className !== 'ag-row off') r.el.className = 'ag-row off'; }
+  const say = o => (RF.api && RF.api.notify) ? RF.api.notify(o)
+    : fn.toast(o.title + (o.body ? ' · ' + o.body : ''), o.level === 'error' ? 'bad' : '');
+  const typing = () => { const a = document.activeElement;
+    return RF.chatOpen || !!(a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable)); };
 
-  let ttlCur = '', noteCur = '', ftCur = '', clsCur = '-', shown = false;
-  function head(title, note, foot, cls) {
-    if (ttlCur !== title) { ttlCur = title; ttlEl.textContent = title; }
-    if (noteCur !== note) { noteCur = note; noteEl.innerHTML = note; }
-    if (ftCur !== foot) { ftCur = foot; ftEl.innerHTML = foot; }
-    const c = cls || '';
-    if (clsCur !== c) { clsCur = c; panel.className = c ? c + ' on' : 'on'; }
+  /* comfort signals are read on a slow timer, never per frame */
+  let reduced = false, quality = 'high';
+  const gullBudget = () => quality === 'low' ? 0 : quality === 'med' ? 3 : quality === 'ultra' ? 6 : 5;
+  const decorOn = () => quality !== 'low';
+
+  /* ---------------------------------------------------------------------- */
+  /* 1. STYLE                                                               */
+  /* ---------------------------------------------------------------------- */
+  RF.css(`
+  #rf-angler-card,#rf-angler-gauge,#rf-angler-bait,#rf-angler-tip{
+    --s:var(--rf-ui-scale,1);font-family:"IBM Plex Mono",ui-monospace,monospace;color:var(--ink);
+    font-variant-numeric:tabular-nums;}
+  body.photo #rf-angler-card,body.photo #rf-angler-gauge,body.photo #rf-angler-bait,
+  body.photo #rf-angler-flash,body.photo #rf-angler-tip{display:none!important;}
+
+  /* ---- the fight gauge, riding just above the hint bar ---- */
+  #rf-angler-gauge{position:fixed;left:50%;bottom:calc(126px * var(--s));transform:translateX(-50%);z-index:28;
+    width:min(calc(372px * var(--s)),74vw);display:none;pointer-events:none;
+    background:var(--glass-sheen),var(--glass-strong);
+    backdrop-filter:blur(18px) saturate(1.6);-webkit-backdrop-filter:blur(18px) saturate(1.6);
+    border:1px solid var(--glass-bd);border-radius:14px;padding:calc(9px * var(--s)) calc(13px * var(--s));
+    box-shadow:var(--glass-hi),0 8px 28px rgba(2,8,10,.35);}
+  #rf-angler-gauge.on{display:block;}
+  #rf-angler-gauge .gh{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+    font-size:calc(9px * var(--s));letter-spacing:.24em;color:var(--lab);text-transform:uppercase;margin-bottom:5px;}
+  #rf-angler-gauge .gh b{font-family:"Chakra Petch",sans-serif;font-size:calc(12px * var(--s));letter-spacing:.04em;color:var(--teal);}
+  #rf-angler-gauge .gb{position:relative;height:calc(15px * var(--s));border-radius:7px;overflow:hidden;
+    background:rgba(3,10,12,.55);border:1px solid var(--glass-bd-soft);box-shadow:inset 0 1px 3px rgba(0,0,0,.5);}
+  #rf-angler-gauge .zone{position:absolute;top:0;bottom:0;}
+  #rf-angler-gauge .z1{left:0;width:50%;background:linear-gradient(180deg,rgba(57,215,196,.20),rgba(57,215,196,.08));}
+  #rf-angler-gauge .z2{left:50%;width:28%;background:linear-gradient(180deg,rgba(255,207,92,.22),rgba(255,207,92,.08));}
+  #rf-angler-gauge .z3{left:78%;right:0;background:linear-gradient(180deg,rgba(255,93,122,.30),rgba(255,93,122,.12));}
+  #rf-angler-gauge .tick{position:absolute;top:0;bottom:0;width:1px;background:var(--glass-bd);}
+  #rf-angler-gauge .fill{position:absolute;left:0;top:0;bottom:0;width:100%;transform-origin:left center;
+    transform:scaleX(0);background:linear-gradient(180deg,#5fe8d6,var(--teal));box-shadow:0 0 12px rgba(57,215,196,.5);}
+  #rf-angler-gauge.warn .fill{background:linear-gradient(180deg,#ffe08f,var(--gold));box-shadow:0 0 12px rgba(255,207,92,.5);}
+  #rf-angler-gauge.danger .fill{background:linear-gradient(180deg,#ff92a7,var(--rose));box-shadow:0 0 16px rgba(255,93,122,.7);}
+  #rf-angler-gauge .pull{position:absolute;top:0;bottom:0;width:2px;background:rgba(255,255,255,.85);
+    box-shadow:0 0 8px rgba(255,255,255,.7);transform:translateX(-1px);}
+  #rf-angler-gauge .drag{position:absolute;top:calc(50% - 1px);height:2px;border-radius:2px;
+    background:repeating-linear-gradient(90deg,rgba(255,255,255,.85) 0 3px,rgba(255,255,255,0) 3px 6px);}
+  #rf-angler-gauge .gr{display:flex;align-items:center;gap:calc(8px * var(--s));margin-top:6px;
+    font-size:calc(9px * var(--s));letter-spacing:.2em;color:var(--lab);text-transform:uppercase;}
+  #rf-angler-gauge .rb{position:relative;flex:1;height:calc(6px * var(--s));border-radius:4px;overflow:hidden;
+    background:rgba(3,10,12,.55);border:1px solid var(--glass-bd-soft);}
+  #rf-angler-gauge .rf{position:absolute;inset:0;transform-origin:left center;transform:scaleX(0);
+    background:linear-gradient(90deg,rgba(255,207,92,.55),var(--gold));}
+  #rf-angler-gauge .fp{display:inline-flex;gap:2px;vertical-align:-1px;}
+  #rf-angler-gauge .fp i{width:calc(4px * var(--s));height:calc(9px * var(--s));border-radius:1px;background:rgba(255,255,255,.14);}
+  #rf-angler-gauge .fp i.on{background:var(--rose);box-shadow:0 0 6px rgba(255,93,122,.6);}
+  #rf-angler-gauge.danger{border-color:rgba(255,93,122,.75);animation:rf-angler-alarm .34s ease-in-out infinite;}
+  #rf-angler-gauge.surge{border-color:rgba(255,93,122,.9);}
+  #rf-angler-gauge.surge .gh b{color:var(--rose);}
+  @keyframes rf-angler-alarm{0%,100%{box-shadow:var(--glass-hi),0 0 0 rgba(255,93,122,0),0 8px 28px rgba(2,8,10,.35);}
+    50%{box-shadow:var(--glass-hi),0 0 22px rgba(255,93,122,.45),0 8px 28px rgba(2,8,10,.35);}}
+  #rf-angler-flash{position:fixed;inset:0;z-index:24;pointer-events:none;opacity:0;
+    background:radial-gradient(120% 96% at 50% 100%,rgba(255,93,122,0) 46%,rgba(255,93,122,.16) 82%,rgba(255,93,122,.32) 100%);
+    transition:opacity .12s linear;}
+  #rf-angler-flash.on{opacity:1;}
+  body.rf-reduced #rf-angler-gauge.danger{animation:none;box-shadow:var(--glass-hi),0 0 18px rgba(255,93,122,.4);}
+  body.rf-reduced #rf-angler-flash{display:none;}
+
+  /* ---- the water-reading card ---- */
+  #rf-angler-card{position:fixed;right:12px;top:calc(188px * var(--s));z-index:24;
+    width:calc(238px * var(--s));display:none;flex-direction:column;
+    max-height:calc(100vh - 250px * var(--s));
+    background:var(--glass-sheen),var(--glass-strong);
+    backdrop-filter:blur(18px) saturate(1.6);-webkit-backdrop-filter:blur(18px) saturate(1.6);
+    border:1px solid var(--glass-bd);border-radius:14px;
+    box-shadow:var(--glass-hi),0 8px 28px rgba(2,8,10,.35);overflow:hidden;}
+  #rf-angler-card.on{display:flex;}
+  #rf-angler-card .hd{display:flex;align-items:center;gap:7px;padding:calc(9px * var(--s)) calc(11px * var(--s)) 7px;
+    cursor:pointer;border-bottom:1px solid var(--glass-bd-soft);}
+  #rf-angler-card .hd .ey{flex:1;font-size:calc(8.5px * var(--s));letter-spacing:.30em;color:var(--teal);text-transform:uppercase;}
+  #rf-angler-card .hd .cv{font-size:calc(10px * var(--s));color:var(--faint);transition:transform .16s;}
+  #rf-angler-card.shut .hd{border-bottom:none;}
+  #rf-angler-card.shut .cv{transform:rotate(-90deg);}
+  #rf-angler-card.shut .bd{display:none;}
+  #rf-angler-card .bd{display:flex;flex-direction:column;min-height:0;}
+  #rf-angler-card .rd{display:flex;gap:6px;padding:calc(8px * var(--s)) calc(11px * var(--s)) 0;}
+  #rf-angler-card .rd div{flex:1;background:var(--glass-row);border:1px solid var(--glass-bd-soft);border-radius:9px;
+    padding:calc(5px * var(--s)) calc(7px * var(--s));text-align:center;box-shadow:inset 0 1px 0 rgba(255,255,255,.07);}
+  #rf-angler-card .rd s{display:block;text-decoration:none;font-size:calc(8px * var(--s));letter-spacing:.2em;color:var(--faint);text-transform:uppercase;}
+  #rf-angler-card .rd b{font-family:"Chakra Petch",sans-serif;font-size:calc(13px * var(--s));color:var(--ink);}
+  #rf-angler-card .sh{margin:calc(7px * var(--s)) calc(11px * var(--s)) 0;padding:calc(6px * var(--s)) calc(9px * var(--s));
+    border-radius:9px;font-size:calc(10px * var(--s));line-height:1.5;
+    background:rgba(57,215,196,.09);border:1px solid rgba(57,215,196,.34);color:var(--teal);display:none;}
+  #rf-angler-card .sh.on{display:block;}
+  #rf-angler-card .sh b{color:var(--ink);font-weight:600;}
+  #rf-angler-card .sh .q{display:inline-block;width:calc(12px * var(--s));height:calc(12px * var(--s));line-height:calc(11px * var(--s));
+    text-align:center;border-radius:50%;border:1px solid currentColor;font-size:calc(8px * var(--s));
+    margin-left:4px;cursor:help;opacity:.75;vertical-align:1px;}
+  #rf-angler-card .sec{font-size:calc(8.5px * var(--s));letter-spacing:.22em;text-transform:uppercase;color:var(--faint);
+    padding:calc(9px * var(--s)) calc(11px * var(--s)) calc(4px * var(--s));display:flex;justify-content:space-between;gap:6px;}
+  #rf-angler-card .lst{overflow-y:auto;overflow-x:hidden;padding:0 calc(7px * var(--s)) calc(4px * var(--s)) calc(11px * var(--s));
+    min-height:0;scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
+  #rf-angler-card .lst::-webkit-scrollbar{width:5px;}
+  #rf-angler-card .lst::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+  #rf-angler-card .gl{font-size:calc(8px * var(--s));letter-spacing:.18em;text-transform:uppercase;
+    margin:calc(6px * var(--s)) 0 3px;opacity:.85;}
+  #rf-angler-card .fr{display:flex;align-items:center;gap:6px;font-size:calc(10.5px * var(--s));line-height:1.5;padding:1px 0;}
+  #rf-angler-card .fr .dt{width:7px;height:7px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 6px currentColor;}
+  #rf-angler-card .fr .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);}
+  #rf-angler-card .fr .od{color:var(--muted);font-size:calc(9.5px * var(--s));min-width:calc(38px * var(--s));text-align:right;}
+  #rf-angler-card .fr .nw{font-size:calc(7.5px * var(--s));letter-spacing:.1em;color:var(--gold);border:1px solid rgba(255,207,92,.5);
+    border-radius:4px;padding:0 3px;}
+  #rf-angler-card .fr.off{opacity:.42;}
+  #rf-angler-card .fr.off .od{color:var(--faint);font-style:italic;}
+  #rf-angler-card .ft{border-top:1px solid var(--glass-bd-soft);padding:calc(7px * var(--s)) calc(11px * var(--s));
+    display:flex;flex-wrap:wrap;gap:2px 10px;font-size:calc(9.5px * var(--s));color:var(--muted);}
+  #rf-angler-card .ft span b{color:var(--ink);font-family:"Chakra Petch",sans-serif;}
+  #rf-angler-card .ft .bs{flex:1 0 100%;color:var(--faint);font-size:calc(9px * var(--s));
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  #rf-angler-card .ft .bs b{color:var(--gold);}
+
+  /* ---- bait command ---- */
+  #rf-angler-bait{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%) scale(.96);z-index:26;
+    width:min(calc(340px * var(--s)),92vw);display:none;opacity:0;transition:opacity .16s,transform .16s cubic-bezier(.2,.8,.2,1);
+    background:var(--glass-sheen),var(--glass-strong);
+    backdrop-filter:blur(18px) saturate(1.6);-webkit-backdrop-filter:blur(18px) saturate(1.6);
+    border:1px solid var(--glass-bd);border-radius:18px;padding:calc(16px * var(--s));
+    box-shadow:var(--glass-hi),0 24px 60px rgba(0,0,0,.5);}
+  #rf-angler-bait.on{display:block;opacity:1;transform:translate(-50%,-50%) scale(1);}
+  #rf-angler-bait .bh{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:calc(10px * var(--s));}
+  #rf-angler-bait .bh h3{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:calc(18px * var(--s));color:var(--ink);}
+  #rf-angler-bait .bh s{text-decoration:none;font-size:calc(9px * var(--s));letter-spacing:.24em;color:var(--teal);text-transform:uppercase;}
+  #rf-angler-bait .bo{display:flex;align-items:center;gap:calc(10px * var(--s));width:100%;text-align:left;
+    background:var(--glass-row);border:1px solid var(--glass-bd-soft);border-radius:11px;
+    padding:calc(8px * var(--s)) calc(11px * var(--s));margin-bottom:5px;cursor:pointer;color:var(--ink);
+    font:inherit;box-shadow:inset 0 1px 0 rgba(255,255,255,.07);transition:border-color .12s,background .12s;}
+  #rf-angler-bait .bo:hover:not(:disabled){border-color:rgba(57,215,196,.6);background:rgba(255,255,255,.08);}
+  #rf-angler-bait .bo:disabled{opacity:.38;cursor:default;}
+  #rf-angler-bait .bo.sel{border-color:var(--teal);box-shadow:inset 0 0 0 1px rgba(57,215,196,.35),0 0 14px rgba(57,215,196,.2);}
+  #rf-angler-bait .bo .pip{width:calc(11px * var(--s));height:calc(11px * var(--s));border-radius:50%;flex:0 0 auto;box-shadow:0 0 8px currentColor;}
+  #rf-angler-bait .bo .tx{flex:1;min-width:0;}
+  #rf-angler-bait .bo .tx b{display:block;font-size:calc(12.5px * var(--s));font-weight:600;}
+  #rf-angler-bait .bo .tx s{display:block;text-decoration:none;font-size:calc(9.5px * var(--s));color:var(--muted);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  #rf-angler-bait .bo .lk{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:calc(11px * var(--s));color:var(--gold);text-align:right;}
+  #rf-angler-bait .bo .lk s{display:block;text-decoration:none;font-size:calc(9px * var(--s));color:var(--faint);font-family:"IBM Plex Mono",monospace;font-weight:400;}
+  #rf-angler-bait .bf{margin-top:calc(9px * var(--s));font-size:calc(9.5px * var(--s));color:var(--faint);line-height:1.6;text-align:center;}
+  #rf-angler-bait .bf b{color:var(--teal);}
+
+  #rf-angler-tip{position:fixed;z-index:33;max-width:250px;display:none;pointer-events:none;
+    font-size:11px;line-height:1.55;color:var(--ink);
+    background:var(--glass-sheen),var(--glass-strong);
+    backdrop-filter:blur(14px) saturate(1.6);-webkit-backdrop-filter:blur(14px) saturate(1.6);
+    border:1px solid var(--glass-bd);border-radius:10px;padding:8px 11px;
+    box-shadow:var(--glass-hi),0 10px 30px rgba(2,8,10,.5);}
+  #rf-angler-tip.on{display:block;}
+  #rf-angler-tip b{color:var(--teal);font-weight:600;}
+  `, 'rf-angler-css');
+
+  /* ---------------------------------------------------------------------- */
+  /* 2. DOM                                                                 */
+  /* ---------------------------------------------------------------------- */
+  const gauge = RF.el(`<div id="rf-angler-gauge">
+    <div class="gh"><span class="lb">Line tension</span><b class="st">HOLD</b><span class="pc">0%</span></div>
+    <div class="gb">
+      <i class="zone z1"></i><i class="zone z2"></i><i class="zone z3"></i>
+      <i class="tick" style="left:50%"></i><i class="tick" style="left:78%"></i>
+      <b class="fill"></b><u class="drag"></u><u class="pull"></u>
+    </div>
+    <div class="gr"><span>Fish in</span><div class="rb"><i class="rf"></i></div>
+      <span>Pull <i class="fp"><i></i><i></i><i></i><i></i><i></i></i></span></div>
+  </div>`);
+  const flash = RF.el('<div id="rf-angler-flash"></div>');
+  const card = RF.el(`<div id="rf-angler-card">
+    <div class="hd"><span class="ey">Water reading</span><span class="cv">&#9660;</span></div>
+    <div class="bd">
+      <div class="rd">
+        <div><s>Depth</s><b class="dp">—</b></div>
+        <div><s>Bottom</s><b class="bi">—</b></div>
+      </div>
+      <div class="sh"></div>
+      <div class="sec"><span>What can bite</span><span class="cnt"></span></div>
+      <div class="lst"></div>
+      <div class="ft"></div>
+    </div>
+  </div>`);
+  const baitBox = RF.el(`<div id="rf-angler-bait" role="dialog" aria-label="Bait command">
+    <div class="bh"><h3>Bait command</h3><s>B to close</s></div>
+    <div class="bl"></div>
+    <div class="bf"></div>
+  </div>`);
+  const tip = RF.el('<div id="rf-angler-tip"></div>');
+
+  const G = {
+    st: gauge.querySelector('.st'), pc: gauge.querySelector('.pc'),
+    fill: gauge.querySelector('.fill'), pull: gauge.querySelector('.pull'),
+    drag: gauge.querySelector('.drag'), rf: gauge.querySelector('.rf'),
+    fp: gauge.querySelectorAll('.fp i')
+  };
+  const C = {
+    hd: card.querySelector('.hd'), dp: card.querySelector('.dp'), bi: card.querySelector('.bi'),
+    sh: card.querySelector('.sh'), cnt: card.querySelector('.cnt'),
+    lst: card.querySelector('.lst'), ft: card.querySelector('.ft')
+  };
+  const B = { list: baitBox.querySelector('.bl'), foot: baitBox.querySelector('.bf') };
+
+  /* the card scrolls; without this the wheel falls through to the camera zoom */
+  C.lst.addEventListener('wheel', e => { e.stopPropagation(); }, { passive: true });
+
+  /* one tooltip driver for every [data-rft] inside the mod's own DOM */
+  function bindTips(root) {
+    root.addEventListener('mouseover', e => {
+      const t = e.target.closest ? e.target.closest('[data-rft]') : null;
+      if (!t) return;
+      tip.innerHTML = t.getAttribute('data-rft');
+      tip.classList.add('on');
+      const r = t.getBoundingClientRect(), tr = tip.getBoundingClientRect();
+      tip.style.left = clamp(r.left + r.width / 2 - tr.width / 2, 8, innerWidth - tr.width - 8) + 'px';
+      tip.style.top = Math.max(8, r.top - tr.height - 8) + 'px';
+    });
+    root.addEventListener('mouseout', e => {
+      if (e.target.closest && e.target.closest('[data-rft]')) tip.classList.remove('on');
+    });
   }
-  function showPanel(on) {
-    if (on === shown) return; shown = on;
-    if (on) { clsCur = '-'; panel.className = 'on'; } else panel.className = '';
+  bindTips(card); bindTips(baitBox);
+
+  /* ---------------------------------------------------------------------- */
+  /* 3. PERSISTENCE + TELEMETRY                                             */
+  /* ---------------------------------------------------------------------- */
+  const SAVED = RF.store.get('01-angler', null) || {};
+  const life = Object.assign({ casts: 0, hookups: 0, landed: 0, snapped: 0, longest: 0, best: null }, SAVED.life || {});
+  const sess = { casts: 0, hookups: 0, landed: 0, snapped: 0, missed: 0, gaveUp: 0, longest: 0, best: null };
+  let cardShut = !!SAVED.shut, storeDirty = false;
+  /* `drag` is set in §14 — declared here so the one store write owns every
+     persisted field and the two halves of this file cannot clobber each other */
+  let dragIx = clamp(SAVED.drag | 0, 0, 2);
+  const flush = () => { if (!storeDirty) return; storeDirty = false;
+    RF.store.set('01-angler', { life: life, shut: cardShut, drag: dragIx }); };
+  RF.every(12, () => { try { flush(); } catch (e) { RF.err('angler:store', e, 'warn'); } });
+  addEventListener('beforeunload', () => { try { flush(); } catch (e) {} });
+
+  function noteBest(f) {
+    if (!f) return;
+    const rec = { name: f.name, rar: f.rar, val: f.val | 0, kg: f.kg };
+    if (!sess.best || rec.val > sess.best.val) sess.best = rec;
+    if (!life.best || rec.val > (life.best.val | 0)) { life.best = rec; storeDirty = true; }
+  }
+  RF.on('catch', (f, info) => { try { if (info && info.auto) return; noteBest(f); } catch (e) { RF.err('angler:catch', e, 'warn'); } });
+
+  /* ---------------------------------------------------------------------- */
+  /* 4. 3D: the tell (shadow + rings) and the shoal (shimmer + gulls)        */
+  /* ---------------------------------------------------------------------- */
+  const WT = RF.WATER_TOP;
+  const shadowMat = new TH.MeshBasicMaterial({ color: 0x04161c, transparent: true, opacity: 0, depthWrite: false, side: TH.DoubleSide });
+  const shadow = new TH.Group(), shadowIn = new TH.Group();
+  {
+    /* three flat quads read as a chunky voxel silhouette from the iso camera;
+       renderOrder -1 puts them under the (depthWrite:false) water plane */
+    const part = (w, h, x) => { const m = new TH.Mesh(new TH.PlaneGeometry(w, h), shadowMat);
+      m.position.x = x; m.renderOrder = -1; return m; };
+    shadowIn.add(part(1.02, 0.46, 0), part(0.34, 0.30, 0.62), part(0.40, 0.56, -0.62));
+    shadowIn.rotation.x = -Math.PI / 2;
+    shadow.add(shadowIn); shadow.visible = false; shadow.position.y = WT - 0.07;
+    RF.scene.add(shadow);
+  }
+  const ripples = [];
+  for (let i = 0; i < 4; i++) {
+    const m = new TH.Mesh(new TH.RingGeometry(0.84, 1, 24),
+      new TH.MeshBasicMaterial({ color: 0xd9f6ff, transparent: true, opacity: 0, depthWrite: false, side: TH.DoubleSide }));
+    m.rotation.x = -Math.PI / 2; m.renderOrder = 2; m.visible = false;
+    RF.scene.add(m); ripples.push({ m: m, t: 0, life: 1, s1: 1 });
+  }
+  function ripple(x, z, life, s1) {
+    for (let i = 0; i < ripples.length; i++) { const r = ripples[i];
+      if (r.m.visible) continue;
+      r.t = 0; r.life = life; r.s1 = s1; r.m.visible = true;
+      r.m.position.set(x, WT + 0.02, z); r.m.scale.set(0.25, 0.25, 0.25);
+      return; }
   }
 
+  const shoalGrp = new TH.Group();
+  {
+    const ring = new TH.Mesh(new TH.RingGeometry(0.74, 1, 44),
+      new TH.MeshBasicMaterial({ color: 0x9ff0ff, transparent: true, opacity: 0.15, depthWrite: false, side: TH.DoubleSide }));
+    const disc = new TH.Mesh(new TH.CircleGeometry(1, 34),
+      new TH.MeshBasicMaterial({ color: 0x7fe4ff, transparent: true, opacity: 0.06, depthWrite: false, side: TH.DoubleSide }));
+    ring.rotation.x = disc.rotation.x = -Math.PI / 2;
+    ring.renderOrder = disc.renderOrder = 2;
+    shoalGrp.add(disc, ring); shoalGrp.userData.ring = ring; shoalGrp.userData.disc = disc;
+    shoalGrp.visible = false; shoalGrp.position.y = WT + 0.03; RF.scene.add(shoalGrp);
+  }
+  const gulls = [];
+  {
+    const gBody = new TH.BoxGeometry(0.34, 0.15, 0.18), gWing = new TH.BoxGeometry(0.2, 0.05, 0.52);
+    const mBody = new TH.MeshLambertMaterial({ color: 0xf3f8f7 }), mWing = new TH.MeshLambertMaterial({ color: 0xc6d6da });
+    for (let i = 0; i < 6; i++) {
+      const g = new TH.Group();
+      const wl = new TH.Mesh(gWing, mWing), wr = new TH.Mesh(gWing, mWing);
+      wl.position.z = -0.3; wr.position.z = 0.3;
+      g.add(new TH.Mesh(gBody, mBody), wl, wr);
+      g.visible = false; RF.scene.add(g);
+      gulls.push({ g: g, wl: wl, wr: wr, ph: i * 1.31 });
+    }
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* 5. SHOALS                                                              */
+  /* ---------------------------------------------------------------------- */
+  /* Named flavours so the card can say what the gulls found. `luck` feeds the
+     fishLuck pipe and `bite` the biteTime pipe — both of which core only
+     consults for the OFFLINE roll (signed in, the server decides). */
+  const SHOAL_KIND = [
+    { name: 'Baitball', sub: 'a tight ball of fry, everything below it feeding', luck: 1.0, bite: 0.62, r: 4.2 },
+    { name: 'Feeding line', sub: 'a long slick of scraps drifting on the current', luck: 0.6, bite: 0.48, r: 5.4 },
+    { name: 'Deep churn', sub: 'something big is pushing the water from below', luck: 1.5, bite: 0.82, r: 3.4 }
+  ];
+  let cand = null, shoal = null, nextShoalAt = 0, announced = false;
+
+  function candidates() {
+    if (cand) return cand;
+    cand = [];
+    try {
+      const hm = RF.heightMap, N = RF.N;
+      for (let i = 5; i < N - 5; i++) for (let j = 5; j < N - 5; j++) {
+        if (hm[i][j] > 2) continue;
+        /* want open water that a shore cast can still reach: land within four
+           cells, but not a shelf right against the rocks */
+        if (hm[i + 1][j] > 2 || hm[i - 1][j] > 2 || hm[i][j + 1] > 2 || hm[i][j - 1] > 2) continue;
+        let near = false;
+        for (let k = 2; k <= 4 && !near; k++)
+          if (hm[i + k][j] > 2 || hm[i - k][j] > 2 || hm[i][j + k] > 2 || hm[i][j - k] > 2) near = true;
+        if (near) cand.push(i * N + j);
+      }
+    } catch (e) { RF.err('angler:cells', e, 'warn'); }
+    return cand;
+  }
+  function spawnShoal() {
+    const list = candidates(); if (!list.length) return;
+    const c = list[(Math.random() * list.length) | 0], N = RF.N, H = RF.HALF;
+    const k = SHOAL_KIND[(Math.random() * SHOAL_KIND.length) | 0], a = Math.random() * TAU;
+    shoal = { x: ((c / N) | 0) - H, z: (c % N) - H, r: k.r, kind: k,
+      born: RF.clock, life: rnd(110, 190), vx: Math.cos(a) * 0.09, vz: Math.sin(a) * 0.09, ph: Math.random() * TAU };
+    announced = false;
+  }
+  function shoalDist() {
+    if (!shoal) return 1e9;
+    return Math.hypot(shoal.x - RF.pWorld.x, shoal.z - RF.pWorld.z);
+  }
+  const inShoal = () => !!shoal && shoalDist() <= shoal.r + 1.2;
+
+  function shoalTick(dt) {
+    const t = RF.clock;
+    if (!shoal) { if (t >= nextShoalAt) { nextShoalAt = t + rnd(150, 260); if (RF.running) spawnShoal(); } }
+    else {
+      const age = t - shoal.born;
+      if (age > shoal.life) { shoal = null; shoalGrp.visible = false;
+        for (let i = 0; i < gulls.length; i++) gulls[i].g.visible = false;
+        nextShoalAt = t + rnd(150, 260); return; }
+      /* drift, bouncing off anything that is not water so it never beaches */
+      const nx = shoal.x + shoal.vx * dt, nz = shoal.z + shoal.vz * dt;
+      if (fn.isWaterAt(nx, shoal.z) && Math.abs(nx) < RF.HALF - 3) shoal.x = nx; else shoal.vx = -shoal.vx;
+      if (fn.isWaterAt(shoal.x, nz) && Math.abs(nz) < RF.HALF - 3) shoal.z = nz; else shoal.vz = -shoal.vz;
+
+      if (!announced && RF.running && shoalDist() < 34) { announced = true;
+        say({ level: 'info', title: 'Gulls are working the water', tag: 'angler-shoal', ttl: 5200,
+          body: shoal.kind.name + ' · ' + Math.round(shoalDist()) + ' paces out' }); }
+
+      const fade = clamp(Math.min(age, shoal.life - age) / 8, 0, 1);
+      if (decorOn()) {
+        shoalGrp.visible = true;
+        shoalGrp.position.set(shoal.x, WT + 0.03, shoal.z);
+        shoalGrp.scale.set(shoal.r, 1, shoal.r);
+        const puls = reduced ? 1 : 1 + Math.sin(t * 1.6 + shoal.ph) * 0.28;
+        shoalGrp.userData.ring.material.opacity = 0.16 * fade * puls;
+        shoalGrp.userData.disc.material.opacity = 0.06 * fade;
+      } else shoalGrp.visible = false;
+
+      const nb = decorOn() ? gullBudget() : 0;
+      for (let i = 0; i < gulls.length; i++) {
+        const gu = gulls[i];
+        if (i >= nb) { if (gu.g.visible) gu.g.visible = false; continue; }
+        gu.g.visible = true;
+        const a = (reduced ? gu.ph : t * 0.42 + gu.ph) + i * 0.4;
+        const rr = shoal.r * (0.55 + (i % 3) * 0.22);
+        gu.g.position.set(shoal.x + Math.cos(a) * rr, WT + 2.3 + Math.sin(t * 1.1 + gu.ph) * 0.45 + (i % 3) * 0.5,
+          shoal.z + Math.sin(a) * rr);
+        gu.g.rotation.y = -a - Math.PI / 2;   // nose along the tangent, not at the centre
+        if (!reduced) { const fl = Math.sin(t * 6.5 + gu.ph) * 0.55; gu.wl.rotation.x = fl; gu.wr.rotation.x = -fl; }
+      }
+    }
+  }
+
+  /* Shoals bend the offline roll only. Core pipes both of these before it
+     rolls, and both are no-ops the moment the server owns the catch. */
+  RF.modify('fishLuck', v => inShoal() ? v + shoal.kind.luck : undefined);
+  RF.modify('biteTime', v => inShoal() ? v * shoal.kind.bite : undefined);
+
+  /* ---------------------------------------------------------------------- */
+  /* 6. THE TELL                                                            */
+  /* ---------------------------------------------------------------------- */
+  /* An honest tease: it is built from what the player brought (rod, bait),
+     what the sky is doing and what world they are on — never from the roll,
+     which has not happened yet. A fat shadow means the odds are good, not
+     that a legendary is on its way. */
+  function teaseWeight() {
+    let luck = 0;
+    try {
+      luck = rodLuckOf(RF.state.rodLvl);
+      const lb = liveBait(); if (lb) luck += lb.b.luck;
+    } catch (e) { luck = 0; }
+    let k = luck / 3.9 * 0.6;
+    if (fn.isNight()) k += 0.12;
+    const w = RF.weather;
+    if (w === 'rain') k += 0.1; else if (w === 'storm') k += 0.2;
+    try { k += ((RF.WORLD.fishMul || 1) - 1) * 0.05; } catch (e) {}
+    if (inShoal()) k += 0.18;
+    return clamp(k, 0, 1);
+  }
+  const tell = { on: false, sx: 0, sz: 0, k: 0, ripT: 0, size: 1 };
+  function beginTell(bx, bz) {
+    tell.on = true; tell.ripT = 0; tell.k = teaseWeight();
+    tell.size = lerp(0.62, 1.85, tell.k);
+    let sx = bx + 4, sz = bz + 4;
+    for (let i = 0; i < 16; i++) {
+      const a = Math.random() * TAU, d = rnd(5.5, 9);
+      const x = bx + Math.cos(a) * d, z = bz + Math.sin(a) * d;
+      if (Math.abs(x) < RF.HALF - 2 && Math.abs(z) < RF.HALF - 2 && fn.isWaterAt(x, z)) { sx = x; sz = z; break; }
+    }
+    tell.sx = sx; tell.sz = sz;
+    shadow.visible = decorOn();
+  }
+  function endTell() { tell.on = false; shadow.visible = false; shadowMat.opacity = 0; }
+
+  function tellTick(dt, f) {
+    if (!tell.on) return;
+    const bx = RF.bobber.position.x, bz = RF.bobber.position.z;
+    let p, fade;
+    if (f.state === 'wait') {
+      const left = Math.max(0, f.biteAt - f.t), lead = tell.lead || 1;
+      p = clamp(1 - left / lead, 0, 1); fade = Math.min(1, p * 4);
+    } else { /* 'bite': the shape holds under the bobber for a beat, then goes */
+      p = 1; tell.out = (tell.out || 0) + dt; fade = clamp(1 - tell.out / 0.5, 0, 1);
+      if (fade <= 0) { endTell(); return; }
+    }
+    const ease = p * p * (3 - 2 * p);
+    const weave = Math.sin(p * 7.2) * (1 - p) * 1.1;
+    const dx = bx - tell.sx, dz = bz - tell.sz, ln = Math.hypot(dx, dz) || 1;
+    const x = tell.sx + dx * ease - dz / ln * weave;
+    const z = tell.sz + dz * ease + dx / ln * weave;
+    shadow.position.set(x, WT - 0.07, z);
+    const vx = bx - x, vz = bz - z;
+    shadowIn.rotation.z = Math.atan2(-vz, vx);
+    const s = tell.size * (0.72 + 0.28 * ease);
+    shadow.scale.set(s, 1, s);
+    shadowMat.opacity = (0.20 + 0.26 * tell.k) * fade;
+
+    if (!reduced && decorOn()) {
+      tell.ripT -= dt;
+      if (tell.ripT <= 0) { tell.ripT = lerp(0.55, 0.24, ease);
+        ripple(bx, bz, lerp(1.5, 0.95, ease), lerp(1.1, 2.3, tell.k) * (0.7 + ease)); }
+    }
+  }
+
+  function ripplesTick(dt) {
+    for (let i = 0; i < ripples.length; i++) {
+      const r = ripples[i]; if (!r.m.visible) continue;
+      r.t += dt; const k = r.t / r.life;
+      if (k >= 1) { r.m.visible = false; r.m.material.opacity = 0; continue; }
+      const s = lerp(0.25, r.s1, k * (2 - k));
+      r.m.scale.set(s, s, s);
+      r.m.material.opacity = 0.42 * (1 - k) * (1 - k);
+    }
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* 7. THE GAUGE                                                           */
+  /* ---------------------------------------------------------------------- */
+  let gOn = false, gWarn = '', gPct = -1, gPull = -1, gSurge = false, tickAcc = 0, dragEMA = 0, gLastTens = 0;
+  function showGauge(on) {
+    if (on === gOn) return; gOn = on;
+    gauge.classList.toggle('on', on);
+    if (!on) { gauge.classList.remove('danger', 'warn', 'surge'); flash.classList.remove('on');
+      gWarn = ''; gPct = -1; gPull = -1; gSurge = false; dragEMA = 0; gLastTens = 0; tickAcc = 0; }
+  }
+  function gaugeTick(dt, f) {
+    const tens = f.tens || 0, reel = f.reel || 0;
+
+    /* the fish's counter-force is MEASURED, not recomputed: the rate tension
+       climbs while you hold is exactly how hard it is pulling right now */
+    if (RF.keys.act && dt > 0) dragEMA = dragEMA * 0.82 + Math.min(Math.max(0, (tens - gLastTens) / dt), 4) * 0.18;
+    else dragEMA *= 0.9;
+    gLastTens = tens;
+
+    const pct = Math.round(tens * 100);
+    if (pct !== gPct) { gPct = pct; G.pc.textContent = pct + '%';
+      G.fill.style.transform = 'scaleX(' + (tens || 0).toFixed(3) + ')'; }
+    G.rf.style.transform = 'scaleX(' + (reel || 0).toFixed(3) + ')';
+    G.pull.style.left = (tens * 100).toFixed(1) + '%';
+    const dl = clamp(dragEMA * 9, 1.5, 26);
+    G.drag.style.left = (tens * 100).toFixed(1) + '%';
+    G.drag.style.width = dl.toFixed(1) + '%';
+
+    const band = tens >= 0.78 ? 'danger' : tens >= 0.5 ? 'warn' : '';
+    if (band !== gWarn) {
+      gauge.classList.toggle('warn', band === 'warn');
+      gauge.classList.toggle('danger', band === 'danger');
+      flash.classList.toggle('on', band === 'danger' && !RF.panelOpen);
+      gWarn = band;
+    }
+    const surge = !!f.surge;
+    if (surge !== gSurge) { gSurge = surge; gauge.classList.toggle('surge', surge);
+      G.st.textContent = surge ? 'IT RUNS' : band === 'danger' ? 'EASE OFF' : 'HOLD'; }
+    else if (band === 'danger' && !surge && G.st.textContent !== 'EASE OFF') G.st.textContent = 'EASE OFF';
+    else if (band !== 'danger' && !surge && G.st.textContent !== 'HOLD') G.st.textContent = 'HOLD';
+
+    /* fight strength, straight off the hooked fish (a flat 0.7 online, where
+       core has not been told what is on the line yet) */
+    const pips = clamp(Math.round(((f.fight || 0.7) - 0.38) / 0.2), 1, 5);
+    if (pips !== gPull) { gPull = pips;
+      for (let i = 0; i < G.fp.length; i++) G.fp[i].classList.toggle('on', i < pips); }
+
+    /* a rising tick in the red — a different voice from core's line groan */
+    if (tens >= 0.78) {
+      tickAcc -= dt;
+      if (tickAcc <= 0) { const k = clamp((tens - 0.78) / 0.22, 0, 1);
+        tickAcc = lerp(0.26, 0.075, k);
+        try { fn.beep(860 + k * 900, 0.035, 'square', 0.02); } catch (e) {} }
+    } else tickAcc = 0;
+  }
+
+  /* Core paints the same numbers as ▰▱ bars in the hint. With a real gauge on
+     screen that is noise, so the hint goes back to being just the instruction. */
+  RF.modify('hint', h => {
+    if (!gOn || typeof h !== 'string' || h.indexOf('▰') < 0) return;
+    return RF.fishing.surge
+      ? '<b style="color:var(--rose)">IT RUNS!</b> release <span class="key">E</span> and give it line'
+      : 'hold <span class="key">E</span> to gain line · release to bleed tension';
+  });
+
+  /* ---------------------------------------------------------------------- */
+  /* 8. WATER READING                                                       */
+  /* ---------------------------------------------------------------------- */
+  /* cellType() calls every cell at h<=2 'seabed', which spans a 0.35 m margin
+     and a 2.35 m hole alike — so the label reads the depth, not just the type,
+     or the card sits there calling ankle-deep water "deep". */
+  const BIOME = { seabed: 'Deep water', sand: 'Sandflat', grass: 'Weed bed', stone: 'Rock shelf' };
+  const bottomAt = (x, z) => {
+    const h = fn.heightAt(x, z), t = fn.cellType(h);
+    if (t !== 'seabed') return BIOME[t] || 'Water';
+    const d = WT - h;
+    return d < 0.8 ? 'Shallows' : d < 1.7 ? 'Drop-off' : 'Deep water';
+  };
+  let cardOn = false, poolSig = '', lastDp = '', lastBi = '', lastShoalSig = '';
+
+  function readPoint() {
+    const f = RF.fishing;
+    if (f.state !== 'idle' && RF.bobber.visible) return { x: RF.bobber.position.x, z: RF.bobber.position.z, cast: true };
+    let w = null; try { w = fn.nearestWater(); } catch (e) { w = null; }
+    return w ? { x: w.x, z: w.z, dist: w.dist, cast: false } : null;
+  }
+
+  function paintPool() {
+    const lb = liveBait(), luck = rodLuckOf(RF.state.rodLvl) + (lb ? lb.b.luck : 0);
+    let table = null, pool = null;
+    try { table = (RF.WORLD && RF.WORLD.fish) || RF.TABLE; pool = fn.fishPool(lb ? lb.b.min : null); }
+    catch (e) { RF.err('angler:pool', e, 'warn'); return; }
+    if (!table || !pool) return;
+
+    const live = new Set(pool);
+    let tot = 0;
+    for (let i = 0; i < pool.length; i++) tot += pool[i][1] * luckWeight(pool[i][0].rar, luck);
+    if (tot <= 0) tot = 1;
+
+    const byRar = {}, dex = RF.state.dex || {};
+    for (let i = 0; i < table.length; i++) {
+      const e = table[i], sp = e[0], on = live.has(e);
+      const rows = byRar[sp.rar] || (byRar[sp.rar] = []);
+      let why = '';
+      if (!on) why = !condOK(e[2]) ? (CONDLAB[e[2]] || 'gated') : 'bait floor';
+      rows.push({ sp: sp, on: on, why: why,
+        pct: on ? (e[1] * luckWeight(sp.rar, luck) / tot * 100) : 0,
+        isNew: !dex[sp.name] });
+    }
+
+    let html = '';
+    for (let r = 0; r < RAR_DOWN.length; r++) {
+      const key = RAR_DOWN[r], rows = byRar[key];
+      if (!rows || !rows.length) continue;
+      rows.sort((a, b) => (b.on - a.on) || (b.pct - a.pct) || (b.sp.val - a.sp.val));
+      html += '<div class="gl" style="color:' + (RARC[key] || 'var(--muted)') + '">' + key + '</div>';
+      for (let i = 0; i < rows.length; i++) {
+        const w = rows[i], col = RARC[w.sp.rar] || 'var(--muted)';
+        html += '<div class="fr' + (w.on ? '' : ' off') + '">'
+          + '<i class="dt" style="background:' + col + ';color:' + col + '"></i>'
+          + '<span class="nm">' + esc(w.sp.name) + '</span>'
+          + (w.isNew ? '<span class="nw">NEW</span>' : '')
+          + '<span class="od">' + (w.on ? w.pct.toFixed(w.pct < 1 ? 2 : 1) + '%' : w.why) + '</span></div>';
+      }
+    }
+    C.lst.innerHTML = html;
+    C.cnt.innerHTML = '<span data-rft="Odds are estimated from the live pool: the same species list core draws from, weighted by your rod and bait. The roll itself is never touched.">'
+      + live.size + ' of ' + table.length + ' · est.</span>';
+  }
+
+  function paintFoot() {
+    const b = sess.best || life.best;
+    C.ft.innerHTML =
+      '<span>casts <b>' + sess.casts + '</b></span>'
+      + '<span>hooked <b>' + sess.hookups + '</b></span>'
+      + '<span>landed <b>' + sess.landed + '</b></span>'
+      + '<span>snapped <b>' + sess.snapped + '</b></span>'
+      + '<span>longest <b>' + sess.longest.toFixed(1) + 's</b></span>'
+      + (b ? '<span class="bs">best ' + (sess.best ? '' : 'ever ') + esc(b.name) + ' · <b>◈ ' + fmt(b.val) + '</b></span>' : '');
+  }
+
+  function paintCard() {
+    let want = false, pt = null;
+    if (RF.running && !RF.panelOpen) {
+      pt = readPoint();
+      want = !!pt && (pt.cast || (pt.dist !== undefined && pt.dist <= 3.4));
+    }
+    if (want !== cardOn) { cardOn = want; card.classList.toggle('on', want); }
+    if (!want || cardShut) return;
+
+    const depth = Math.max(0, WT - fn.heightAt(pt.x, pt.z));
+    const dp = depth.toFixed(1) + ' m';
+    if (dp !== lastDp) { lastDp = dp; C.dp.textContent = dp; }
+    const bi = BIOME[fn.cellType(fn.heightAt(pt.x, pt.z))] || 'Water';
+    if (bi !== lastBi) { lastBi = bi; C.bi.textContent = bi; }
+
+    const near = inShoal();
+    const sig = shoal ? (shoal.kind.name + '|' + (near ? 1 : 0) + '|' + Math.round(shoalDist()) + '|' + (RF.online ? 1 : 0)) : '';
+    if (sig !== lastShoalSig) {
+      lastShoalSig = sig;
+      if (!shoal) C.sh.classList.remove('on');
+      else {
+        const d = Math.round(shoalDist());
+        const note = RF.online
+          ? 'Signed in, the server rolls every fish. A shoal is a place to look at, not a bonus · the gulls are honest about where the bait is, nothing more.'
+          : 'Standing inside the ring adds <b>+' + shoal.kind.luck.toFixed(1) + ' luck</b> and cuts the wait to <b>'
+            + Math.round(shoal.kind.bite * 100) + '%</b>. It bends the offline roll only.';
+        C.sh.innerHTML = fn.pixSVG('fish', 12) + ' <b>' + esc(shoal.kind.name) + '</b>'
+          + (near ? ' · <b>you are in it</b>' : ' · ' + d + ' paces')
+          + (RF.online ? ' · cosmetic' : '')
+          + '<span class="q" data-rft="' + note.replace(/"/g, '&quot;') + '">?</span>'
+          + '<br><span style="color:var(--muted)">' + esc(shoal.kind.sub) + '</span>';
+        C.sh.classList.add('on');
+      }
+    }
+
+    const lb = liveBait();
+    const ps = RF.worldKey + '|' + (fn.isNight() ? 1 : 0) + '|' + RF.weather + '|' + (lb ? lb.id : '-') + '|' + RF.state.rodLvl;
+    if (ps !== poolSig) { poolSig = ps; paintPool(); }
+    paintFoot();
+  }
+  C.hd.addEventListener('click', () => {
+    cardShut = !cardShut; storeDirty = true;
+    card.classList.toggle('shut', cardShut);
+    if (!cardShut) { poolSig = ''; lastShoalSig = ''; paintCard(); }
+    try { RF.sfx.tab(); } catch (e) {}
+  });
+  card.classList.toggle('shut', cardShut);
+  RF.every(0.4, () => { try { paintCard(); } catch (e) { RF.err('angler:card', e, 'warn'); } });
+  RF.on('weather', () => { poolSig = ''; });
+  RF.on('hud', () => { poolSig = ''; });
+
+  /* ---------------------------------------------------------------------- */
+  /* 9. BAIT COMMAND (B)                                                    */
+  /* ---------------------------------------------------------------------- */
+  let baitOpen = false;
+  function renderBait() {
+    const order = RF.BAIT_ORDER || [], have = RF.state.bait || {}, cur = RF.state.baitId;
+    let html = '<button class="bo' + (cur ? '' : ' sel') + '" data-bait="">'
+      + '<i class="pip" style="background:var(--faint);color:var(--faint)"></i>'
+      + '<span class="tx"><b>Bare hook</b><s>no luck, no rarity floor, nothing spent</s></span>'
+      + '<span class="lk">+0.0<s>luck</s></span></button>';
+    for (let i = 0; i < order.length; i++) {
+      const id = order[i], b = RF.BAITS[id], n = have[id] | 0;
+      html += '<button class="bo' + (cur === id ? ' sel' : '') + '"' + (n > 0 ? '' : ' disabled')
+        + ' data-bait="' + id + '">'
+        + '<i class="pip" style="background:' + b.tint + ';color:' + b.tint + '"></i>'
+        + '<span class="tx"><b>' + esc(b.name) + (cur === id ? ' · on the hook' : '') + '</b>'
+        + '<s>' + esc(n > 0 ? b.sub : 'none left · buy at the Market') + (b.min ? ' · ' + b.min + '+ only' : '') + '</s></span>'
+        + '<span class="lk">+' + b.luck.toFixed(1) + '<s>×' + n + '</s></span></button>';
+    }
+    B.list.innerHTML = html;
+    B.foot.innerHTML = 'One bait is spent per fish <b>landed</b> · a snapped line costs nothing.'
+      + '<br>Press <b>B</b> to close · clicking the hooked bait takes it back off.';
+  }
+  function openBait() {
+    if (baitOpen) return; baitOpen = true;
+    renderBait(); baitBox.classList.add('on');
+    try { RF.sfx.open(); } catch (e) {}
+  }
+  function closeBait() {
+    if (!baitOpen) return; baitOpen = false;
+    baitBox.classList.remove('on'); tip.classList.remove('on');
+    try { RF.sfx.close(); } catch (e) {}
+  }
+  B.list.addEventListener('click', e => {
+    const t = e.target.closest ? e.target.closest('[data-bait]') : null;
+    if (!t || t.disabled) return;
+    const id = t.getAttribute('data-bait');
+    try {
+      if (RF.SRV && RF.SRV.on) {
+        /* server/src/game/actions.js: bait { op:'equip', id } — same toggle
+           semantics as the Market, and the reply overwrites local state */
+        RF.SRV.act('bait', { op: 'equip', id: id }).then(r => {
+          if (!r) return;
+          fn.toast(r.baitId ? RF.BAITS[r.baitId].name + ' on the hook' : 'Bare hook', 'good');
+          renderBait(); poolSig = '';
+        });
+        return;
+      }
+      if (id && !(RF.state.bait[id] > 0)) return;
+      RF.state.baitId = RF.state.baitId === id ? '' : id;   /* a preference, not economy */
+      fn.toast(RF.state.baitId ? RF.BAITS[RF.state.baitId].name + ' on the hook' : 'Bare hook', 'good');
+      fn.updateHUD(); fn.save();
+      renderBait(); poolSig = '';
+    } catch (err) { RF.err('angler:bait', err); }
+  });
+  RF.on('keydown', e => {
+    try {
+      if (typing()) return;
+      if (e.code === 'KeyB' && !e.shiftKey) {      /* Shift+B is the drag dial, §14 */
+        if (RF.panelOpen && !baitOpen) return;
+        e.preventDefault();
+        if (baitOpen) closeBait(); else openBait();
+        return true;
+      }
+      if (e.code === 'Escape' && baitOpen) { closeBait(); return true; }
+    } catch (err) { RF.err('angler:key', err, 'warn'); }
+  });
+  RF.on('panel', () => { if (baitOpen) closeBait(); });
+
+  /* ---------------------------------------------------------------------- */
+  /* 10. THE FRAME                                                          */
+  /* ---------------------------------------------------------------------- */
+  let prevSt = 'idle', prevTens = 0;
+  RF.every(0.9, () => {
+    try {
+      reduced = document.body.classList.contains('rf-reduced');
+      quality = document.body.dataset.rfQuality || 'high';
+      if (!decorOn()) { endTell(); shoalGrp.visible = false;
+        for (let i = 0; i < gulls.length; i++) gulls[i].g.visible = false; }
+    } catch (e) { RF.err('angler:comfort', e, 'warn'); }
+  });
+
+  RF.on('frame', dt => {
+    try {
+      if (dt > 0.25) dt = 0.25;                   /* a tabbed-out frame must not teleport anything */
+      const f = RF.fishing; if (!f) return;
+      const st = f.state;
+
+      /* ---- telemetry: watch the transitions core makes ---- */
+      if (st !== prevSt) {
+        if (st === 'cast') { sess.casts++; life.casts++; storeDirty = true; }
+        else if (st === 'reel' && prevSt === 'bite') { sess.hookups++; life.hookups++; storeDirty = true; }
+        if (prevSt === 'reel' && st !== 'reel') {
+          if (f.reelT > sess.longest) sess.longest = f.reelT;
+          if (f.reelT > life.longest) life.longest = f.reelT;
+          /* core zeroes tension on a snap, so the previous frame's reading is
+             the only witness; a full spool means it came in */
+          if (f.reel >= 0.999) { sess.landed++; life.landed++; }
+          else if (prevTens >= 0.85) { sess.snapped++; life.snapped++; }
+          else sess.gaveUp++;
+          storeDirty = true;
+        }
+        if (prevSt === 'bite' && st === 'idle') sess.missed++;
+
+        /* ---- the tell rides the tail of the wait ---- */
+        if (st === 'wait' && prevSt === 'cast' && decorOn()) {
+          tell.lead = Math.min(1.7, Math.max(0.5, f.biteAt * 0.55));
+          tell.pending = true; tell.out = 0;
+        }
+        if (st !== 'wait' && st !== 'bite') { tell.pending = false; if (tell.on) endTell(); }
+        if (st === 'idle' || st === 'cast') { poolSig = ''; }
+        prevSt = st;
+      }
+      prevTens = f.tens || 0;
+
+      if (tell.pending && st === 'wait' && (f.biteAt - f.t) <= (tell.lead || 1) && !tell.on) {
+        tell.pending = false; beginTell(RF.bobber.position.x, RF.bobber.position.z);
+      }
+      if (tell.on && st !== 'wait' && st !== 'bite') endTell();
+      tellTick(dt, f);
+      ripplesTick(dt);
+
+      /* ---- the gauge only exists during the fight ---- */
+      showGauge(st === 'reel' && !RF.panelOpen);
+      if (gOn) gaugeTick(dt, f);
+
+      shoalTick(dt);
+    } catch (e) { RF.err('angler:frame', e); }
+  });
+
+  /* ====================================================================== */
+  /* 12. THE ROD IN YOUR HANDS — cast, hookset, fight                       */
+  /*                                                                        */
+  /* Everything below layers onto core's own state machine from the frame    */
+  /* hook, which runs AFTER updateFishing() every frame. That ordering is    */
+  /* the whole trick: core advances the cast, we hold it back; core loads    */
+  /* the line, we load it a little more. Core still owns both endings.       */
+  /* ====================================================================== */
+  RF.css(`
+  #rf-angler-cast,#rf-angler-rep{--s:var(--rf-ui-scale,1);position:fixed;left:50%;transform:translateX(-50%);
+    font-family:"IBM Plex Mono",ui-monospace,monospace;color:var(--ink);font-variant-numeric:tabular-nums;
+    pointer-events:none;background:var(--glass-sheen),var(--glass-strong);
+    backdrop-filter:blur(18px) saturate(1.6);-webkit-backdrop-filter:blur(18px) saturate(1.6);
+    border:1px solid var(--glass-bd);box-shadow:var(--glass-hi),0 8px 28px rgba(2,8,10,.35);}
+  body.photo #rf-angler-cast,body.photo #rf-angler-rep{display:none!important;}
+
+  #rf-angler-cast{bottom:calc(126px * var(--s));z-index:27;width:min(calc(372px * var(--s)),74vw);
+    display:none;border-radius:14px;padding:calc(9px * var(--s)) calc(13px * var(--s));}
+  #rf-angler-cast.on{display:block;}
+  #rf-angler-cast.up{bottom:calc(200px * var(--s));}   /* step over the fight gauge */
+  #rf-angler-cast .ch{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+    font-size:calc(9px * var(--s));letter-spacing:.24em;color:var(--lab);text-transform:uppercase;margin-bottom:5px;}
+  #rf-angler-cast .ch b{font-family:"Chakra Petch",sans-serif;font-size:calc(12px * var(--s));
+    letter-spacing:.04em;color:var(--teal);}
+  #rf-angler-cast .ch .cn{color:var(--muted);letter-spacing:.06em;text-transform:none;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  #rf-angler-cast .cb{position:relative;height:calc(15px * var(--s));border-radius:7px;overflow:hidden;
+    background:rgba(3,10,12,.55);border:1px solid var(--glass-bd-soft);box-shadow:inset 0 1px 3px rgba(0,0,0,.5);}
+  #rf-angler-cast .cf{position:absolute;inset:0;transform-origin:left center;transform:scaleX(0);
+    background:linear-gradient(180deg,#5fe8d6,var(--teal));box-shadow:0 0 12px rgba(57,215,196,.45);}
+  #rf-angler-cast.good .cf{background:linear-gradient(180deg,#a5f0b6,var(--c-uncommon));box-shadow:0 0 14px rgba(116,224,138,.55);}
+  #rf-angler-cast.warn .cf{background:linear-gradient(180deg,#ffe08f,var(--gold));box-shadow:0 0 12px rgba(255,207,92,.45);}
+  #rf-angler-cast.spent .cf{background:linear-gradient(180deg,#8aa6a2,var(--faint));box-shadow:none;}
+  #rf-angler-cast .cz{position:absolute;top:0;bottom:0;left:0;width:0;display:none;
+    background:rgba(116,224,138,.30);box-shadow:inset 0 0 0 1px rgba(116,224,138,.85);}
+  #rf-angler-cast.band .cz{display:block;}
+  #rf-angler-cast .cft{margin-top:calc(6px * var(--s));font-size:calc(9.5px * var(--s));color:var(--faint);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  #rf-angler-cast .cft b{color:var(--gold);font-weight:600;}
+  #rf-angler-cast.good{border-color:rgba(116,224,138,.55);}
+  #rf-angler-cast.danger{border-color:rgba(255,93,122,.7);}
+
+  #rf-angler-rep{bottom:calc(200px * var(--s));z-index:27;border-radius:11px;
+    padding:calc(7px * var(--s)) calc(13px * var(--s));font-size:calc(11px * var(--s));
+    max-width:92vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    opacity:0;transition:opacity .2s ease;display:none;}
+  #rf-angler-rep.on{display:block;opacity:1;}
+  #rf-angler-rep.bad{border-color:rgba(255,93,122,.7);}
+  #rf-angler-rep.good{border-color:rgba(57,215,196,.65);}
+  #rf-angler-rep .k{font-family:"Chakra Petch",sans-serif;font-weight:700;color:var(--gold);}
+  #rf-angler-rep .d{color:var(--faint);}
+  body.rf-reduced #rf-angler-rep{transition:none;}
+  `, 'rf-angler-cast-css');
+
+  const castBox = RF.el(`<div id="rf-angler-cast">
+    <div class="ch"><b class="ct">CAST</b><span class="cn"></span></div>
+    <div class="cb"><i class="cf"></i><u class="cz"></u></div>
+    <div class="cft"></div>
+  </div>`);
+  const repBox = RF.el('<div id="rf-angler-rep"></div>');
+  const X = { ct: castBox.querySelector('.ct'), cn: castBox.querySelector('.cn'),
+    cf: castBox.querySelector('.cf'), cz: castBox.querySelector('.cz'), cft: castBox.querySelector('.cft') };
+
+  /* one write per changed value — this paints 60x a second during a fight */
+  let xOn = false, xUp = null, xCls = '-', xTtl = '', xNote = '', xFoot = '', xV = -9, xBand = '';
+  function castShow(on, up) {
+    if (on !== xOn) { xOn = on; castBox.classList.toggle('on', on); if (!on) { xCls = '-'; xBand = '-'; } }
+    if (on && up !== xUp) { xUp = up; castBox.classList.toggle('up', !!up); }
+  }
+  function castPaint(cls, title, note, v, foot, band) {
+    const b = band || '';
+    /* the class list and the zone marker are written together: rebuilding
+       className for a colour change used to drop `.band`, which killed the
+       sweet-spot marker at the exact moment the release turned green */
+    if (xCls !== cls || xBand !== b) {
+      xCls = cls;
+      castBox.className = 'on' + (xUp ? ' up' : '') + (cls ? ' ' + cls : '') + (b ? ' band' : '');
+      if (b && b !== xBand) { const p = b.split(','); X.cz.style.left = p[0]; X.cz.style.width = p[1]; }
+      xBand = b;
+    }
+    if (xTtl !== title) { xTtl = title; X.ct.textContent = title; }
+    if (xNote !== note) { xNote = note; X.cn.innerHTML = note; }
+    if (xFoot !== foot) { xFoot = foot; X.cft.innerHTML = foot; }
+    if (Math.abs(v - xV) > 0.005) { xV = v; X.cf.style.transform = 'scaleX(' + clamp(v, 0, 1).toFixed(3) + ')'; }
+  }
   let repT = 0;
   function report(html, kind) {
-    repEl.className = (kind || '') + ' on'; repEl.innerHTML = html; repT = 3.6;
+    repBox.className = (kind || '') + ' on'; repBox.innerHTML = html; repT = 4.0;
   }
 
-  /* ================= 3D furniture: rings, ripples, the shoal ================= */
-  const ringGeo = new T.RingGeometry(0.62, 0.80, 22);
-  const flat = m => { m.rotation.x = -PI / 2; m.renderOrder = 6; return m; };
-  const ringMat = (col, op) => new T.MeshBasicMaterial({ color: col, transparent: true,
-    opacity: op, depthWrite: false, side: T.DoubleSide });
+  /* ---- 3D: the aim ring, and the ring that shrinks at the take ---- */
+  const aimGeo = new TH.RingGeometry(0.60, 0.78, 24);
+  const mkRing = (geo, col, op) => { const m = new TH.Mesh(geo,
+      new TH.MeshBasicMaterial({ color: col, transparent: true, opacity: op, depthWrite: false, side: TH.DoubleSide }));
+    m.rotation.x = -Math.PI / 2; m.renderOrder = 3; m.visible = false; RF.scene.add(m); return m; };
+  const aimRing = mkRing(aimGeo, 0x39d7c4, 0);
+  const aimDot = mkRing(new TH.RingGeometry(0.05, 0.18, 12), 0x39d7c4, 0);
+  const setRing = mkRing(aimGeo, 0xffcf5c, 0);
+  const setMark = mkRing(new TH.RingGeometry(0.40, 0.50, 22), 0x74e08a, 0);
 
-  const aimRing = flat(new T.Mesh(ringGeo, ringMat(0x39d7c4, 0)));
-  const aimDot = flat(new T.Mesh(new T.RingGeometry(0.05, 0.17, 12), ringMat(0x39d7c4, 0)));
-  const setRing = flat(new T.Mesh(ringGeo, ringMat(0xffcf5c, 0)));   // the hookset timing ring
-  const setMark = flat(new T.Mesh(new T.RingGeometry(0.40, 0.50, 20), ringMat(0x74e08a, 0)));
-  aimRing.visible = aimDot.visible = setRing.visible = setMark.visible = false;
-  RF.scene.add(aimRing); RF.scene.add(aimDot); RF.scene.add(setRing); RF.scene.add(setMark);
+  /* ---------------------------------------------------------------------- */
+  /* 13. TUNING                                                             */
+  /* ---------------------------------------------------------------------- */
+  /* r = extra line gained per second while hauling · t = extra load per second
+     (scaled by how hard the fish pulls) · s = extra stamina burned in the
+     working band. The rod divisor on `t` is the point of the whole dial: at
+     Lv.1 heavy drag will pop the line on anything with shoulders, and by the
+     Poseidon Rod it is simply the fast way to fish. */
+  const DRAGS = [
+    { n: 'light', r: -0.20, t: -0.26, s: -0.09, c: 'var(--teal)',
+      sub: 'nothing breaks, and nothing comes in fast either' },
+    { n: 'medium', r: 0.00, t: 0.00, s: 0.00, c: 'var(--gold)', sub: 'the honest setting' },
+    { n: 'heavy', r: 0.32, t: 0.44, s: 0.15, c: 'var(--rose)',
+      sub: 'it comes in fast or it comes off — mind the runs' }
+  ];
+  const RUN_NAMES = ['it dives for the bottom', 'it runs for the rocks', 'a head-shake, hard',
+    'it sounds — straight down', 'it turns and runs wide', 'it bores deep and sulks'];
 
-  /* every tap, run and landing puts a real ring on the water — pooled, never allocated in-frame */
-  const rips = []; let ripI = 0;
-  for (let i = 0; i < 12; i++) {
-    const m = flat(new T.Mesh(ringGeo, ringMat(0x9fe9ff, 0)));
-    m.visible = false; RF.scene.add(m);
-    rips.push({ m: m, t: 0, d: 1, r0: 0.18, r1: 1.2, o: 0.5 });
-  }
-  function ripple(x, z, r1, col, op, dur) {
-    if (REDUCE && r1 < 1.4) return;          // keep only the loud ones when motion is dialled down
-    const p = rips[ripI]; ripI = (ripI + 1) % rips.length;
-    p.t = 0; p.d = dur || 0.9; p.r0 = 0.18; p.r1 = r1 || 1.2; p.o = (op == null) ? 0.5 : op;
-    p.m.material.color.setHex(col == null ? 0x9fe9ff : col);
-    p.m.position.set(x, WT + 0.055, z); p.m.scale.setScalar(p.r0); p.m.visible = true;
-  }
-  function ripTick(dt) {
-    for (let i = 0; i < rips.length; i++) { const p = rips[i]; if (!p.m.visible) continue;
-      p.t += dt; const k = p.t / p.d;
-      if (k >= 1) { p.m.visible = false; p.m.material.opacity = 0; continue; }
-      p.m.scale.setScalar(lerp(p.r0, p.r1, k * (2 - k)));       // fast out, then coast
-      p.m.material.opacity = p.o * (1 - k) * (1 - k); }
-  }
-
-  /* ================= reading the water: the isle's hot spots ================= */
-  /* Deterministic from the world seed, so the ledge you found last night is in
-     exactly the same place tonight. That permanence is what makes it a spot and
-     not a random buff — you learn a bay, and the knowledge keeps. */
-  const SPOTKIND = [
-    { k: 'ledge', col: 0x39d7c4, bite: 0.56, lift: 0.30, say: 'a ledge - the bottom falls away right here' },
-    { k: 'weed',  col: 0x74e08a, bite: 0.64, lift: 0.22, say: 'a weed bed - the small stuff hides, the big stuff hunts' },
-    { k: 'wreck', col: 0xffcf5c, bite: 0.72, lift: 0.40, say: 'a wreck - something sank here a long time ago' }];
-  const spots = [], cand = [];
-  try {
-    for (let i = 3; i < N - 3; i += 2) for (let j = 3; j < N - 3; j += 2) {
-      if (HM[i][j] > 2) continue;
-      // castable water only: it has to be within a rod's length of somewhere you can stand
-      if (HM[i + 3][j] > 2 || HM[i - 3][j] > 2 || HM[i][j + 3] > 2 || HM[i][j - 3] > 2) cand.push([i, j]);
-    }
-    const rng = F.mulberry32((((RF.WORLD && RF.WORLD.seed) | 0) * 2654435761 + 0x51ed2701) | 0);
-    let guard = 0;
-    while (spots.length < 8 && cand.length && guard++ < 500) {
-      const c = cand[(rng() * cand.length) | 0], x = c[0] - HALF, z = c[1] - HALF;
-      let near = false;
-      for (let s = 0; s < spots.length; s++) if (hyp(spots[s].x - x, spots[s].z - z) < 11) { near = true; break; }
-      if (near) continue;
-      const kind = SPOTKIND[(rng() * SPOTKIND.length) | 0];
-      spots.push({ x: x, z: z, r: 1.7 + rng() * 0.9, id: RF.worldKey + ':' + spots.length,
-        k: kind.k, col: kind.col, bite: kind.bite, lift: kind.lift, say: kind.say, mesh: null });
-    }
-    for (let s = 0; s < spots.length; s++) {
-      const sp = spots[s], m = flat(new T.Mesh(ringGeo, ringMat(sp.col, 0.2)));
-      m.position.set(sp.x, WT + 0.045, sp.z); m.scale.setScalar(sp.r);
-      m.visible = false; RF.scene.add(m); sp.mesh = m;
-    }
-  } catch (e) { RF.warn('01-angler:spots', e); }
-  function spotAt(x, z) {
-    for (let i = 0; i < spots.length; i++) { const s = spots[i];
-      if (hyp(s.x - x, s.z - z) <= s.r) return s; }
-    return null;
-  }
-
-  /* ================= the shoal ================= */
-  const shoalGrp = new T.Group(); shoalGrp.visible = false; RF.scene.add(shoalGrp);
-  const shoalFish = [];
-  try {
-    const bodyG = new T.BoxGeometry(0.62, 0.13, 0.24), finG = new T.BoxGeometry(0.1, 0.2, 0.14);
-    const mBody = new T.MeshLambertMaterial({ color: 0x2b5f6b }),
-          mFin = new T.MeshLambertMaterial({ color: 0x3f8593 });
-    for (let i = 0; i < 9; i++) {
-      const g = new T.Group(), b = new T.Mesh(bodyG, mBody), fn = new T.Mesh(finG, mFin);
-      fn.position.set(-0.1, 0.13, 0); g.add(b); g.add(fn);
-      g.position.set(rand(-1.3, 1.3), 0, rand(-1.3, 1.3));
-      g.userData.p = Math.random() * 6.283;
-      shoalGrp.add(g); shoalFish.push(g);
-    }
-  } catch (e) { RF.warn('01-angler:shoal', e); }
-  const shoal = { x: 0, z: 0, ax: 0, az: 0, hold: 0, fade: 0, boil: 0, said: -99, live: false };
-  function compass(x, z) {
-    const dx = x - RF.pWorld.x, dz = z - RF.pWorld.z;
-    const ns = dz < -1.5 ? 'north' : dz > 1.5 ? 'south' : '', ew = dx < -1.5 ? 'west' : dx > 1.5 ? 'east' : '';
-    return (ns + ew) || 'near';
-  }
-  function moveShoal(first) {
-    if (!cand.length) return;
-    const c = cand[(Math.random() * cand.length) | 0];
-    shoal.ax = c[0] - HALF; shoal.az = c[1] - HALF;
-    shoal.hold = rand(48, 88); shoal.fade = first ? 1 : 0; shoal.live = true;
-    if (!first && RF.running) {
-      const d = hyp(shoal.ax - RF.pWorld.x, shoal.az - RF.pWorld.z);
-      // one shout, and only when it settles somewhere you could actually walk to
-      if (d < 17 && RF.clock - shoal.said > 45) { shoal.said = RF.clock;
-        F.toast(F.pixSVG('fish', 13) + ' a shoal is working the water to the <b>'
-          + compass(shoal.ax, shoal.az) + '</b>', 'good'); }
-    }
-  }
-  moveShoal(true);
-  const inShoal = (x, z) => shoal.live && shoal.fade > 0.5 && hyp(shoal.x - x, shoal.z - z) < 2.3;
-
-  /* ================= tuning ================= */
-  const FIGHTV = { common: 0.52, uncommon: 0.66, rare: 0.86, epic: 1.06, legendary: 1.32 }; // mirrors core FIGHT
-  /* r = extra reel/s while hauling · t = extra line load/s (scaled by the fish) ·
-     s = extra fish-stamina burned in the working band. A better rod is exactly what
-     makes the heavy setting survivable — that is the whole rod ladder, felt in the hand. */
-  const DRAG = [
-    { n: 'light',  r: -0.20, t: -0.26, s: -0.09, c: 'var(--teal)',
-      say: 'slow and safe - the line will not break, but nothing comes in fast either' },
-    { n: 'medium', r: 0.00,  t: 0.00,  s: 0.00,  c: 'var(--gold)', say: 'the honest setting' },
-    { n: 'heavy',  r: 0.32,  t: 0.44,  s: 0.15,  c: 'var(--rose)',
-      say: 'it comes in fast or it comes off - mind the runs' }];
-  const RUNS = ['it dives for the bottom', 'it runs for the rocks', 'a head-shake, hard',
-    'it sounds - straight down', 'it turns and runs wide', 'it bores deep and sulks'];
-  const READS = [
-    'the line lies flat · nothing has found it yet',
-    'a tick, then nothing · something is nosing the bait',
-    'quick little taps · small mouths, shy ones',
-    'a steady nibble · a decent mouth on it',
-    'the tip nods twice, then loads · that one has some back to it',
-    'slow, heavy knocks · shoulders down there',
-    'the rod bows before it has even taken · this is a big one'];
-  const TIERS = [[0, ''], [3, 'steady'], [6, 'dialled in'], [10, 'on the fish'], [16, 'hot hands']];
-  function tierOf(r) { let t = ''; for (let i = 0; i < TIERS.length; i++) if (r >= TIERS[i][0]) t = TIERS[i][1]; return t; }
-
-  /* ================= live state (all mine — core keeps its own) ================= */
-  let ph = 'idle', prev = 'idle', wasAct = false;
-  let power = 0, powDir = 1, bandC = 0.7, bandW = 0.06, windup = 0, chargeT = 0;
-  let aimBase = 0, aimOff = 0, aimTgt = null, aimSpot = null, aimShoal = false;
-  let castQ = 1, expectBite = false, cleanCast = false, castDist = 0;
-  let preview = null, weight = 0, spotLift = 0;
-  let tellNext = 0, tellN = 0, dip = 0, readIx = 0;
-  let hookQ = '', stam = 1, spent = false, inRun = false, runName = '', runDir = 1, runT = 0;
-  let fightT = 0, peakT = 0, runN = 0, lastTens = 0;
-  let rhythm = 0, drag = LOG.drag;
-  let anchorX = 0, anchorZ = 0, anchored = false, landAt = -99;
-
+  /* ---------------------------------------------------------------------- */
+  /* 14. THE CAST, THE HOOKSET, THE FIGHT                                   */
+  /* ---------------------------------------------------------------------- */
+  let ph = 'idle';                       // idle · charge · fly · soak · take · fight
+  let power = 0, powDir = 1, bandC = 0.7, bandW = 0.06, windup = 0, chargeT = 0, heldAct = false;
+  let aimA = 0, aimOff = 0, aimTgt = null, aimSpot = '', aimGull = false;
+  let castClean = false, castReach = 0, castGull = false, castQ = 1, expectBite = false;
+  let hookGrade = '', stam = 1, spentFish = false, wasSurge = false, fightTired = 1;
+  let runName = '', runSide = 1, runAge = 0, runCount = 0, fightAge = 0, peakLoad = 0;
+  let escAt = -99, lastReport = null;
+  let anchored = false, anchorX = 0, anchorZ = 0;
+  /* the rod tip, so the float can hang off it while the cast is loaded rather
+     than floating a quarter of the way to the water with nothing holding it */
+  const vTip = new TH.Vector3();
+  let rodMesh = null;
   function rodOf() {
-    const armR = RF.player && RF.player.userData && RF.player.userData.armR;
-    if (!armR) return null;
-    for (let i = 0; i < armR.children.length; i++) {
-      const c = armR.children[i]; if (c.userData && c.userData.tip) return c; }
+    if (rodMesh) return rodMesh;
+    try {
+      const armR = RF.player && RF.player.userData && RF.player.userData.armR;
+      if (!armR) return null;
+      for (let i = 0; i < armR.children.length; i++) {
+        const c = armR.children[i];
+        if (c.userData && c.userData.tip) { rodMesh = c; return c; }
+      }
+    } catch (e) {}
     return null;
   }
-  let rodMesh = rodOf();
-  const vTip = new T.Vector3();
-  const lineKg = () => (4 + clamp(S.rodLvl, 1, MAXLVL) * 2.6).toFixed(0);
-  function baitLine() {
-    const b = RF.BAITS[S.baitId];
-    return (b && S.bait[S.baitId] > 0) ? b.name + ' x' + S.bait[S.baitId] : 'a bare hook';
-  }
 
-  /* Where a cast of this length in this direction actually lands: step back from the
-     far end until we find open water, so a long throw over a sandbar simply drops
-     short instead of hanging the bobber on the beach. */
+  const rodTierLuck = () => clamp(RF.state.rodLvl, 1, RF.MAXLVL || 10);
+  const lineRating = () => (4 + rodTierLuck() * 2.6).toFixed(0);
+
+  /* Where a cast of this length in this direction actually lands. We walk back
+     from the far end until we find open water, so a long throw over a sandbar
+     drops short instead of hanging the bobber on the beach. */
   function aimAt(ang, dist) {
-    const px = RF.pWorld.x, pz = RF.pWorld.z, sx = sin(ang), sz = cos(ang);
-    for (let d = dist; d >= 0.85; d -= 0.32) {
+    const px = RF.pWorld.x, pz = RF.pWorld.z, sx = Math.sin(ang), sz = Math.cos(ang);
+    const hm = RF.heightMap, N = RF.N, H = RF.HALF;
+    for (let d = dist; d >= 0.85; d -= 0.3) {
       const x = px + sx * d, z = pz + sz * d;
-      if (Math.abs(x) > HALF - 1.5 || Math.abs(z) > HALF - 1.5) continue;
-      const i = clamp(Math.round(x + HALF), 0, N - 1), j = clamp(Math.round(z + HALF), 0, N - 1);
-      if (HM[i][j] <= 2) return { x: i - HALF, z: j - HALF, d: d };
+      if (Math.abs(x) > H - 1.5 || Math.abs(z) > H - 1.5) continue;
+      const i = clamp(Math.round(x + H), 0, N - 1), j = clamp(Math.round(z + H), 0, N - 1);
+      if (hm[i][j] <= 2) return { x: i - H, z: j - H, d: d };
     }
     return null;
   }
+  const reachNow = () => 1.5 + power * (3.5 + (rodTierLuck() - 1) * 0.55);
+  const gullAt = (x, z) => !!shoal && Math.hypot(shoal.x - x, shoal.z - z) <= shoal.r;
 
-  function resetFish() {
-    ph = 'idle'; preview = null; expectBite = false; anchored = false; inRun = false;
-    stam = 1; spent = false; runN = 0; peakT = 0; fightT = 0; tellN = 0; dip = 0; readIx = 0;
+  function resetRod() {
+    ph = 'idle'; expectBite = false;
     aimRing.visible = aimDot.visible = setRing.visible = setMark.visible = false;
-    showPanel(false);
-    if (rodMesh) rodMesh.rotation.z = 0;
+    castShow(false, false);
   }
 
-  function paintRhythm() {
-    const t = tierOf(rhythm), on = rhythm >= 2;
-    if (rhyEl.classList.contains('on') !== on) rhyEl.classList.toggle('on', on);
-    const n = String(rhythm);
-    if (rhyN.textContent !== n) rhyN.textContent = n;
-    if (rhyT.textContent !== t) rhyT.textContent = t;
-  }
-  paintRhythm();
-
-  /* ================= 1/2: the charged cast ================= */
   function beginCharge() {
     ph = 'charge'; power = 0.06; powDir = 1; windup = 0; chargeT = 0;
-    // the band drifts every cast and widens with the rod: a Poseidon Rod forgives, an Old Rod does not
-    bandC = rand(0.40, 0.90); bandW = 0.040 + 0.0125 * clamp(S.rodLvl, 1, MAXLVL);
-    const dx = FISH.tx - RF.pWorld.x, dz = FISH.tz - RF.pWorld.z;
-    aimBase = (dx * dx + dz * dz) > 0.02 ? atan2(dx, dz) : RF.pWorld.face;
-    aimOff = 0; aimTgt = null; aimSpot = null; aimShoal = false;
+    /* the band drifts every cast and widens with the rod — a Poseidon Rod
+       forgives a sloppy release, an Old Rod does not */
+    bandC = rnd(0.40, 0.90); bandW = 0.040 + 0.0125 * rodTierLuck();
+    const f = RF.fishing, dx = f.tx - RF.pWorld.x, dz = f.tz - RF.pWorld.z;
+    aimA = (dx * dx + dz * dz) > 0.02 ? Math.atan2(dx, dz) : RF.pWorld.face;
+    aimOff = 0; aimTgt = null; aimSpot = ''; aimGull = false;
+    repT = 0; repBox.className = '';
+    /* the press that STARTED this cast is the one we wait to see end — seeding
+       this true is what lets a quick tap fire a short flick cast next frame
+       instead of hanging on the charge until the six-second timeout */
+    heldAct = true;
   }
 
-  const reach = () => 1.5 + power * (3.5 + (clamp(S.rodLvl, 1, MAXLVL) - 1) * 0.55);
-
   function releaseCast() {
-    const t = aimTgt || aimAt(aimBase + aimOff, reach());
-    if (t) { FISH.tx = t.x; FISH.tz = t.z; castDist = t.d; }
-    else castDist = hyp(FISH.tx - RF.pWorld.x, FISH.tz - RF.pWorld.z);
-    cleanCast = Math.abs(power - bandC) <= bandW;
-    const sp = spotAt(FISH.tx, FISH.tz), sh = inShoal(FISH.tx, FISH.tz);
-    castQ = 1; spotLift = 0;
-    if (cleanCast) castQ *= 0.62;
-    else if (power > 0.88) castQ *= 1.22;         // a slapped cast lands hard and puts the water down
-    if (sp) { castQ *= sp.bite; spotLift += sp.lift;
-      if (!LOG.found[sp.id]) { LOG.found[sp.id] = 1; mark(); flush();
-        F.toast(F.pixSVG('map', 13) + ' ' + sp.say, 'gold'); } }
-    if (sh) { castQ *= 0.34; spotLift += 0.34; }
+    const f = RF.fishing, t = aimTgt || aimAt(aimA + aimOff, reachNow());
+    if (t) { f.tx = t.x; f.tz = t.z; castReach = t.d; }
+    else castReach = Math.hypot(f.tx - RF.pWorld.x, f.tz - RF.pWorld.z);
+    castClean = Math.abs(power - bandC) <= bandW;
+    castGull = gullAt(f.tx, f.tz);
+    castQ = 1;
+    if (castClean) castQ *= 0.62;              // it lands soft; the water never knows
+    else if (power > 0.88) castQ *= 1.22;      // a slapped cast puts the whole bay down
     expectBite = true; ph = 'fly';
-    // the whip: pitch rides the power, so you hear how far you just threw it
-    F.sweep(260 + power * 200, 900 + power * 500, 0.16, 'sine', 0.035);
-    if (cleanCast) { F.beep(1320, 0.06, 'triangle', 0.03); F.addShake(0.02); }
+    try {
+      fn.sweep(260 + power * 200, 900 + power * 500, 0.16, 'sine', 0.035);
+      if (castClean) { fn.beep(1320, 0.06, 'triangle', 0.03); fn.addShake(0.02); }
+    } catch (e) {}
     aimRing.visible = aimDot.visible = false;
   }
 
-  /* ================= 6: the wait, and what the rod is telling you ================= */
-  function onSettled() {
-    ph = 'wait'; tellN = 0; readIx = 0; dip = 0;
-    tellNext = FISH.biteAt * rand(0.30, 0.46);
-    /* Roll the fish NOW, offline, with the very rollFish() core would call a few
-       seconds later — so the tells are honest about what is under the bobber
-       instead of decorating a coin flip. Online the server owns the roll, and the
-       tells read the FIGHT instead, which is exactly what they end up predicting. */
-    preview = null;
-    if (!RF.online) {
-      try {
-        preview = F.rollFish();
-        // good water stirs better fish: the same best-of-two trick core uses for weather
-        if (preview && spotLift > 0 && Math.random() < spotLift) {
-          const g = F.rollFish();
-          if (g && RORD[g.rar] > RORD[preview.rar]) preview = g; }
-      } catch (e) { RF.warn('01-angler:roll', e); preview = null; }
+  /* Consumed exactly once, for the cast we just made. The planted auto-rig
+     calls biteTime() too and must never inherit your clean release. */
+  RF.modify('biteTime', v => {
+    if (!expectBite || RF.fishing.state !== 'wait') return;
+    expectBite = false; return v * castQ;
+  });
+
+  function onHookset(f) {
+    const react = f.t;                  // core never resets t at the take — that IS the reaction time
+    hookGrade = react <= 0.20 ? 'perfect' : react <= 0.42 ? 'clean' : 'late';
+    /* A fish that pulls harder simply has more to give. Offline core has already
+       put the real species on the line, so `fight` is the honest weight; signed
+       in it is a flat 0.7 and every fight is the same middling one, which is
+       exactly as much as the client is allowed to know. */
+    const wt = clamp((f.fight - 0.5) / 0.85, 0, 1);
+    stam = 1; spentFish = false; wasSurge = false;
+    runCount = 0; runAge = 0; runName = ''; runSide = Math.random() < 0.5 ? -1 : 1;
+    fightAge = 0; peakLoad = 0;
+    fightTired = 0.72 + wt * 1.15;
+    if (hookGrade === 'perfect') {
+      stam = 0.70; f.reel = Math.max(f.reel, 0.14);
+      try { fn.addShake(0.06); fn.beep(1046, 0.07, 'triangle', 0.045); fn.beep(1568, 0.09, 'sine', 0.028); } catch (e) {}
+      if (decorOn()) ripple(RF.bobber.position.x, RF.bobber.position.z, 0.75, 2.0);
+    } else if (hookGrade === 'late') {
+      f.tens = Math.max(f.tens, 0.30);  // a slow hand starts the fight already loaded
     }
-    weight = preview
-      ? clamp(RORD[preview.rar] / 4 * 0.72 + clamp(preview.kg / 24, 0, 1) * 0.28, 0, 1)
-      : clamp(Math.pow(Math.random(), 1.7) * 0.9 + spotLift * 0.45, 0, 1);
-    ripple(FISH.tx, FISH.tz, 1.5, 0xd9f6ff, 0.45, 1.0);
-  }
-
-  function tell() {
-    tellN++; dip = 0.26;
-    const heavy = weight > 0.6;
-    ripple(BOB.position.x, BOB.position.z, heavy ? 0.95 : 0.6, 0x9fe9ff, heavy ? 0.5 : 0.34, heavy ? 0.9 : 0.6);
-    F.beep(heavy ? 190 : 340, heavy ? 0.07 : 0.04, 'sine', 0.022);
-    readIx = tellN === 1 ? 1 : clamp(2 + Math.round(weight * 4), 2, 6);
-    tellNext = rand(0.42, 0.86) * (heavy ? 1.25 : 0.8);
-  }
-
-  /* ================= 7: the hookset ================= */
-  function onHook() {
-    const rt = FISH.t;               // core never resets t at the hookset — that IS the reaction time
-    hookQ = rt <= 0.20 ? 'perfect' : rt <= 0.42 ? 'clean' : 'late';
-    if (!RF.online && preview) { FISH.hooked = preview; FISH.fight = FIGHTV[preview.rar] || 0.7; }
-    stam = 1; spent = false; inRun = false; runN = 0; runT = 0; fightT = 0; peakT = 0;
-    runDir = Math.random() < 0.5 ? -1 : 1; runName = ''; anchored = false;
-    if (hookQ === 'perfect') {
-      stam = 0.70; FISH.reel = Math.max(FISH.reel, 0.14);
-      LOG.perfect++; mark(); F.addShake(0.06);
-      ripple(BOB.position.x, BOB.position.z, 2.0, 0x74e08a, 0.6, 0.75);
-      F.beep(1046, 0.07, 'triangle', 0.045); F.beep(1568, 0.09, 'sine', 0.028);
-    } else if (hookQ === 'late') {
-      FISH.tens = Math.max(FISH.tens, 0.30);          // a slow hand starts the fight already loaded
+    /* THE GULLS, MADE HONEST. core's rollFish() is the only thing that decides a
+       species, and it already ran — so the shoal pays the same way core's own
+       weather and hull bonuses do: one more draw from the very same table, kept
+       only if it beats the first. Offline only; signed in the server rolled it
+       and nothing here may touch the result. */
+    if (!RF.online && f.hooked && shoal && gullAt(RF.bobber.position.x, RF.bobber.position.z)) {
+      try {
+        if (Math.random() < clamp(shoal.kind.luck * 0.28, 0, 0.5)) {
+          const g = fn.rollFish();
+          if (g && (RORD[g.rar] | 0) > (RORD[f.hooked.rar] | 0)) {
+            f.hooked = g; f.fight = ({ common: 0.52, uncommon: 0.66, rare: 0.86, epic: 1.06, legendary: 1.32 })[g.rar] || 0.7;
+          }
+        }
+      } catch (e) { RF.err('angler:gullroll', e, 'warn'); }
     }
     ph = 'fight'; setRing.visible = setMark.visible = false;
   }
 
-  /* ================= 8/9: the fight ================= */
-  function fight(dt) {
-    const f = FISH, hold = !!K.act, D = DRAG[drag];
-    fightT += dt; if (f.tens > peakT) peakT = f.tens;
+  function fightTick(dt, f) {
+    const hold = !!RF.keys.act, D = DRAGS[dragIx];
+    fightAge += dt; if (f.tens > peakLoad) peakLoad = f.tens;
 
-    if (f.surge && !inRun) {
-      inRun = true; runT = 0; runN++;
-      runDir = Math.random() < 0.5 ? -1 : 1;
-      runName = RUNS[(Math.random() * RUNS.length) | 0];
-      if (!REDUCE) F.addShake(0.05);
-      ripple(BOB.position.x, BOB.position.z, 1.7, 0x57b7ff, 0.45, 0.8);
-    } else if (!f.surge && inRun) { inRun = false; runName = ''; }
-    if (inRun) runT += dt;
+    const surge = !!f.surge;
+    if (surge && !wasSurge) {
+      runCount++; runAge = 0; runSide = Math.random() < 0.5 ? -1 : 1;
+      runName = RUN_NAMES[(Math.random() * RUN_NAMES.length) | 0];
+      if (decorOn()) ripple(RF.bobber.position.x, RF.bobber.position.z, 0.8, 1.9);
+    } else if (!surge && wasSurge) runName = '';
+    wasSurge = surge;
+    if (surge) runAge += dt;
 
-    /* THE FIGHT, in four sentences: work it inside the band and the fish burns down;
-       horse it through a run and the line loads hard for ground you immediately lose;
-       give line while it runs and the drag does the tiring for you; a spent fish stops
-       fighting and the last stretch comes in easy. Every one of these only ever ADDS
-       to core's own tug-of-war, so core's snap and core's landing still decide. */
-    const tired = 0.72 + weight * 1.15;               // a big fish simply has more to give
+    /* THE FIGHT IN FOUR SENTENCES. Work it inside the band and the fish burns
+       down. Horse it through a run and the line loads hard for ground you lose
+       anyway. Give line while it runs and the drag does the tiring for you.
+       A spent fish stops fighting and the last stretch comes in easy.
+       All four only ever nudge core's own tug-of-war, and every one that raises
+       tension does so ONLY while you are holding — so a snap is always yours. */
     if (hold) {
       f.reel = clamp(f.reel + dt * D.r, 0, 1);
-      f.tens = clamp(f.tens + dt * D.t * f.fight * (1 - (clamp(S.rodLvl, 1, MAXLVL) - 1) * 0.09), 0, 1);
-      if (f.surge) {
+      f.tens = clamp(f.tens + dt * D.t * f.fight * (1 - (rodTierLuck() - 1) * 0.09), 0, 1);
+      if (surge) {
         f.tens = clamp(f.tens + dt * 0.52, 0, 1);
         f.reel = clamp(f.reel - dt * 0.24, 0, 1);
       } else if (f.tens > 0.34 && f.tens < 0.78) {
-        stam -= dt * (0.34 + D.s) / tired;
+        stam -= dt * (0.34 + D.s) / fightTired;
         f.reel = clamp(f.reel + dt * 0.15, 0, 1);
       }
-    } else if (f.surge) {
-      stam -= dt * 0.30 / tired;                      // give line: it wears itself out against the drag
+    } else if (surge) {
+      stam -= dt * 0.30 / fightTired;
     }
 
-    if (stam <= 0 && !spent) {
-      spent = true; stam = 0;
-      f.surge = 0; f.surgeT = 99;                     // nothing left in it to run with
-      F.beep(392, 0.1, 'triangle', 0.04); F.beep(523, 0.14, 'triangle', 0.035);
-      ripple(BOB.position.x, BOB.position.z, 2.4, 0xffcf5c, 0.5, 1.0);
+    if (stam <= 0 && !spentFish) {
+      spentFish = true; stam = 0;
+      f.surge = 0; f.surgeT = 99;                 // nothing left in it to run with
+      try { fn.beep(392, 0.1, 'triangle', 0.04); fn.beep(523, 0.14, 'triangle', 0.035); } catch (e) {}
+      if (decorOn()) ripple(RF.bobber.position.x, RF.bobber.position.z, 1.0, 2.4);
     }
-    if (spent) { f.tens = clamp(f.tens - dt * 0.55, 0, 1); f.reel = clamp(f.reel + dt * 0.48, 0, 1); }
+    if (spentFish) { f.tens = clamp(f.tens - dt * 0.55, 0, 1); f.reel = clamp(f.reel + dt * 0.48, 0, 1); }
     stam = clamp(stam, 0, 1);
+
+    /* the bobber comes in as you gain on it, and cuts sideways on every run */
+    const bob = RF.bobber, px = RF.pWorld.x, pz = RF.pWorld.z;
+    if (!anchored) { anchored = true; anchorX = bob.position.x; anchorZ = bob.position.z; }
+    const dx = anchorX - px, dz = anchorZ - pz, dl = Math.max(0.001, Math.hypot(dx, dz));
+    const sw = Math.sin(RF.clock * (surge ? 4.2 : 1.7)) * runSide * (surge ? 0.62 : 0.13) * (1 - f.reel * 0.45);
+    bob.position.x = lerp(anchorX, px, f.reel * 0.58) + (-dz / dl) * sw;
+    bob.position.z = lerp(anchorZ, pz, f.reel * 0.58) + (dx / dl) * sw;
+    if (surge) bob.position.y -= Math.min(0.26, runAge * 0.7);   // it sounds, and the float goes under
   }
 
-  /* ================= 10: how it ended ================= */
-  function finish(kind) {
-    const t = fightT.toFixed(1) + 's', pk = Math.round(peakT * 100) + '%';
-    const hk = hookQ === 'perfect' ? '<span class="k">perfect hookset</span>'
-      : hookQ === 'late' ? '<span class="d">a slow hookset</span>' : 'clean hookset';
-    const rn = runN === 0 ? 'no runs' : runN === 1 ? '1 run' : runN + ' runs';
-    if (kind === 'land') {
-      LOG.landed++; rhythm++; if (rhythm > LOG.bestR) LOG.bestR = rhythm;
-      mark(); paintRhythm(); landAt = RF.clock;
-      const nm = (!RF.online && preview)
-        ? '<b style="color:' + (RF.RAR[preview.rar] || 'var(--ink)') + '">' + preview.name + '</b> · ' : '';
-      report(nm + 'landed in <span class="k">' + t + '</span> · ' + rn + ' · ' + hk
-        + ' · line peaked ' + pk + (spent ? ' · <span class="d">played out</span>' : '')
-        + ' <span class="d">· ' + LOG.landed + ' landed / ' + LOG.snaps + ' lost</span>', 'good');
-      ripple(BOB.position.x, BOB.position.z, 3.0, 0xd9f6ff, 0.5, 1.2);
-    } else if (kind === 'snap') {
-      LOG.snaps++; mark();
-      if (rhythm >= 3) F.toast('the run ends at ' + rhythm + ' · rhythm gone', 'bad');
-      rhythm = 0; paintRhythm();
-      report('the line let go at <span class="k">' + t + '</span> · ' + rn + ' · you carried it at '
-        + pk + ' · <span class="d">' + DRAG[drag].n + ' drag</span>', 'bad');
-    } else if (kind === 'miss') {
-      LOG.missed++; mark(); rhythm = 0; paintRhythm();
+  function fightReport(kind, f) {
+    const t = fightAge.toFixed(1) + 's', pk = Math.round(peakLoad * 100) + '%';
+    const hk = hookGrade === 'perfect' ? '<span class="k">perfect hookset</span>'
+      : hookGrade === 'late' ? '<span class="d">a slow hookset</span>' : 'clean hookset';
+    const rn = runCount === 0 ? 'no runs' : runCount === 1 ? '1 run' : runCount + ' runs';
+    lastReport = { kind: kind, seconds: +fightAge.toFixed(2), runs: runCount, peak: +peakLoad.toFixed(3),
+      hookset: hookGrade, playedOut: spentFish, drag: DRAGS[dragIx].n };
+    if (kind === 'land')
+      report('landed in <span class="k">' + t + '</span> · ' + rn + ' · ' + hk + ' · line peaked ' + pk
+        + (spentFish ? ' · <span class="d">played out</span>' : '')
+        + ' <span class="d">· ' + DRAGS[dragIx].n + ' drag</span>', 'good');
+    else if (kind === 'snap')
+      report('the line let go at <span class="k">' + t + '</span> · ' + rn + ' · you carried it at ' + pk
+        + ' <span class="d">· ' + DRAGS[dragIx].n + ' drag</span>', 'bad');
+    else if (kind === 'miss')
       report('too slow off the take · <span class="d">the hook never found anything</span>', 'bad');
-    }
-    resetFish();
   }
 
-  /* ================= the drag dial ================= */
+  /* ---- the drag dial, and the one thing only the key can tell us ---- */
   RF.on('keydown', e => {
-    if (!e || e.code !== 'KeyQ') return false;
-    if (!RF.running || RF.panelOpen || RF.chatOpen) return false;
-    drag = (drag + 1) % 3; LOG.drag = drag; mark(); flush();
-    F.beep(520 + drag * 160, 0.05, 'square', 0.032);
-    F.toast(F.pixSVG('rod', 13) + ' drag <b style="color:' + DRAG[drag].c + '">' + DRAG[drag].n
-      + '</b> · ' + DRAG[drag].say, drag === 2 ? 'bad' : drag === 0 ? '' : 'good');
-    return true;
+    try {
+      if (!e) return;
+      /* core's cancelFish() looks identical whether the line SNAPPED or you just
+         walked away, and by the time a frame hook sees it the tension has been
+         zeroed. Watching ESC go past is the only honest way to separate the two;
+         we never claim it, so core cancels exactly as it always did. */
+      if (e.code === 'Escape') { escAt = RF.clock; return; }
+      /* KeyQ is 05-progress's quest log everywhere else on the isle, and this
+         slot loads first — so we take it ONLY while the rod is actually out,
+         which is the only time a drag setting means anything. Neither of us has
+         to give the key up. (Shift+B is not an option: §9's bait panel above
+         claims plain KeyB without looking at the modifier.) */
+      if (e.code !== 'KeyQ' || typing()) return;
+      if (!RF.running || RF.panelOpen || ph === 'idle') return;
+      e.preventDefault();
+      dragIx = (dragIx + 1) % 3; storeDirty = true;
+      const D = DRAGS[dragIx];
+      try { fn.beep(520 + dragIx * 160, 0.05, 'square', 0.032); } catch (err) {}
+      say({ level: dragIx === 2 ? 'warn' : 'info', tag: 'angler-drag', ttl: 3000,
+        title: 'Drag: ' + D.n, body: D.sub });
+      return true;
+    } catch (err) { RF.err('angler:drag', err, 'warn'); }
   });
 
-  /* ================= pipelines ================= */
-  /* Consumed exactly once, and only for the cast we just made — the planted rig
-     calls biteTime() too and must never inherit the ledge you found. */
-  RF.modify('biteTime', v => {
-    if (!expectBite || FISH.state !== 'wait') return v;
-    expectBite = false; return v * castQ;
-  });
-
+  /* Core's own hint still narrates the bite and the wait; these three phases are
+     ours, so they get the instruction that actually applies. */
   RF.modify('hint', h => {
-    if (ph === 'idle' || RF.panelOpen) return h;
     if (ph === 'charge') return '<span class="key">E</span> hold to load · <span class="key">A</span>'
       + '<span class="key">D</span> swing the aim · let go to cast';
-    if (ph === 'fly') return 'the line arcs out...';
-    if (ph === 'wait') return READS[readIx] + ' · <span class="key">ESC</span> reel in';
-    if (ph === 'bite') return '<b style="color:var(--rose)">!</b> <b>SET THE HOOK</b> - <span class="key">E</span>';
-    if (ph === 'fight') return inRun
-      ? '<b style="color:var(--rose)">' + runName + '</b> · give it line'
-      : 'hold <span class="key">E</span> to work it · <span class="key">Q</span> drag · let go when it runs';
-    return h;
-  });
+    if (ph === 'fly') return 'the line arcs out…';
+    if (ph === 'take') return '<b style="color:var(--rose)">!</b> <b>SET THE HOOK</b> — <span class="key">E</span>';
+    if (ph === 'fight' && !RF.fishing.surge)
+      return 'hold <span class="key">E</span> to work it · <span class="key">Shift</span>+<span class="key">B</span>'
+        + ' drag · let go when it runs';
+    return;
+  }, 10);   // after §7's gauge rewrite, so the fight line is the one that lands
 
-  /* An offline-only reward for a clean run, riding on top of core's own streak.
-     Online the server owns every coin, so this must not fire — and does not. */
-  RF.on('catch', (fish, info) => {
-    if (!fish || !info || info.auto) return;
-    if (ph !== 'fight' && RF.clock - landAt > 2.2) return;   // a treasure-chest fish is not ours
-    if (RF.online) return;
-    let m = 1 + Math.min(0.18, rhythm * 0.02);
-    if (hookQ === 'perfect') m += 0.06;
-    if (m > 1.001) fish.val = Math.max(1, Math.round(fish.val * m));
-  });
+  /* ---------------------------------------------------------------------- */
+  /* 15. THE ROD FRAME                                                      */
+  /* ---------------------------------------------------------------------- */
+  let rodPrev = 'idle';
+  RF.on('frame', dt => {
+    try {
+      if (dt > 0.25) dt = 0.25;
+      if (repT > 0 && (repT -= dt) <= 0) repBox.className = '';
+      const f = RF.fishing; if (!f) return;
+      const st = f.state;
 
-  /* ================= the frame ================= */
-  RF.on('frame', dt => { ripTick(dt); });
-
-  // distance culling for world furniture — twice a second is plenty for a fade
-  RF.every(0.45, () => {
-    const on = RF.running, px = RF.pWorld.x, pz = RF.pWorld.z;
-    for (let i = 0; i < spots.length; i++) {
-      const s = spots[i], d = hyp(s.x - px, s.z - pz), vis = on && d < 16;
-      if (s.mesh.visible !== vis) s.mesh.visible = vis;
-      // an unfound spot is only a faint shimmer; cast into it once and it stays lit
-      if (vis) s.mesh.material.opacity = 0.20 * clamp((16 - d) / 5, 0, 1) * (LOG.found[s.id] ? 1 : 0.45);
-    }
-    const sd = hyp(shoal.ax - px, shoal.az - pz);
-    shoalGrp.visible = on && shoal.live && sd < 28;
-  });
-
-  const vPerp = { x: 0, z: 0 };
-
-  RF.on('tick', dt => {
-    const f = FISH, s = f.state;
-
-    /* ---- the shoal keeps swimming whatever else you are doing ---- */
-    if (shoal.live) {
-      shoal.hold -= dt;
-      shoal.fade = clamp(shoal.fade + dt * (shoal.hold < 2.2 ? -0.9 : 0.9), 0, 1);
-      if (shoal.hold <= 0) moveShoal(false);
-      const a = RF.clock * 0.28;
-      let sx = shoal.ax + cos(a) * 1.15, sz = shoal.az + sin(a * 0.83) * 1.15;
-      const i = clamp(Math.round(sx + HALF), 0, N - 1), j = clamp(Math.round(sz + HALF), 0, N - 1);
-      if (HM[i][j] > 2) { sx = shoal.ax; sz = shoal.az; }     // never let the school swim up the beach
-      shoal.x = sx; shoal.z = sz;
-      if (shoalGrp.visible) {
-        shoalGrp.position.set(sx, WT - 0.12, sz);
-        shoalGrp.scale.setScalar(0.25 + shoal.fade * 0.75);
-        shoalGrp.rotation.y = a * 1.6;
-        for (let k = 0; k < shoalFish.length; k++) {
-          const g = shoalFish[k];
-          g.position.y = sin(RF.clock * 2.2 + g.userData.p) * 0.07;
-          g.rotation.y = sin(RF.clock * 1.4 + g.userData.p) * 0.4;
-        }
-        shoal.boil -= dt;
-        if (shoal.boil <= 0) { shoal.boil = rand(3.2, 7.5);
-          if (shoal.fade > 0.6) ripple(sx + rand(-1, 1), sz + rand(-1, 1), 1.1, 0xd9f6ff, 0.3, 1.0); }
+      if (st !== rodPrev) {
+        if (st === 'cast' && rodPrev === 'idle') beginCharge();
+        else if (st === 'wait' && rodPrev === 'cast') ph = 'soak';
+        else if (st === 'bite' && rodPrev === 'wait') ph = 'take';
+        else if (st === 'reel' && rodPrev === 'bite') { anchored = false; onHookset(f); }
+        else if (st === 'idle' && rodPrev === 'reel') {
+          /* full spool = landed · ESC in the last beat = you walked away ·
+             anything else = the line went */
+          /* one ESC is worth exactly one ending — consume it, or a missed take a
+             beat later gets misread as another walk-away */
+          const bailedR = RF.clock - escAt < 0.25; escAt = -99;
+          fightReport(f.reel >= 0.999 ? 'land' : bailedR ? 'off' : 'snap', f);
+          resetRod();
+        } else if (st === 'idle' && rodPrev === 'bite') {
+          const bailedB = RF.clock - escAt < 0.25; escAt = -99;
+          if (!bailedB) fightReport('miss', f);
+          resetRod();
+        } else if (st === 'idle') resetRod();
+        rodPrev = st;
       }
-    }
 
-    if (!RF.running) { if (ph !== 'idle') resetFish(); prev = s; return; }
-    if (repT > 0 && (repT -= dt) <= 0) repEl.className = '';
+      if (ph === 'idle' || !RF.running) { if (ph !== 'idle') resetRod(); return; }
+      /* a panel over the top freezes the rod exactly where it was: no cast is
+         lost because the inventory happened to open mid-charge */
+      if (RF.panelOpen) { if (ph === 'charge') f.cast = Math.min(f.cast, windup); castShow(false, false); return; }
 
-    /* ---- phase edges, read straight off core's own state machine ---- */
-    if (s !== prev) {
-      if (s === 'cast' && prev === 'idle') beginCharge();
-      else if (s === 'wait' && prev === 'cast') onSettled();
-      else if (s === 'bite' && prev === 'wait') {
-        ph = 'bite'; ripple(BOB.position.x, BOB.position.z, 1.3, 0xff5d7a, 0.55, 0.7); }
-      else if (s === 'reel' && prev === 'bite') onHook();
-      /* how core left the fight: reel full = landed, tension pinned = snapped,
-         anything else = you pressed ESC and walked away */
-      else if (s === 'idle' && prev === 'reel') finish(f.reel >= 0.999 ? 'land' : lastTens >= 0.995 ? 'snap' : 'off');
-      else if (s === 'idle' && prev === 'bite') finish('miss');
-      else if (s === 'idle') resetFish();
-      prev = s;
-    }
-    lastTens = f.tens;
+      castShow(ph !== 'soak', ph === 'fight');
+      const px = RF.pWorld.x, pz = RF.pWorld.z;
 
-    if (ph === 'idle') { wasAct = !!K.act; return; }
+      /* ---- 6/7/8: load it, band it, show where it will land ---- */
+      if (ph === 'charge') {
+        chargeT += dt;
+        windup = Math.min(0.235, windup + dt * 0.9);   // let core's whip play its wind-up, then hold the pose
+        f.cast = Math.min(f.cast, windup);
+        power += powDir * dt * 0.82;
+        if (power >= 1) { power = 1; powDir = -1; }
+        if (power <= 0.06) { power = 0.06; powDir = 1; }
+        if (RF.keys.left) aimOff -= dt * 0.95;
+        if (RF.keys.right) aimOff += dt * 0.95;
+        aimOff = clamp(aimOff, -1, 1);
 
-    /* a panel over the top freezes the rod exactly where it was — no cast is lost
-       because the inventory happened to be open mid-charge */
-    if (RF.panelOpen) { if (ph === 'charge') f.cast = Math.min(f.cast, windup); wasAct = !!K.act; return; }
+        aimTgt = aimAt(aimA + aimOff, reachNow());
+        aimGull = !!aimTgt && gullAt(aimTgt.x, aimTgt.z);
+        aimSpot = aimTgt ? (BIOME[fn.cellType(fn.heightAt(aimTgt.x, aimTgt.z))] || 'Water') : '';
+        if (aimTgt) {
+          const col = aimGull ? 0xffcf5c : 0x39d7c4;
+          aimRing.position.set(aimTgt.x, WT + 0.07, aimTgt.z);
+          aimDot.position.copy(aimRing.position);
+          aimRing.material.color.setHex(col); aimDot.material.color.setHex(col);
+          aimRing.material.opacity = aimGull ? 0.8 : 0.55;
+          aimDot.material.opacity = 0.75;
+          aimRing.scale.setScalar(0.9 + (reduced ? 0 : Math.sin(RF.clock * 5) * 0.07));
+          aimRing.visible = aimDot.visible = true;
+        } else aimRing.visible = aimDot.visible = false;
 
-    showPanel(true);
-    const px = RF.pWorld.x, pz = RF.pWorld.z;
+        const rm = rodOf();
+        if (rm) { vTip.copy(rm.userData.tip); rm.localToWorld(vTip); RF.bobber.position.copy(vTip); }
 
-    /* ---------- 1/2/3: the charge, the band, the aim ring ---------- */
-    if (ph === 'charge') {
-      chargeT += dt;
-      windup = Math.min(0.235, windup + dt * 0.9);   // let core's whip play its wind-up, then hold the pose
-      f.cast = Math.min(f.cast, windup);
-      power += powDir * dt * 0.82;
-      if (power >= 1) { power = 1; powDir = -1; }
-      if (power <= 0.06) { power = 0.06; powDir = 1; }
-      if (K.left) aimOff -= dt * 0.95;
-      if (K.right) aimOff += dt * 0.95;
-      aimOff = clamp(aimOff, -1.0, 1.0);
+        const inBand = Math.abs(power - bandC) <= bandW;
+        const depth = aimTgt ? Math.max(0, WT - fn.heightAt(aimTgt.x, aimTgt.z)) : 0;
+        castPaint(inBand ? 'good' : '', 'CAST',
+          aimTgt ? (aimGull ? '<span style="color:var(--gold)">under the gulls</span> · '
+              : '<span style="color:var(--teal)">' + aimSpot + '</span> · ')
+              + aimTgt.d.toFixed(1) + ' m · ' + depth.toFixed(1) + ' m down'
+            : '<span style="color:var(--rose)">no water that way</span>',
+          power,
+          'Lv.' + RF.state.rodLvl + ' rod · line rated <b>' + lineRating() + ' kg</b> · '
+            + DRAGS[dragIx].n + ' drag <span class="key">Q</span>',
+          (Math.max(0, bandC - bandW) * 100).toFixed(1) + '%,' + (bandW * 200).toFixed(1) + '%');
 
-      aimTgt = aimAt(aimBase + aimOff, reach());
-      aimSpot = aimTgt ? spotAt(aimTgt.x, aimTgt.z) : null;
-      aimShoal = aimTgt ? inShoal(aimTgt.x, aimTgt.z) : false;
-      if (aimTgt) {
-        const col = aimShoal ? 0xffcf5c : aimSpot ? aimSpot.col : 0x39d7c4;
-        aimRing.position.set(aimTgt.x, WT + 0.07, aimTgt.z);
-        aimDot.position.copy(aimRing.position);
-        aimRing.material.color.setHex(col); aimDot.material.color.setHex(col);
-        aimRing.material.opacity = 0.5 + ((aimSpot || aimShoal) ? 0.28 : 0);
-        aimDot.material.opacity = 0.75;
-        aimRing.scale.setScalar(0.85 + sin(RF.clock * 5) * (REDUCE ? 0 : 0.07));
-        aimRing.visible = aimDot.visible = true;
-      } else { aimRing.visible = aimDot.visible = false; }
-
-      // the bobber hangs off the rod tip while it is loaded, not halfway to the water
-      if (!rodMesh) rodMesh = rodOf();
-      if (rodMesh) { vTip.copy(rodMesh.userData.tip); rodMesh.localToWorld(vTip); BOB.position.copy(vTip); }
-
-      const inBand = Math.abs(power - bandC) <= bandW;
-      head('CAST',
-        aimShoal ? '<span style="color:var(--gold)">into the shoal</span>'
-          : aimSpot ? '<span style="color:var(--teal)">' + aimSpot.k + '</span>'
-          : aimTgt ? 'open water' : '<span style="color:var(--rose)">no water that way</span>',
-        'Lv.' + S.rodLvl + ' rod · line rated <b>' + lineKg() + ' kg</b> · ' + baitLine(),
-        inBand ? 'hot' : '');
-      setRow(0, 'power', power, inBand ? 'var(--c-uncommon)' : 'var(--teal)',
-        aimTgt ? aimTgt.d.toFixed(1) + ' m' : '-',
-        (Math.max(0, bandC - bandW) * 100).toFixed(1) + '%,' + (bandW * 200).toFixed(1) + '%');
-      hideRow(1); hideRow(2);
-
-      if ((wasAct && !K.act) || chargeT > 6.5) releaseCast();  // your arm gets tired eventually
-      wasAct = !!K.act; return;
-    }
-
-    if (ph === 'fly') {
-      head('CAST', castDist.toFixed(1) + ' m',
-        cleanCast ? '<b>a clean cast</b> · it lands soft and the water never knows'
-          : 'it lands where it lands', cleanCast ? 'hot' : '');
-      setRow(0, 'flight', f.cast, 'var(--teal)', '-', '');
-      hideRow(1); hideRow(2); wasAct = !!K.act; return;
-    }
-
-    /* ---------- 6: the wait ---------- */
-    if (ph === 'wait') {
-      tellNext -= dt;
-      if (tellNext <= 0 && f.t < f.biteAt - 0.12) tell();
-      if (dip > 0) { dip = Math.max(0, dip - dt * 1.5);
-        BOB.position.y = WT + 0.1 - dip * (0.42 + weight * 0.5); }
-      const heavy = weight > 0.6;
-      head('THE WAIT', tellN ? tellN + (tellN === 1 ? ' tell' : ' tells') : 'still',
-        (spotLift > 0.2 ? '<b>good water</b> · ' : '') + READS[readIx], '');
-      setRow(0, 'tells', clamp(tellN / 4, 0, 1), heavy ? 'var(--gold)' : 'var(--teal)',
-        tellN ? (heavy ? 'heavy' : 'light') : '-', '');
-      hideRow(1); hideRow(2); wasAct = !!K.act; return;
-    }
-
-    /* ---------- 7: the hookset window ---------- */
-    if (ph === 'bite') {
-      const k = clamp(f.t / 0.85, 0, 1), good = f.t <= 0.20;
-      setRing.position.set(BOB.position.x, WT + 0.08, BOB.position.z);
-      setMark.position.copy(setRing.position);
-      setRing.scale.setScalar(lerp(2.6, 0.42, k));
-      setRing.material.opacity = 0.75 * (1 - k * 0.4);
-      setRing.material.color.setHex(good ? 0x74e08a : 0xffcf5c);
-      setMark.material.opacity = 0.55;
-      setMark.visible = setRing.visible = true;
-      head('SET THE HOOK', good ? '<span style="color:var(--c-uncommon)">now</span>' : 'it is spitting it',
-        'press <span class="key">E</span> · early sets the hook clean and the fish starts tired', 'danger');
-      setRow(0, 'window', 1 - k, good ? 'var(--c-uncommon)' : 'var(--rose)',
-        Math.max(0, 0.85 - f.t).toFixed(2) + 's', '76.5%,23.5%');
-      hideRow(1); hideRow(2); wasAct = !!K.act; return;
-    }
-
-    /* ---------- 8/9: the fight, and the fight made visible ---------- */
-    if (ph === 'fight') {
-      fight(dt);
-      if (!anchored) { anchorX = BOB.position.x; anchorZ = BOB.position.z; anchored = true; }
-      // the bobber comes in as you gain on it, and cuts sideways every time it runs
-      const dx = anchorX - px, dz = anchorZ - pz, dl = Math.max(0.001, hyp(dx, dz));
-      vPerp.x = -dz / dl; vPerp.z = dx / dl;
-      const sw = sin(RF.clock * (inRun ? 4.2 : 1.7)) * runDir * (inRun ? 0.62 : 0.13) * (1 - f.reel * 0.45);
-      BOB.position.x = lerp(anchorX, px, f.reel * 0.58) + vPerp.x * sw;
-      BOB.position.z = lerp(anchorZ, pz, f.reel * 0.58) + vPerp.z * sw;
-      if (inRun) {
-        BOB.position.y -= Math.min(0.26, runT * 0.7);         // it sounds, and the bobber goes under
-        if (!REDUCE && Math.random() < 0.22)
-          ripple(BOB.position.x, BOB.position.z, 0.75, 0x9fe9ff, 0.28, 0.55);
+        if ((heldAct && !RF.keys.act) || chargeT > 6.5) releaseCast();  // your arm gets tired eventually
+        heldAct = !!RF.keys.act;
+        return;
       }
-      if (!rodMesh) rodMesh = rodOf();
-      // core sets rotation.x fresh every frame, so this is a delta, not a fight over it
-      if (rodMesh) { rodMesh.rotation.x -= f.tens * 0.55; rodMesh.rotation.z = runDir * f.tens * 0.30; }
 
-      const tc = f.tens > 0.80 ? 'var(--rose)' : f.tens > 0.55 ? 'var(--gold)' : 'var(--teal)';
-      const band = K.act && !f.surge && f.tens > 0.34 && f.tens < 0.78;
-      head(inRun ? 'IT RUNS' : spent ? 'PLAYED OUT' : 'THE FIGHT',
-        '<span style="color:' + DRAG[drag].c + '">' + DRAG[drag].n + ' drag</span>'
-          + (band ? ' · <span style="color:var(--c-uncommon)">working it</span>' : ''),
-        inRun ? '<b>' + runName + '</b> - let go and let the drag do it'
-          : spent ? 'it has nothing left · bring it in'
-          : 'hold <span class="key">E</span> in the middle of the line and it burns down',
-        (f.tens > 0.85 || inRun) ? 'danger' : spent ? 'hot' : '');
-      setRow(0, 'line', f.tens, tc, Math.round(f.tens * 100) + '%', '34%,44%');
-      setRow(1, 'fish', f.reel, 'var(--c-rare)', Math.round(f.reel * 100) + '%', '');
-      setRow(2, 'fight', stam, spent ? 'var(--faint)' : 'var(--c-epic)',
-        spent ? 'spent' : Math.round(stam * 100) + '%', '');
-      wasAct = !!K.act; return;
-    }
-    wasAct = !!K.act;
+      if (ph === 'fly') {
+        castPaint(castClean ? 'good' : '', 'CAST', castReach.toFixed(1) + ' m', f.cast,
+          castClean ? '<b>a clean cast</b> · it lands soft and the water never knows'
+            : 'it lands where it lands', '');
+        return;
+      }
+
+      /* ---- 9: the take ---- */
+      if (ph === 'take') {
+        const k = clamp(f.t / 0.85, 0, 1), early = f.t <= 0.20;
+        const bx = RF.bobber.position.x, bz = RF.bobber.position.z;
+        setRing.position.set(bx, WT + 0.08, bz); setMark.position.set(bx, WT + 0.08, bz);
+        setRing.scale.setScalar(lerp(2.6, 0.42, k));
+        setRing.material.opacity = 0.78 * (1 - k * 0.4);
+        setRing.material.color.setHex(early ? 0x74e08a : 0xffcf5c);
+        setMark.material.opacity = 0.55;
+        setRing.visible = setMark.visible = decorOn();
+        castPaint(early ? 'good' : 'danger', 'SET THE HOOK',
+          early ? '<span style="color:var(--c-uncommon)">now</span>' : 'it is spitting it out',
+          1 - k,
+          'early sets it clean and the fish starts tired · late and you start already loaded',
+          '76.5%,23.5%');
+        return;
+      }
+
+      /* ---- 10: the fight ---- */
+      if (ph === 'fight') {
+        fightTick(dt, f);
+        castPaint(spentFish ? 'spent' : f.surge ? 'danger' : stam < 0.35 ? 'warn' : '',
+          f.surge ? 'IT RUNS' : spentFish ? 'PLAYED OUT' : 'FIGHT LEFT',
+          '<span style="color:' + DRAGS[dragIx].c + '">' + DRAGS[dragIx].n + ' drag</span>'
+            + (runCount ? ' · ' + runCount + (runCount === 1 ? ' run' : ' runs') : ''),
+          stam,
+          f.surge ? '<b>' + runName + '</b> — let go and let the drag do the tiring'
+            : spentFish ? 'it has nothing left · bring it in'
+            : 'hold <span class="key">E</span> in the middle of the line and it burns down',
+          '34%,44%');
+      }
+    } catch (e) { RF.err('angler:rod', e); }
   });
 
-  // the rod readout is world furniture, not menu furniture
-  RF.on('panel', () => { if (RF.panelOpen) showPanel(false); });
+  /* ---------------------------------------------------------------------- */
+  /* 11. PUBLISHED SURFACE                                                  */
+  /* ---------------------------------------------------------------------- */
+  RF.api = RF.api || {};
+  RF.api.angler = {
+    /* copies, never the live objects — the journal reads, it does not steer */
+    stats() {
+      return {
+        session: { casts: sess.casts, hookups: sess.hookups, landed: sess.landed, snapped: sess.snapped,
+          missed: sess.missed, gaveUp: sess.gaveUp, longest: +sess.longest.toFixed(2),
+          best: sess.best ? Object.assign({}, sess.best) : null },
+        life: { casts: life.casts, hookups: life.hookups, landed: life.landed, snapped: life.snapped,
+          longest: +life.longest.toFixed(2), best: life.best ? Object.assign({}, life.best) : null }
+      };
+    },
+    shoal() {
+      if (!shoal) return null;
+      return { name: shoal.kind.name, sub: shoal.kind.sub, x: shoal.x, z: shoal.z, r: shoal.r,
+        dist: +shoalDist().toFixed(2), inside: inShoal(),
+        luck: shoal.kind.luck, biteMult: shoal.kind.bite,
+        secondsLeft: Math.max(0, Math.round(shoal.life - (RF.clock - shoal.born))),
+        cosmetic: RF.online };
+    },
+    /* the rod itself: what the player is doing with it right now, and how the
+       last fight went. Read-only copies — the journal reports, it does not steer */
+    rod() {
+      return { phase: ph, drag: DRAGS[dragIx].n, dragIndex: dragIx,
+        lineRating: +lineRating(), reach: +reachNow().toFixed(2),
+        cleanCast: castClean, underGulls: castGull,
+        hookset: hookGrade || null,
+        fight: ph === 'fight'
+          ? { left: +stam.toFixed(3), runs: runCount, seconds: +fightAge.toFixed(2),
+              peak: +peakLoad.toFixed(3), playedOut: spentFish }
+          : null,
+        last: lastReport ? Object.assign({}, lastReport) : null };
+    }
+  };
+
+  RF.on('start', () => {
+    try { candidates(); nextShoalAt = RF.clock + rnd(45, 90); }
+    catch (e) { RF.err('angler:start', e, 'warn'); }
+  });
 });

@@ -199,7 +199,13 @@ describe('anti-cheat', () => {
       assert.ok(fish.kg > 0);
 
       const s = res.body.state;
-      assert.equal(s.coins, 0, 'a catch pays no coins until it is sold');
+      /* The fish itself pays nothing until it is sold — but a FIRST catch also
+         earns the "First Catch" achievement, and that bounty is real coin the
+         server pays. So the only coins here must be exactly that bounty. */
+      const bounty = (res.body.earned && res.body.earned.coins) || 0;
+      assert.equal(s.coins, bounty, 'a catch pays nothing beyond the achievement bounty');
+      assert.ok(bounty === 0 || res.body.earned.ach.some(a => a.id === 'fish1'),
+        'any coins on a first catch must come from the First Catch achievement');
       assert.equal(s.bucket.length, 1);
       assert.deepEqual(s.bucket[0], fish);
       assert.equal(s.pearls, res.body.result.pearls);

@@ -26,7 +26,13 @@ import * as EV from './events.js';
 import { HANDLERS, RATE } from './game/actions.js';
 import { newState, normalizeState, BOATS, boatSeats, crewSlots, MAX_BOAT } from './game/rules.js';
 import { payDividends, mktEpochNow } from './game/economy.js';
-import { attach, onlineTotal, roomCount, broadcast, announceAll } from './realtime.js';
+import { attach, onlineTotal, roomCount, broadcast, announceAll, closeAllSockets } from './realtime.js';
+import { log } from './log.js';
+import {
+  requestId, accessLog, securityHeaders, errorHandler, installProcessGuards, onFatal
+} from './middleware.js';
+import { mountAdmin, isBanned } from './admin.js';
+import * as PROGRESS from './progress.js';
 
 const { initSchema, saves, sessions, actions: actionLog, deedsRepo, crews } = DB;
 
@@ -54,6 +60,13 @@ const sweepTimer = setInterval(() => {
 if (typeof sweepTimer.unref === 'function') sweepTimer.unref();
 
 const app = express();
+
+/* Order matters: an id first so every later log line can be tied to one request,
+   headers before any handler can answer, and the access log after the body
+   parser so it can name the user. */
+installProcessGuards();
+app.use(requestId);
+app.use(securityHeaders);
 app.disable('x-powered-by');
 app.set('trust proxy', 1);           // nginx sits in front of us
 
@@ -76,6 +89,7 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: '64kb' }));
+app.use(accessLog);
 
 /* ------------------------------------------------------------- helpers ---- */
 const nowMs = () => Date.now();
@@ -293,6 +307,10 @@ function stateEnvelope(state, extra) {
    ========================================================================== */
 mountAuth(app);
 mountWalletAuth(app);
+/* Moderation console. Dark by default: with no ADMIN_TOKEN set, every route
+   under /api/admin answers 404 rather than 401, so the surface is absent
+   rather than merely locked. */
+mountAdmin(app, { db: DB, log, realtime: { onlineTotal, roomCount } });
 
 /* ============================================================================
    GET /api/state — the client's only way to learn what it owns.
@@ -322,6 +340,15 @@ const ANTI_MACRO_MAX = 60;             // …and allow at most this many of one 
 
 app.post('/api/action/:name', requireAuth, (req, res) => {
   const name = String(req.params.name || '');
+
+  /* A ban has to bite where the value is. Cosmetics and reads stay open so a
+     banned player can still see the isle and read why. */
+  const ban = isBanned(req.userId);
+  if (ban.banned) {
+    return res.status(403).json({
+      error: 'account suspended', until: ban.until, reason: ban.reason || 'moderation action'
+    });
+  }
 
   // hasOwnProperty guard: '/api/action/constructor' must not resolve.
   if (!Object.prototype.hasOwnProperty.call(HANDLERS, name) || typeof HANDLERS[name] !== 'function') {
@@ -423,13 +450,30 @@ app.post('/api/action/:name', requireAuth, (req, res) => {
     }
   }
 
+  /* Achievements and deeds are decided HERE, not by the client: a bounty is paid
+     once, by the side that owns the coin balance. Loud deeds tell the room. */
+  let earned = null;
+  try {
+    earned = PROGRESS.evaluate(state, mktEpochNow());
+    if (earned.ach.length || earned.deeds.length) {
+      log.info('progress earned', {
+        userId, ach: earned.ach.map(a => a.id), deeds: earned.deeds.map(d => d.id), coins: earned.coins
+      });
+      for (const d of earned.deeds) {
+        if (!d.loud) continue;
+        try { announceAll({ t: 'drama', kind: 'deed', name: username, deed: d.name }); } catch { /* best effort */ }
+      }
+    }
+  } catch (e) { log.error('progress evaluate failed', { userId, err: String(e.message || e) }); }
+
   saves.put(userId, state);
-  try { actionLog.mark(userId, name); } catch (e) { console.error('[actions.mark]', e); }
+  try { actionLog.mark(userId, name); } catch (e) { log.warn('actions.mark failed', { userId, err: String(e.message || e) }); }
   syncDeeds(userId, state);
 
   res.json(stateEnvelope(state, {
     ok: true,
     result: out.result || {},
+    ...(earned && (earned.ach.length || earned.deeds.length) ? { earned } : null),
     ...(dividends > 0 ? { dividends } : null)
   }));
 });
@@ -1070,14 +1114,32 @@ app.post('/api/report', requireAuth, (req, res) => {
 const BOOTED_AT = Date.now();
 app.get('/api/health', (req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.json({
-    ok: true,
+  /* A health check that never touches storage answers "the process is up",
+     which is the one thing a crashed database still lets you say. Do the read. */
+  let dbOk = true, dbErr = '';
+  try { DB.stats(); } catch (e) { dbOk = false; dbErr = String(e && e.message || e); }
+  const body = {
+    ok: dbOk,
     service: 'reelfortune',
     now: Date.now(),
     uptimeMs: Date.now() - BOOTED_AT,
     epoch: mktEpochNow(),
-    online: onlineTotal()
-  });
+    online: onlineTotal(),
+    db: dbOk ? 'ok' : 'unavailable'
+  };
+  if (!dbOk) { body.reason = dbErr; return res.status(503).json(body); }
+  res.json(body);
+});
+
+/* Readiness is a narrower question than health: is it safe to send traffic yet?
+   Kept separate so a load balancer can drain us without declaring us sick. */
+app.get('/api/ready', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (SHUTTING_DOWN) return res.status(503).json({ ready: false, reason: 'shutting down' });
+  try { DB.stats(); } catch (e) {
+    return res.status(503).json({ ready: false, reason: 'database unavailable' });
+  }
+  res.json({ ready: true, uptimeMs: Date.now() - BOOTED_AT });
 });
 
 app.get('/api/online', (req, res) => {
@@ -1091,11 +1153,6 @@ app.get('/api/online', (req, res) => {
       cave: roomCount('cave')
     }
   });
-});
-
-/* ------------------------------------------------------------- health ----- */
-app.get('/api/health', (req, res) => {
-  res.json({ ok: true, epoch: mktEpochNow(), serverTime: nowMs(), uptime: process.uptime() });
 });
 
 /* ---- unknown /api/* never falls through to the static file server -------- */
@@ -1152,25 +1209,69 @@ app.use((err, req, res, next) => {
     IS_PROD ? null : { detail: String((err && err.message) || err) });
 });
 
+/* ------------------------------------------------------- config guard ----- */
+/* Refuse to run in production with a placeholder secret. A server that boots
+   anyway is a server nobody notices is insecure. */
+if (IS_PROD) {
+  const weak = !process.env.LEDGER_SECRET
+    || /^(changeme|secret|testsecret|please-change|example)/i.test(process.env.LEDGER_SECRET)
+    || process.env.LEDGER_SECRET.length < 16;
+  if (weak) {
+    log.error('refusing to start: LEDGER_SECRET is unset or a placeholder', { hint: 'openssl rand -hex 32' });
+    process.exit(1);
+  }
+}
+
 /* --------------------------------------------------------------- listen --- */
 // Bound to loopback on purpose: nginx terminates TLS and proxies to us.
 const server = app.listen(PORT, '127.0.0.1', () => {
-  console.log(`Reel Fortune 3D server on http://127.0.0.1:${PORT}`);
-  console.log(`  static game dir : ${GAME_DIR}`);
-  console.log(`  cors origin     : ${CORS_ORIGIN}`);
-  console.log(`  market epoch    : ${mktEpochNow()}`);
+  log.info('server listening', {
+    url: `http://127.0.0.1:${PORT}`,
+    gameDir: GAME_DIR,
+    cors: CORS_ORIGIN,
+    epoch: mktEpochNow(),
+    env: IS_PROD ? 'production' : 'development',
+    admin: process.env.ADMIN_TOKEN ? 'enabled' : 'disabled'
+  });
 });
 
 // The realtime layer rides on the same HTTP server: attach() takes the socket
 // upgrades for itself and leaves every route above untouched.
 attach(server);
 
-for (const sig of ['SIGINT', 'SIGTERM']) {
-  process.on(sig, () => {
-    console.log(`\n${sig} · closing.`);
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 5000).unref();
-  });
+/* ---------------------------------------------------- scheduled upkeep ---- */
+/* SQLite is happy to run for months untouched, right up until the WAL is a
+   gigabyte. Checkpoint often, vacuum rarely, and keep the handles so shutdown
+   can stop them. */
+const upkeep = [
+  setInterval(() => { try { DB.checkpoint(); } catch (e) { log.warn('checkpoint failed', { err: String(e.message || e) }); } }, 5 * 60 * 1000),
+  setInterval(() => { try { DB.vacuumIfNeeded(); } catch (e) { log.warn('vacuum failed', { err: String(e.message || e) }); } }, 6 * 60 * 60 * 1000)
+];
+for (const t of upkeep) t.unref();
+
+/* ------------------------------------------------------------ shutdown ---- */
+/* A restart should look like a blink to a player, not a mystery disconnect:
+   tell every socket why it is closing, stop taking new work, flush the database,
+   and only then exit. */
+let SHUTTING_DOWN = false;
+function shutdown(reason, code = 0) {
+  if (SHUTTING_DOWN) return;
+  SHUTTING_DOWN = true;
+  log.info('shutting down', { reason });
+
+  for (const t of upkeep) clearInterval(t);
+  try { closeAllSockets(1001, 'server restarting'); } catch (e) { log.warn('socket close failed', { err: String(e.message || e) }); }
+
+  const done = () => {
+    try { DB.close(); } catch (e) { log.warn('db close failed', { err: String(e.message || e) }); }
+    log.info('shutdown complete');
+    process.exit(code);
+  };
+  server.close(done);
+  /* Never hang a deploy on one stuck connection. */
+  setTimeout(() => { log.warn('shutdown timed out · forcing exit'); done(); }, 8000).unref();
 }
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => shutdown(sig));
+onFatal(() => shutdown('fatal error', 1));
 
 export default app;
