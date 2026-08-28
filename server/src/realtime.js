@@ -19,15 +19,22 @@
      client -> {t:"hello", world, title, wardrobe}
                {t:"pos", x, y, z, face, act}     act: ""|"fish"|"mine"|"chop"|"dig"
                {t:"chat", m}
+               {t:"mute", id}   {t:"unmute", id}
+               {t:"report", id, reason?}
                {t:"ping"}
      server -> {t:"welcome", id, world, peers, nodes, trees, serverTime}
                {t:"join", p}      {t:"leave", id}
                {t:"snap", a:[[id,x,y,z,face,act], ...]}
-               {t:"chat", id, name, m, at}
+               {t:"chat", id, name, m, at}   {t:"chat_err", m}
+               {t:"mute_ok", id}  {t:"unmute_ok", id}  {t:"report_ok"}
                {t:"node", i, until}   {t:"tree", i, until}   {t:"pong"}
    ========================================================================== */
 
 import { WebSocketServer } from 'ws';
+// The namespace import exists alongside the named one because `reports` is
+// being added to db.js separately; DB.reports is undefined until it lands,
+// and the report handler guards for that instead of crashing.
+import * as DB from './db.js';
 import { sessions, users } from './db.js';
 import { WORLDS } from './game/rules.js';
 
@@ -47,6 +54,14 @@ const CHAT_GAP = 1200;                 // ms between chat lines, per peer
 const HELLO_GAP = 1000;                // ms between hellos, per peer
 
 const CHAT_MAX = 200;                  // chars, after sanitising
+const CHAT_DEDUPE_MS = 10 * 1000;      // identical repeat inside this window -> dropped
+const CHAT_STRIKES = 3;                // masked lines inside the window before…
+const CHAT_STRIKE_WINDOW_MS = 60 * 1000;
+const CHAT_COOLDOWN_MS = 60 * 1000;    // …the peer loses chat for this long
+
+const MUTE_MAX = 200;                  // per-peer mute list cap (receiver-side)
+const REPORT_GAP_MS = 30 * 1000;       // one report per peer per 30s
+const REASON_MAX = 120;                // chars kept of a report reason
 const TITLE_MAX = 32;                  // matches index.js TITLE_MAX_LEN
 const WARDROBE_MAX_COLOR = 31;         // matches index.js WARDROBE_MAX_COLOR
 const WARDROBE_SLOTS = ['band', 'scarf', 'vest'];
@@ -138,16 +153,68 @@ function cleanWardrobe(v) {
 
 /**
  * Chat sanitising. Control characters become spaces rather than vanishing, so
- * "a\nb" stays two words; runs collapse, then we trim and cut to CHAT_MAX.
+ * "a\nb" stays two words; runs collapse, then we trim and cut to `max`.
  * Returns '' for anything that survives as empty — those are dropped.
+ * Report reasons go through the same wringer with a shorter cut.
  */
-function cleanChat(v) {
+function cleanChat(v, max = CHAT_MAX) {
   if (typeof v !== 'string') return '';
   return v
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, CHAT_MAX);
+    .slice(0, max);
+}
+
+/* ----------------------------------------------------- chat moderation ---- */
+
+/** Anything that smells like a URL becomes "[link]" — game chat has no
+    legitimate need to carry one, and phishing links are the main abuse. */
+const URL_RE = /\b(?:https?:\/\/|www\.)\S+/gi;
+
+/** Four-or-more of the same character in a row squeezed to three:
+    "WOIIIIII" -> "WOIII". Enthusiasm survives; keysmash walls do not. */
+const REPEAT_RE = /(.)\1{3,}/g;
+
+/**
+ * Profanity is masked, never blocked: the line still lands, letter-for-letter
+ * replaced with ✱, so the room keeps its rhythm and the troll gets nothing.
+ *
+ * Matching is whole-token only, which is what dodges the Scunthorpe problem —
+ * "class", "assist" and "kontrol" pass untouched because they are not equal to
+ * any listed word, merely contain one. Tokens are lowercased and common
+ * digit/leet swaps are undone first, so "4NJ1NG" still reads as "anjing".
+ */
+const PROFANITY = new Set([
+  // Indonesian
+  'anjing', 'asu', 'babi', 'bajingan', 'bangsat', 'entot', 'goblok',
+  'jancok', 'jancuk', 'jembut', 'kampret', 'keparat', 'kontol', 'lonte',
+  'memek', 'ngentot', 'pepek', 'peler', 'tolol',
+  // English
+  'asshole', 'bastard', 'bitch', 'cock', 'cunt', 'dick', 'faggot', 'fuck',
+  'fucker', 'fucking', 'motherfucker', 'nigga', 'nigger', 'pussy', 'shit',
+  'slut', 'whore',
+]);
+const LEET = { 4: 'a', '@': 'a', 1: 'i', 3: 'e', 0: 'o', 5: 's', $: 's', 7: 't' };
+const TOKEN_RE = /[a-z0-9@$]+/gi;
+const LEET_RE = /[4@1305$7]/g;
+
+/** Returns { text, masked } — `text` with profane tokens turned to ✱✱✱✱✱✱. */
+function maskProfanity(text) {
+  let masked = false;
+  const out = text.replace(TOKEN_RE, (word) => {
+    const norm = word.toLowerCase().replace(LEET_RE, (ch) => LEET[ch]);
+    if (!PROFANITY.has(norm)) return word;
+    masked = true;
+    return '✱'.repeat(word.length);
+  });
+  return { text: out, masked };
+}
+
+/** Peer ids are small positive integers handed out by this module. */
+function peerIdArg(v) {
+  const n = Number(v);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
 /** Resource ids are array indices on the client; anything else is a bug or an attack. */
@@ -184,6 +251,21 @@ function roomSend(world, obj, exceptId) {
   for (const peer of room) {
     if (exceptId != null && peer.id === exceptId) continue;
     rawSend(peer, raw);
+  }
+}
+
+/**
+ * Public broadcast primitives for other modules (events, announcements).
+ * Both serialise once and skip non-OPEN/backed-up sockets via rawSend.
+ */
+export function broadcast(world, obj) {
+  roomSend(cleanWorld(world), obj);   // '' -> no room -> no-op, by design
+}
+
+export function announceAll(obj) {
+  const raw = JSON.stringify(obj);
+  for (const room of rooms.values()) {
+    for (const peer of room) rawSend(peer, raw);
   }
 }
 

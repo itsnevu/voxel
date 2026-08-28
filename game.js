@@ -3849,7 +3849,7 @@ function animate(now){
     for(const b of portalBits){ const u=b.userData,a2=clock*u.sp+u.ph;
       b.position.set(Math.cos(a2)*u.r,1.82+Math.sin(a2)*u.r*0.6,0.15); } }
   updateFishLine();
-  updatePeers(dt); streamPos(dt);
+  updatePeers(dt); streamPos(dt); derbyTick(dt);
   if(emberMesh){ // sparks ride the thermals out of the crater; the lava breathes
     for(let k=0;k<embers.length;k++){ const e=embers[k];
       e.y+=e.v*dt; if(e.y>CRATER.floor+8)e.y=CRATER.floor+rand(0,1);
@@ -3953,10 +3953,17 @@ function updatePeers(dt){ if(!peers.size)return;
 /* chat */
 const chatLog=document.getElementById('chatLog'),chatIn=document.getElementById('chatIn'),chatBox=document.getElementById('chat');
 let chatOpen=false;
-function chatPush(name,msg,cls){ if(!chatLog)return;
+/* Muting is the RECEIVER's choice and lives in this browser: a quiet room for you,
+   with no power to silence anyone for everybody else. Reports go to the server. */
+const mutedNames=new Set(); try{ (JSON.parse(localStorage.getItem('rf-muted')||'[]')||[]).forEach(n=>mutedNames.add(n)); }catch(e){}
+const saveMuted=()=>{ try{ localStorage.setItem('rf-muted',JSON.stringify([...mutedNames].slice(0,200))); }catch(e){} };
+function chatPush(name,msg,cls,peerId){ if(!chatLog)return;
+  if(name&&mutedNames.has(name))return;                  // muted: never even rendered
   const d=document.createElement('div'); d.className='cmsg '+(cls||'');
-  const who=document.createElement('b'); who.textContent=name?name+': ':'';
-  d.appendChild(who); d.appendChild(document.createTextNode(msg));  // textContent → no HTML injection
+  if(name){ const who=document.createElement('b'); who.textContent=name+': ';
+    who.title='click to mute / report '+name; who.style.cursor='pointer';
+    who.onclick=()=>chatMenu(name,peerId); d.appendChild(who); }
+  d.appendChild(document.createTextNode(msg));  // textContent → no HTML injection
   chatLog.appendChild(d); while(chatLog.children.length>60)chatLog.removeChild(chatLog.firstChild);
   chatLog.scrollTop=chatLog.scrollHeight;
   if(chatBox){ chatBox.classList.add('show'); clearTimeout(chatBox._t);
@@ -3965,10 +3972,37 @@ function openChat(){ if(!chatIn||!RFNet||!RFNet.wsReady)return;
   chatOpen=true; chatBox.classList.add('show','open'); chatIn.style.display='block'; chatIn.focus(); }
 function closeChat(){ chatOpen=false; if(chatIn){chatIn.blur();chatIn.style.display='none';chatIn.value='';}
   if(chatBox)chatBox.classList.remove('open'); }
+/* click a name -> mute, unmute or report. Deliberately tiny and reversible. */
+function chatMenu(name,peerId){
+  if(mutedNames.has(name)){ mutedNames.delete(name); saveMuted();
+    if(peerId!=null&&RFNet)RFNet.send({t:'unmute',id:peerId});
+    chatPush('','— unmuted '+name+' —','sys'); return; }
+  const act=prompt('“'+name+'”\n\n  m = mute (only you stop seeing them)\n  r = report to the server\n\nType m or r:','m');
+  if(!act)return;
+  if(act.toLowerCase().startsWith('m')){ mutedNames.add(name); saveMuted();
+    if(peerId!=null&&RFNet)RFNet.send({t:'mute',id:peerId});
+    chatPush('','— muted '+name+' · click their name again to undo —','sys'); }
+  else if(act.toLowerCase().startsWith('r')){ const why=(prompt('What happened? (short)','')||'').slice(0,120);
+    if(peerId!=null&&RFNet)RFNet.send({t:'report',id:peerId,reason:why});
+    else if(RFNet&&RFNet.report)RFNet.report(name,why);
+    chatPush('','— reported '+name+'. Thanks for keeping the isle friendly. —','sys'); } }
+const CHAT_HELP='commands:  /mute NAME   /unmute NAME   /report NAME reason   /help';
+function chatCommand(m){
+  const [cmd,...rest]=m.slice(1).split(/\s+/), who=rest[0]||'';
+  const c=cmd.toLowerCase();
+  if(c==='help'){ chatPush('',CHAT_HELP,'sys'); return true; }
+  if(c==='mute'&&who){ mutedNames.add(who); saveMuted(); chatPush('','— muted '+who+' —','sys'); return true; }
+  if(c==='unmute'&&who){ mutedNames.delete(who); saveMuted(); chatPush('','— unmuted '+who+' —','sys'); return true; }
+  if(c==='report'&&who){ const q=peers&&[...peers.entries()].find(([,p])=>p.name===who);
+    if(q&&RFNet)RFNet.send({t:'report',id:q[0],reason:rest.slice(1).join(' ').slice(0,120)});
+    chatPush('','— reported '+who+' —','sys'); return true; }
+  if(c){ chatPush('','unknown command. '+CHAT_HELP,'sys'); return true; }
+  return false; }
 if(chatIn)chatIn.addEventListener('keydown',e=>{ e.stopPropagation();
   if(e.code==='Escape'){ closeChat(); return; }
   if(e.code==='Enter'){ const m=chatIn.value.trim();
-    if(m){ RFNet.send({t:'chat',m:m.slice(0,200)}); } closeChat(); } });
+    if(m){ if(m[0]==='/')chatCommand(m); else RFNet.send({t:'chat',m:m.slice(0,200)}); }
+    closeChat(); } });
 
 /* wire the socket once we are signed in */
 function startRealtime(){
@@ -3981,7 +4015,23 @@ function startRealtime(){
   .on('leave',d=>{ const q=peers.get(d.id); if(q)toast(q.name+' sailed off'); dropPeer(d.id); })
   .on('snap',d=>{ for(const a of d.a||[]){ const q=peers.get(a[0]); if(!q)continue;
       q.tx=a[1]; q.ty=a[2]; q.tz=a[3]; q.tface=a[4]; q.act=a[5]||''; } })
-  .on('chat',d=>chatPush(d.name,d.m))
+  .on('chat',d=>chatPush(d.name,d.m,'',d.id))
+  .on('chat_err',d=>chatPush('',d&&d.m==='cooldown'
+      ? '— easy there: chat paused for a minute —'
+      : '— message not sent —','sys'))
+  .on('mute_ok',()=>{}).on('unmute_ok',()=>{}).on('report_ok',()=>{})
+  /* live drama: the isle reacts to what everyone else is doing */
+  .on('drama',d=>{ if(!d)return;
+    if(d.kind==='spin'){
+      if(d.won)toast(`${pixSVG('wheel',13)} ${d.name} won${d.payout?' ◈'+fmt(d.payout):''} at the Eel!`,'gold');
+      else if(d.fish||d.lost)toast(`${pixSVG('wheel',13)} the eel ate ${d.name}'s ${d.lost||d.fish}`,'bad');
+    } else if(d.kind==='wanted'){
+      toast(`${pixSVG('trophy',13)} ${d.name} landed the WANTED ${d.fish} — ◈${fmt(d.bounty)}`,'gold');
+    } else if(d.kind==='derby'){
+      toast(`${pixSVG('trophy',13)} DERBY: ${d.name} won with ${d.kg} kg — +${d.pearls} ◉`,'gold');
+      chatPush('',`— derby over: ${d.name} took it with ${d.kg} kg —`,'sys');
+    } })
+  .on('wanted',d=>{ if(d&&d.name)chatPush('','— WANTED: '+d.name+' · ◈'+fmt(d.bounty||0)+' to the first angler —','sys'); })
   .on('node',d=>{ const n=oreNodes[d.i]; if(!n)return;
       if(d.until>Date.now()){ n.alive=false; n.mesh.visible=false; n.srvUntil=d.until; }
       else { n.alive=true; n.mesh.visible=true; n.srvUntil=0; } })
@@ -3993,6 +4043,24 @@ function applyNodeSnapshot(d){
   for(const [i,until] of d.nodes||[]){ const n=oreNodes[i];
     if(n&&until>Date.now()){ n.alive=false; n.mesh.visible=false; n.srvUntil=until; } }
   for(const [i,until] of d.trees||[]){ const t=treeData[i]; if(t)t.srvUntil=until; } }
+/* The hourly Derby: everyone on the isle fishing the same ten minutes. The
+   schedule is derived from the wall clock, so no one has to be told it started. */
+const derbyEl=document.getElementById('derby');
+let derbyT=0,derbyInfo=null;
+function derbyTick(dt){ if(!derbyEl)return;
+  if((derbyT-=dt)>0){ if(derbyInfo)paintDerby(); return; }
+  derbyT=15;
+  if(!(window.RFNet&&RFNet.online)){ derbyEl.classList.remove('on'); return; }
+  fetch(RFNet.base+'/api/derby').then(r=>r.json()).then(d=>{ derbyInfo=d&&d.derby||null; paintDerby(); }).catch(()=>{});
+}
+function paintDerby(){ if(!derbyEl||!derbyInfo){ if(derbyEl)derbyEl.classList.remove('on'); return; }
+  const now=Date.now(), live=derbyInfo.active;
+  const target=live?derbyInfo.endsAt:derbyInfo.nextAt;
+  if(!target){ derbyEl.classList.remove('on'); return; }
+  const left=Math.max(0,target-now), mm=Math.floor(left/60000), ss=Math.floor(left/1000)%60;
+  derbyEl.textContent=(live?'🏆 DERBY LIVE — ':'🏆 derby in ')+mm+':'+String(ss).padStart(2,'0')+(live?' left':'');
+  derbyEl.classList.add('on'); derbyEl.classList.toggle('live',!!live); }
+
 /* stream our own position at 10Hz, but only when it actually changed */
 let posT=0,lastSent={x:1e9,z:1e9,f:0,a:''};
 function streamPos(dt){ if(!window.RFNet||!RFNet.wsReady)return;
@@ -4007,16 +4075,24 @@ function streamPos(dt){ if(!window.RFNet||!RFNet.wsReady)return;
 { const $=id=>document.getElementById(id);
   const statusEl=$('acctStatus'),formEl=$('acctForm'),msgEl=$('acctMsg'),toggleEl=$('acctToggle');
   const msg=(t,cls)=>{ if(msgEl){msgEl.textContent=t||'';msgEl.className=cls||'';} };
+  const waysEl=$('acctWays'),noteEl=$('acctNote');
   function paint(){ if(!statusEl)return;
-    if(window.RFNet&&RFNet.online){
-      statusEl.textContent='signed in as '+RFNet.user+' · progress saved on the server';
-      statusEl.className='on'; if(formEl)formEl.style.display='none';
+    const on=window.RFNet&&RFNet.online, up=window.RFNet&&RFNet.reachable;
+    if(on){
+      const w=RFNet.wallet;
+      statusEl.textContent=(w?'◆ '+w.slice(0,6)+'…'+w.slice(-4):'signed in as '+RFNet.user)+' · progress saved on the server';
+      statusEl.className='on';
+      if(formEl)formEl.style.display='none';
+      if(waysEl)waysEl.style.display='none';
+      if(noteEl)noteEl.style.display='none';
       if(toggleEl)toggleEl.textContent='sign out';
     } else {
-      statusEl.textContent=(window.RFNet&&RFNet.reachable)
-        ? 'playing offline · sign in to sync and play online'
-        : 'playing offline · progress saved in this browser';
-      statusEl.className=''; if(toggleEl)toggleEl.textContent='sign in to play online';
+      statusEl.textContent=up?'choose how to play online — or just press Set sail to play offline'
+                             :'playing offline · progress saved in this browser';
+      statusEl.className='';
+      if(waysEl)waysEl.style.display=up?'flex':'none';
+      if(noteEl)noteEl.style.display=up?'block':'none';
+      if(toggleEl)toggleEl.textContent='use a username instead';
     } }
   /* Pull the authoritative state and adopt it wholesale. */
   async function adopt(){ try{ const d=await RFNet.getState();
@@ -4029,7 +4105,10 @@ function streamPos(dt){ if(!window.RFNet||!RFNet.wsReady)return;
         if(d.dividends)toast(`${pixSVG('chart',13)} Dividends while away: +◈${fmt(d.dividends)}`,'gold'); }
     }catch(e){ msg('Could not load your save: '+e.message,'bad'); } }
   if(toggleEl)toggleEl.onclick=async()=>{
-    if(window.RFNet&&RFNet.online){ await RFNet.logout(); paint(); msg('Signed out — back to offline play.'); return; }
+    if(window.RFNet&&RFNet.online){ await RFNet.logout();
+      try{ localStorage.removeItem('rf-wallet'); }catch(e){}   // guest key stays: it IS that guest's account
+      if(window.RFNet)RFNet.disconnectWS(); clearPeers();
+      paint(); msg('Signed out — back to offline play.'); return; }
     if(formEl)formEl.style.display=formEl.style.display==='none'?'flex':'none';
     if(!(window.RFNet&&RFNet.reachable))msg('No server found at '+(RFNet?RFNet.base||'(none)':'—')+'.','bad');
   };
@@ -4041,6 +4120,18 @@ function streamPos(dt){ if(!window.RFNet||!RFNet.wsReady)return;
     catch(e){ msg(e.message||'failed','bad'); } };
   if($('acctLogin'))$('acctLogin').onclick=()=>doAuth((u,p)=>RFNet.login(u,p),'Signing in');
   if($('acctReg'))$('acctReg').onclick=()=>doAuth((u,p)=>RFNet.register(u,p),'Creating account');
+  /* one shared finish line for wallet + guest */
+  const afterAuth=async label=>{ msg(label,'good'); paint(); await adopt(); startRealtime(); };
+  if($('acctWallet'))$('acctWallet').onclick=async()=>{
+    if(!RFNet.hasWallet()){ msg('No wallet extension found — install MetaMask, or press PLAY AS GUEST.','bad'); return; }
+    msg('Check your wallet — approve the signature request…');
+    try{ await RFNet.walletLogin(); await afterAuth('Wallet connected — welcome, '+RFNet.user+'!'); }
+    catch(e){ msg(e&&e.code===4001?'Signature rejected — no problem, you can still play as guest.'
+      :(e.message||'Wallet sign-in failed'),'bad'); } };
+  if($('acctGuest'))$('acctGuest').onclick=async()=>{
+    msg('Setting up a guest island…');
+    try{ await RFNet.guestLogin(); await afterAuth('Playing as '+RFNet.user+' — this browser keeps your progress.'); }
+    catch(e){ msg(e.message||'Guest sign-in failed','bad'); } };
   // boot: is a backend reachable, and is our token still good?
   (async()=>{ if(!window.RFNet)return;
     await RFNet.probe();

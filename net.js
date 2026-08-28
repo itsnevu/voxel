@@ -65,6 +65,34 @@ const Net={
     try{ await req('/api/auth/logout',{method:'POST'}); }catch(e){}
     token=''; user=''; store(LS_TOK,null); store(LS_USER,null);
   },
+  /* ---- Connect Wallet: the wallet is an IDENTITY, never a payment rail.
+     We ask it to sign a plain-text message; that proves the address is yours.
+     No transaction is ever built, no chain is read, no funds are touched. ---- */
+  hasWallet(){ return !!(window.ethereum); },
+  async walletLogin(){
+    if(!window.ethereum) throw new Error('No wallet found — install MetaMask or use Guest');
+    const accs=await window.ethereum.request({method:'eth_requestAccounts'});
+    const address=(accs&&accs[0]||'').toLowerCase();
+    if(!/^0x[0-9a-f]{40}$/.test(address)) throw new Error('Wallet gave no address');
+    const {message}=await req('/api/auth/wallet/nonce?address='+encodeURIComponent(address),{auth:false});
+    const signature=await window.ethereum.request({method:'personal_sign',params:[message,address]});
+    const d=await req('/api/auth/wallet/verify',{method:'POST',auth:false,body:{address,signature}});
+    token=d.token; user=d.username||address.slice(0,8); store(LS_TOK,token); store(LS_USER,user);
+    if(d.wallet)store('rf-wallet',d.wallet);
+    reachable=true; return d;
+  },
+  /* ---- Guest: a real server account with a generated key kept in this browser,
+     so a guest keeps their island across reloads without ever signing up. ---- */
+  async guestLogin(){
+    const saved=localStorage.getItem('rf-guest');
+    if(saved){ try{ const g=JSON.parse(saved); const d=await this.login(g.u,g.k); return d; }catch(e){} }
+    const d=await req('/api/auth/guest',{method:'POST',auth:false,body:{}});
+    token=d.token; user=d.username; store(LS_TOK,token); store(LS_USER,user);
+    try{ localStorage.setItem('rf-guest',JSON.stringify({u:d.username,k:d.guestKey})); }catch(e){}
+    reachable=true; return d;
+  },
+  get wallet(){ return localStorage.getItem('rf-wallet')||''; },
+
   /* Verify a stored token still works (call once at boot). */
   async resume(){
     if(!base||!token)return false;

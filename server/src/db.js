@@ -109,7 +109,32 @@ export function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_crew_requests_user ON crew_requests (user_id);
 
     CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions (expires_at);
+
+    -- Player-filed reports (abuse, bugs, scam attempts). target is free text so
+    -- it can name a user, a chat line, or anything else the client sends.
+    CREATE TABLE IF NOT EXISTS reports (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      reporter_id INTEGER,
+      target      TEXT,
+      reason      TEXT,
+      detail      TEXT,
+      at          INTEGER
+    );
   `);
+
+  // --- Idempotent migrations for columns added after the original schema ---
+  // ALTER TABLE ADD COLUMN throws when the column already exists; that error is
+  // the "already migrated" signal, so it is deliberately swallowed.
+  try {
+    db.exec('ALTER TABLE users ADD COLUMN wallet TEXT');
+  } catch {
+    /* column already present */
+  }
+
+  // Partial unique index: at most one account per wallet address, while every
+  // password-only account keeps wallet = NULL without colliding.
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_wallet
+             ON users (wallet) WHERE wallet IS NOT NULL`);
 }
 
 export const users = {
@@ -127,6 +152,30 @@ export const users = {
 
   findById(id) {
     return q('SELECT * FROM users WHERE id = ?').get(id) || null;
+  },
+};
+
+export const wallets = {
+  /** Account bound to a (lowercased) wallet address, or null. */
+  findUser(addrLower) {
+    return q('SELECT * FROM users WHERE wallet = ?').get(String(addrLower)) || null;
+  },
+
+  /** Bind a wallet address to an account. Throws if the address is taken. */
+  attach(userId, addrLower) {
+    q('UPDATE users SET wallet = ? WHERE id = ?').run(String(addrLower), userId);
+  },
+};
+
+export const reports = {
+  add(reporterId, target, reason, detail) {
+    q('INSERT INTO reports (reporter_id, target, reason, detail, at) VALUES (?, ?, ?, ?, ?)')
+      .run(reporterId, String(target), String(reason), String(detail), Date.now());
+  },
+
+  /** Newest first, capped so an admin fetch can never drag the whole table. */
+  list(limit = 100) {
+    return q('SELECT * FROM reports ORDER BY at DESC, id DESC LIMIT ?').all(limit | 0);
   },
 };
 

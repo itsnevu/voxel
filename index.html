@@ -78,6 +78,12 @@
   .deed .db{position:absolute;top:9px;right:12px;font-size:9px;color:var(--gold);letter-spacing:.12em;}
   .deed.locked{opacity:.4;border-color:var(--glass-bd-soft);box-shadow:none;}
   .deed.locked::before{border-color:rgba(255,255,255,.08);}
+  #derby{position:fixed;top:150px;right:12px;z-index:5;display:none;font-size:11px;font-weight:600;letter-spacing:.06em;
+    background:var(--glass-hud);backdrop-filter:blur(14px) saturate(1.6);-webkit-backdrop-filter:blur(14px) saturate(1.6);
+    border:1px solid rgba(255,207,92,.5);border-radius:11px;padding:7px 12px;color:var(--gold);
+    box-shadow:var(--glass-hi),0 0 18px rgba(255,207,92,.16);font-variant-numeric:tabular-nums;}
+  #derby.on{display:block;}
+  #derby.live{border-color:rgba(255,93,122,.7);color:var(--rose);box-shadow:var(--glass-hi),0 0 20px rgba(255,93,122,.28);}
   #chat{position:fixed;left:12px;bottom:14px;z-index:6;width:min(330px,42vw);opacity:0;transition:opacity .3s;pointer-events:none;}
   #chat.show{opacity:1;}
   #chat.open{pointer-events:auto;}
@@ -341,7 +347,13 @@
     border:1px solid var(--glass-bd-soft);border-radius:9px;padding:9px 12px;width:150px;outline:none;}
   #acctForm input:focus{border-color:rgba(57,215,196,.6);}
   #acctForm .btn{padding:8px 13px;font-size:12px;}
+  #acctWays{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:11px;}
+  #acctWays .btn{padding:10px 16px;font-size:12.5px;}
+  .wbtn{border-color:rgba(159,140,255,.65)!important;color:#c3b4ff!important;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 0 14px rgba(159,140,255,.18)!important;}
+  .wbtn:hover:not(:disabled){border-color:#b6a4ff!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 0 20px rgba(159,140,255,.35)!important;}
   #acctMsg{font-size:11px;margin-top:8px;min-height:14px;color:var(--muted);}
+  #acctNote{font-size:10px;color:var(--faint);margin-top:7px;line-height:1.5;max-width:420px;margin-left:auto;margin-right:auto;}
   #acctMsg.bad{color:var(--rose);}#acctMsg.good{color:var(--teal);}
   .loadnote{margin-top:16px;font-size:11px;color:var(--faint);}
   .loadnote button{background:none;border:none;color:var(--faint);text-decoration:underline;cursor:pointer;font:inherit;font-size:11px;}
@@ -381,6 +393,7 @@
   <div class="invkey"><b>I</b> inventory</div>
   <div class="invkey" id="capBtn"><b>C</b> captain</div>
 </div>
+<div id="derby"></div>
 <div id="chat">
   <div id="chatLog"></div>
   <input id="chatIn" type="text" maxlength="200" placeholder="say something… (Enter to send, Esc to cancel)" style="display:none">
@@ -502,6 +515,10 @@
     <button class="cta" id="startBtn" type="button">Set sail</button>
     <div id="acct">
       <div id="acctStatus">playing offline · progress saved in this browser</div>
+      <div id="acctWays">
+        <button class="btn wbtn" id="acctWallet" type="button">◆ CONNECT WALLET</button>
+        <button class="btn" id="acctGuest" type="button">PLAY AS GUEST</button>
+      </div>
       <div id="acctForm" style="display:none">
         <input id="acctUser" type="text" placeholder="username" autocomplete="username" maxlength="20">
         <input id="acctPass" type="password" placeholder="password" autocomplete="current-password" maxlength="72">
@@ -509,8 +526,10 @@
         <button class="btn" id="acctReg" type="button">REGISTER</button>
       </div>
       <div id="acctMsg"></div>
+      <div id="acctNote">Your wallet is used only to prove who you are — you sign a message, nothing else.
+        No transaction, no fees, and nothing in this game touches your funds.</div>
       <div class="loadnote">
-        <button id="acctToggle" type="button">sign in to play online</button> ·
+        <button id="acctToggle" type="button">use a username instead</button> ·
         <button id="wipe" type="button">wipe save</button>
       </div>
     </div>
