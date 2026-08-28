@@ -113,7 +113,7 @@ RF.mod('04-world', function (RF) {
         // hillshade from a north-west sun, plus a touch of altitude tint
         const hl = HM[i > 0 ? i - 1 : 0][j], hu = HM[i][j > 0 ? j - 1 : 0];
         const hr = HM[i < N - 1 ? i + 1 : i][j], hd = HM[i][j < N - 1 ? j + 1 : j];
-        f = clamp(1 + ((hl + hu) - (hr + hd)) * 0.043, 0.6, 1.34) * (1 + (h - 5) * 0.011);
+        f = clamp(1 + ((hl + hu) - (hr + hd)) * 0.1, 0.58, 1.42) * (1 + (h - 5) * 0.024);
       }
       g.fillStyle = rgb(col, f);
       g.fillRect(i * TILE, j * TILE, TILE, TILE);
@@ -121,10 +121,10 @@ RF.mod('04-world', function (RF) {
     for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
       const h = HM[i][j], X = i * TILE, Y = j * TILE;
       const hr = i < N - 1 ? HM[i + 1][j] : h, hd = j < N - 1 ? HM[i][j + 1] : h;
-      // every voxel terrace gets an edge — that single line is what makes a
-      // blocky heightmap read as slope instead of noise
-      if (h >= 3 && hr >= 3 && h !== hr) { g.fillStyle = 'rgba(6,16,20,.17)'; g.fillRect(X + TILE - 1, Y, 1, TILE); }
-      if (h >= 3 && hd >= 3 && h !== hd) { g.fillStyle = 'rgba(6,16,20,.17)'; g.fillRect(X, Y + TILE - 1, TILE, 1); }
+      // a drop-line on the downhill side of every terrace — that one shadow is
+      // what makes a blocky heightmap read as slope instead of noise
+      if (h >= 3 && hr >= 3 && hr < h) { g.fillStyle = 'rgba(6,16,20,.34)'; g.fillRect(X + TILE - 2, Y, 2, TILE); }
+      if (h >= 3 && hd >= 3 && hd < h) { g.fillStyle = 'rgba(6,16,20,.34)'; g.fillRect(X, Y + TILE - 2, TILE, 2); }
       if (h < 3) continue;
       g.fillStyle = 'rgba(255,255,255,.4)';
       if (i < N - 1 && HM[i + 1][j] <= 2) g.fillRect(X + TILE - 2, Y, 2, TILE);
@@ -419,12 +419,14 @@ body.photo #rf-world-atlas{display:none!important;}
 
       // trees: hollow while the stump is on cooldown
       if (s > 1.4) {
-        const leafG = W.leaf[0];
+        // canopy colours are chosen to sit ON the ground they grow from, so the
+        // dots stay legible on Fortune Isle's green and on Frostbite's white
+        const leafG = fn.shade(W.leaf[0], 0.52), leafP = '#d15f9c';
         for (const t of RF.treeData) {
           const X = sx(t.x), Y = sy(t.z);
           if (X < -8 || Y < -8 || X > VW + 8 || Y > VH + 8) continue;
           const gone = t.srvUntil ? tnow < t.srvUntil : t.cd > now;
-          dot(X, Y, t.pink ? '#ec9fcb' : leafG, Math.max(1.6, s * 0.24), gone);
+          dot(X, Y, t.pink ? leafP : leafG, Math.max(1.8, s * 0.24), gone);
         }
       }
       // ore veins: coloured by metal, hollow while respawning
@@ -478,7 +480,7 @@ body.photo #rf-world-atlas{display:none!important;}
   }
 
   function drawCompass() {
-    const cx = VW - 34, cy = 34, r = 17;
+    const cx = VW - 40, cy = 40, r = 17;
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU);
     ctx.fillStyle = 'rgba(9,16,20,.72)'; ctx.fill();
     ctx.strokeStyle = 'rgba(255,255,255,.16)'; ctx.lineWidth = 1; ctx.stroke();
@@ -575,7 +577,7 @@ body.photo #rf-world-atlas{display:none!important;}
     if (AO || !root) return;
     if (RF.panelOpen || RF.chatOpen) return;
     AO = true; root.classList.add('on'); root.setAttribute('aria-hidden', 'false');
-    if (nameEl) nameEl.textContent = W.name + '  ' + W.sub;
+    if (nameEl) nameEl.innerHTML = esc(W.name) + ' <span style="color:var(--faint);font-weight:500;font-size:.62em;letter-spacing:.1em">' + esc(W.sub.toUpperCase()) + '</span>';
     // a full-screen map should not let the hero keep walking off a cliff
     RF.keys.up = RF.keys.down = RF.keys.left = RF.keys.right = RF.keys.act = false;
     fitCanvas(); centreOnPlayer(true); railBuild(); railDist(); almanac(); paintHeatBtn(); drawAtlas();

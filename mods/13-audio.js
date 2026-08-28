@@ -373,8 +373,10 @@ RF.mod('13-audio', function (RF) {
       if (now - s.next > 3) { s.next = now + rz(s.lo, s.hi); continue; }   // a stall, not a backlog
       let lv = 0;
       try { lv = s.gate(); } catch (e) { RF.warn('audio:gate:' + s.n, e); }
-      const busy = 0.35 + 0.65 * (1 - clamp(lv, 0, 1));                    // closer means more often
-      s.next = now + rz(s.lo, s.hi) * busy / Math.max(0.35, d);
+      /* lo..hi is the gap AT the source; walking away stretches it, so the
+         numbers above read as what you actually hear standing on the spot */
+      const far = 1 + 1.6 * (1 - clamp(lv, 0, 1));
+      s.next = now + rz(s.lo, s.hi) * far / Math.max(0.35, d);
       if (d <= 0 || lv < 0.02 || voices >= CAP || !awake) continue;
       try { s.fire(lv * trim.events); } catch (e) { RF.err('audio:' + s.n, e); }
     }

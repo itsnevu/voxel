@@ -22,9 +22,11 @@
      ·  9 the hookset       — a shrinking ring at the take; set it early and the
                               fish starts tired, set it late and you start loaded
      · 10 stamina, runs
-     and drag (Shift+B)  — a fish with a fight left in it that you burn down
-                              by working it or by giving line, and three drag
-                              settings whose safe ceiling IS the rod ladder
+          and the drag     — a fish with a fight left in it that you burn down by
+                              working it or by giving line, and three drag settings
+                              (Q, taken only while the rod is out, so 05-progress
+                              keeps it everywhere else) whose safe ceiling IS the
+                              rod ladder: heavy pops an Old Rod and suits a Poseidon
 
    Nothing here rolls a fish or grants a coin. 6-10 ride on top of core's own
    `updateFishing()` from the frame hook, which runs after it every frame: the
@@ -692,7 +694,7 @@ RF.mod('01-angler', function (RF) {
     const depth = Math.max(0, WT - fn.heightAt(pt.x, pt.z));
     const dp = depth.toFixed(1) + ' m';
     if (dp !== lastDp) { lastDp = dp; C.dp.textContent = dp; }
-    const bi = BIOME[fn.cellType(fn.heightAt(pt.x, pt.z))] || 'Water';
+    const bi = bottomAt(pt.x, pt.z);
     if (bi !== lastBi) { lastBi = bi; C.bi.textContent = bi; }
 
     const near = inShoal();
@@ -1188,12 +1190,12 @@ RF.mod('01-angler', function (RF) {
          zeroed. Watching ESC go past is the only honest way to separate the two;
          we never claim it, so core cancels exactly as it always did. */
       if (e.code === 'Escape') { escAt = RF.clock; return; }
-      /* KeyQ is 05-progress's quest log everywhere else on the isle, and this
-         slot loads first — so we take it ONLY while the rod is actually out,
-         which is the only time a drag setting means anything. Neither of us has
-         to give the key up. (Shift+B is not an option: §9's bait panel above
-         claims plain KeyB without looking at the modifier.) */
-      if (e.code !== 'KeyQ' || typing()) return;
+      /* Shift+B, never KeyQ. SPEC §4 gives KeyQ to 05-progress and says a second
+         binding rides a modifier on a key you already own; taking Q "only while
+         the rod is out" is still taking it, and this slot claims keys first, so
+         the quest log would go dead for the whole fishing loop. §9's bait panel
+         ignores shifted B precisely so this dial can have it. */
+      if (e.code !== 'KeyB' || !e.shiftKey || typing()) return;
       if (!RF.running || RF.panelOpen || ph === 'idle') return;
       e.preventDefault();
       dragIx = (dragIx + 1) % 3; storeDirty = true;
@@ -1272,7 +1274,7 @@ RF.mod('01-angler', function (RF) {
 
         aimTgt = aimAt(aimA + aimOff, reachNow());
         aimGull = !!aimTgt && gullAt(aimTgt.x, aimTgt.z);
-        aimSpot = aimTgt ? (BIOME[fn.cellType(fn.heightAt(aimTgt.x, aimTgt.z))] || 'Water') : '';
+        aimSpot = aimTgt ? bottomAt(aimTgt.x, aimTgt.z) : '';
         if (aimTgt) {
           const col = aimGull ? 0xffcf5c : 0x39d7c4;
           aimRing.position.set(aimTgt.x, WT + 0.07, aimTgt.z);
@@ -1296,7 +1298,7 @@ RF.mod('01-angler', function (RF) {
             : '<span style="color:var(--rose)">no water that way</span>',
           power,
           'Lv.' + RF.state.rodLvl + ' rod · line rated <b>' + lineRating() + ' kg</b> · '
-            + DRAGS[dragIx].n + ' drag <span class="key">Q</span>',
+            + DRAGS[dragIx].n + ' drag <span class="key">Shift</span>+<span class="key">B</span>',
           (Math.max(0, bandC - bandW) * 100).toFixed(1) + '%,' + (bandW * 200).toFixed(1) + '%');
 
         if ((heldAct && !RF.keys.act) || chargeT > 6.5) releaseCast();  // your arm gets tired eventually

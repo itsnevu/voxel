@@ -913,9 +913,29 @@ RF.mod('07-juice', function (RF) {
 
     const ready = () => !!(AC && BUS && AC.state !== 'closed');
     const audible = () => ready() && !RF.muted;
-    const anow = () => AC.currentTime;
+    const anow = () => anowCtx();
+    const anowCtx = () => AC.currentTime;
 
-    /* mirror the player's three sliders onto our buses, and stand everything down while sailing */
+    /* Phase two of the wiring, and it cannot happen at adopt() time: we take the context
+       INSIDE its constructor, before initAudio() has built master/music/sfx, so those nodes
+       do not exist yet. The moment they do, our one-shots move under the sfx fader and the
+       adaptive layer under the music fader — the player's own sliders then govern them for
+       free, with no value to mirror. Until then they hang off the muffle and still sound. */
+    let attached = false;
+    function attachSliders() {
+      if (attached || !BUS || !(RF.audio && RF.audio.ready)) return;
+      const sN = RF.audio.sfxNode, mN = RF.audio.musicNode;
+      if (!sN || !mN) return;
+      try {
+        BUS.world.disconnect(); BUS.world.connect(sN);
+        BUS.bed.disconnect(); BUS.bed.connect(mN);
+        attached = true;
+      } catch (e) { RF.warn('juice:feel:attach', e); }
+    }
+
+    /* the UI bus is the one that cannot ride a fader: it deliberately sits downstream of the
+       muffle and the duck so a press always cuts through, which puts it past master too —
+       so this one value, and only this one, is mirrored by hand */
     let sailing = false, bedLevel = 1;
     const MIX = { world: 1, ui: 1, bed: 1 };   // last targets, readable so a settings UI can show them
     function followMixer() {
@@ -925,12 +945,13 @@ RF.mod('07-juice', function (RF) {
       const sv = typeof M.sfx === 'number' ? M.sfx : 1;
       const mv = typeof M.music === 'number' ? M.music : 1;
       const gate = (RF.muted || sailing) ? 0 : 1, t = anow();
-      MIX.world = MIX.ui = m * sv * gate;
-      MIX.bed = m * mv * gate * bedLevel;
+      MIX.ui = m * sv * gate;
+      MIX.world = attached ? m * sv * gate : gate;      // attached: the fader is upstream of us
+      MIX.bed = (attached ? 1 : m * mv) * gate * bedLevel;
       try {
-        BUS.world.gain.setTargetAtTime(MIX.world, t, 0.12);
         BUS.ui.gain.setTargetAtTime(MIX.ui, t, 0.12);
-        BUS.bed.gain.setTargetAtTime(MIX.bed, t, 0.5);
+        BUS.world.gain.setTargetAtTime(gate, t, 0.12);
+        BUS.bed.gain.setTargetAtTime(gate * bedLevel, t, 0.5);
       } catch (e) {}
     }
 

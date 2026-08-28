@@ -6,11 +6,19 @@
 
    Layout:
      src/index.js      <- this file (HTTP surface only, no game math)
-     src/db.js         <- sqlite repositories
+     src/log.js        <- structured JSON logging, redaction by field name
+     src/middleware.js <- request id, security headers, access log, error handler
+     src/admin.js      <- moderation console + the sanction predicates
+     src/db.js         <- sqlite repositories, migrations, maintenance
      src/auth.js       <- register/login/session middleware
+     src/progress.js   <- achievements and Isle Ledger deeds, server-side
      src/game/rules.js <- fish tables, upgrade costs, newState()
      src/game/economy.js <- market epochs, stock prices, dividends
      src/game/actions.js <- one handler per intent
+
+   The mount order further down is load bearing, and middleware.js explains why:
+     requestId -> securityHeaders -> cors -> express.json -> accessLog
+       -> routes -> admin console -> notFoundJson -> static -> errorHandler
    ========================================================================== */
 
 import path from 'node:path';
@@ -26,10 +34,16 @@ import * as EV from './events.js';
 import { HANDLERS, RATE } from './game/actions.js';
 import { newState, normalizeState, BOATS, boatSeats, crewSlots, MAX_BOAT } from './game/rules.js';
 import { payDividends, mktEpochNow } from './game/economy.js';
+// Both forms of the same module: the named imports are what the routes call,
+// the namespace is what admin.js feature-detects against (it looks for a kick
+// hook and a presence listing under several plausible names, so handing it the
+// whole module means the console gains those the day realtime.js grows them).
+import * as RT from './realtime.js';
 import { attach, onlineTotal, roomCount, broadcast, announceAll, closeAllSockets } from './realtime.js';
-import { log } from './log.js';
+import { log, child, logLevel } from './log.js';
 import {
-  requestId, accessLog, securityHeaders, errorHandler, installProcessGuards, onFatal
+  requestId, securityHeaders, accessLog, notFoundJson, errorHandler,
+  installProcessGuards, onFatal
 } from './middleware.js';
 import { mountAdmin, isBanned } from './admin.js';
 import * as PROGRESS from './progress.js';
@@ -46,36 +60,177 @@ const GAME_DIR = path.resolve(SERVER_ROOT, process.env.GAME_DIR || '../');
 const PORT = Number(process.env.PORT) || 8787;
 const IS_PROD = process.env.NODE_ENV === 'production';
 
-/* --------------------------------------------------------------- boot ----- */
-initSchema();
-
-const CREW_REQUEST_TTL = 24 * 60 * 60 * 1000;   // unanswered boarding knocks expire after a day
-
-// Drop expired sessions every 10 minutes. unref() so the timer never keeps a
-// shutting-down process alive.
-const sweepTimer = setInterval(() => {
-  try { sessions.sweep(); } catch (e) { console.error('[sessions.sweep]', e); }
-  try { crews.sweep(CREW_REQUEST_TTL); } catch (e) { console.error('[crews.sweep]', e); }
-}, 10 * 60 * 1000);
-if (typeof sweepTimer.unref === 'function') sweepTimer.unref();
-
-const app = express();
-
-/* Order matters: an id first so every later log line can be tied to one request,
-   headers before any handler can answer, and the access log after the body
-   parser so it can name the user. */
+/* ============================================================================
+   PROCESS GUARDS — installed before anything else can throw.
+   unhandledRejection is logged and survived; uncaughtException runs the onFatal
+   hooks at the bottom of this file and then exits, so systemd can put a healthy
+   process in our place. middleware.js explains the asymmetry.
+   ========================================================================== */
 installProcessGuards();
-app.use(requestId);
-app.use(securityHeaders);
-app.disable('x-powered-by');
-app.set('trust proxy', 1);           // nginx sits in front of us
 
-/* ---------------------------------------------------------------- cors ---- */
+/* ============================================================================
+   CONFIGURATION — validated BEFORE the database is opened or a port is bound.
+   ----------------------------------------------------------------------------
+   A production process that starts with the example secret is worse than one
+   that refuses to start: the first is silently forgeable and nobody notices for
+   months, the second is a thirty-second fix at deploy time.
+   ========================================================================== */
+
 // CORS_ORIGIN may be '*' (default) or a comma separated allow-list.
 const CORS_ORIGIN = (process.env.CORS_ORIGIN || '*').trim();
 const ORIGIN_LIST = CORS_ORIGIN === '*'
   ? null
   : CORS_ORIGIN.split(',').map(s => s.trim()).filter(Boolean);
+
+/* The value .env.example ships with, plus the shapes people type when they mean
+   "I will fix this before launch". Matching runs on a normalised copy — lower
+   case, punctuation stripped — so change-me-to-32-random-bytes, CHANGE_ME and
+   "Change Me" are one and the same string here. Getting this list wrong in the
+   lenient direction is the whole failure mode: a guard that does not recognise
+   the placebo it was written for is not a guard. */
+const LEDGER_PLACEHOLDERS = new Set([
+  'changemeto32randombytes',
+  'changeme',
+  'change',
+  'secret',
+  'ledgersecret',
+  'placeholder',
+  'example',
+  'testsecret',
+  'pleasechange',
+  'xxx'
+]);
+
+const LEDGER_MIN_LEN = 32;   // 32 hex chars = 16 bytes of entropy
+
+/** True when this is the example value rather than a real secret. */
+function isPlaceholderSecret(value) {
+  const flat = String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!flat) return true;
+  if (LEDGER_PLACEHOLDERS.has(flat)) return true;
+  // `change-me-<anything>` and `<anything>_CHANGEME` both mean the same thing.
+  return flat.includes('changeme') || flat.includes('pleasechange');
+}
+
+let LEDGER_SECRET = (process.env.LEDGER_SECRET || '').trim();
+
+if (IS_PROD) {
+  if (isPlaceholderSecret(LEDGER_SECRET)) {
+    log.error('refusing to start · LEDGER_SECRET is unset or still the example value', {
+      env: 'LEDGER_SECRET',
+      present: LEDGER_SECRET.length > 0,
+      hint: 'openssl rand -hex 32'
+    });
+    process.exit(1);
+  }
+  if (LEDGER_SECRET.length < LEDGER_MIN_LEN) {
+    // Short but genuinely random: not worth refusing a deploy over, loud enough
+    // that the next deploy fixes it.
+    log.warn('LEDGER_SECRET is shorter than recommended', {
+      length: LEDGER_SECRET.length, recommended: LEDGER_MIN_LEN
+    });
+  }
+  if (!process.env.ADMIN_TOKEN) {
+    log.warn('ADMIN_TOKEN is not set · every /api/admin path will answer 404');
+  }
+  if (!ORIGIN_LIST) {
+    log.warn('CORS_ORIGIN is "*" · fine while the game is served from this same ' +
+             'origin, but credentialed CORS can never be enabled alongside a wildcard');
+  }
+} else if (!LEDGER_SECRET) {
+  LEDGER_SECRET = crypto.randomBytes(32).toString('hex');
+  log.warn('LEDGER_SECRET missing · using an ephemeral dev secret ' +
+           '(signatures will not survive a restart)');
+}
+
+/* --------------------------------------------------------------- boot ----- */
+initSchema();
+
+// Read once. The schema version cannot change while the process runs, and
+// /api/health has to stay cheap enough for an uptime probe every few seconds.
+let SCHEMA_VERSION = 0;
+try {
+  SCHEMA_VERSION = DB.stats().schemaVersion | 0;
+} catch (e) {
+  log.error('could not read the schema version at boot', { err: e });
+}
+
+/* One line an operator can paste into a bug report. Never a secret value —
+   only whether one is configured. The admin field is deliberately NOT called
+   `adminToken`: log.js redacts any field whose name says "token", and
+   "[redacted]" would answer a question nobody asked. */
+log.info('configuration', {
+  env: process.env.NODE_ENV || 'development',
+  port: PORT,
+  gameDir: GAME_DIR,
+  dbPath: process.env.DB_PATH || '(default: server/data/reelfortune.db)',
+  corsOrigin: CORS_ORIGIN,
+  schemaVersion: SCHEMA_VERSION,
+  logLevel,
+  ledgerSigning: LEDGER_SECRET ? 'configured' : 'disabled',
+  adminConsole: process.env.ADMIN_TOKEN ? 'enabled' : 'disabled',
+  node: process.version,
+  pid: process.pid
+});
+
+const CREW_REQUEST_TTL = 24 * 60 * 60 * 1000;   // unanswered boarding knocks expire after a day
+
+/* ============================================================================
+   SCHEDULED MAINTENANCE
+   ----------------------------------------------------------------------------
+   Every timer here is unref()'d so none of them can hold a shutting-down
+   process open, and every one is in `TIMERS` so shutdown() can stop them before
+   the database handle goes away — a checkpoint firing into a closing handle is
+   a stack trace in the log at the exact moment nobody is reading it.
+   ========================================================================== */
+const SWEEP_EVERY = 10 * 60 * 1000;         // expired sessions + stale crew knocks
+const CHECKPOINT_EVERY = 5 * 60 * 1000;     // fold the WAL back into the main file
+const VACUUM_EVERY = 6 * 60 * 60 * 1000;    // hand free pages back to the filesystem
+const DERBY_EVERY = 30 * 1000;              // settle closed derbies
+
+const TIMERS = [];
+function every(ms, fn) {
+  const timer = setInterval(fn, ms);
+  if (typeof timer.unref === 'function') timer.unref();
+  TIMERS.push(timer);
+  return timer;
+}
+
+every(SWEEP_EVERY, () => {
+  try { sessions.sweep(); } catch (e) { log.error('session sweep failed', { err: e }); }
+  try { crews.sweep(CREW_REQUEST_TTL); } catch (e) { log.error('crew sweep failed', { err: e }); }
+});
+
+/* SQLite is happy to run untouched for months, right up until the WAL is a
+   gigabyte: under continuous read traffic the natural checkpoint may never get
+   a quiet moment. Checkpoint often, vacuum rarely — db.js makes both of these
+   a cheap no-op when there is nothing to do. */
+every(CHECKPOINT_EVERY, () => {
+  try {
+    const r = DB.checkpoint();
+    if (r && r.busy) log.debug('wal checkpoint busy', r);
+  } catch (e) { log.error('wal checkpoint failed', { err: e }); }
+});
+
+every(VACUUM_EVERY, () => {
+  try {
+    const r = DB.vacuumIfNeeded();
+    if (r && r.reclaimed > 0) log.info('database vacuumed', r);
+  } catch (e) { log.error('vacuum failed', { err: e }); }
+});
+
+const app = express();
+app.disable('x-powered-by');
+app.set('trust proxy', 1);           // nginx sits in front of us
+
+/* ============================================================================
+   MIDDLEWARE — the order below is the contract middleware.js documents.
+   An id first, so every line written from here down can be tied to one request;
+   headers before any handler can answer, so even a 404 or a static asset gets
+   the policy; the access log after the body parser so it can name the user.
+   ========================================================================== */
+app.use(requestId);
+app.use(securityHeaders);
 
 app.use(cors({
   origin: ORIGIN_LIST ? ORIGIN_LIST : '*',
@@ -84,15 +239,21 @@ app.use(cors({
   credentials: !!ORIGIN_LIST,
   methods: ['GET', 'POST', 'OPTIONS'],
   // auth.js reads the session token from `Authorization: Bearer …` or `X-Auth-Token`.
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Auth-Token'],
+  // X-Admin-Token is listed so the moderation console can be driven from a
+  // browser page on an allowed origin; curl needs no CORS at all.
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Auth-Token', 'X-Admin-Token'],
   maxAge: 600
 }));
 
 app.use(express.json({ limit: '64kb' }));
+
+// One line per completed response. LOG_ACCESS_QUIET=/api/health,/lib drops
+// uptime probes and asset fetches to debug level on a busy box.
 app.use(accessLog);
 
 /* ------------------------------------------------------------- helpers ---- */
 const nowMs = () => Date.now();
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /* ----------------------------------------------------------------------------
    Every error answer carries BOTH a human sentence and a stable machine code.
@@ -146,7 +307,7 @@ function resolveSaveRowReader() {
 
   const raw = DB.db || DB.database || (DB.default && DB.default.db);
   if (!raw || typeof raw.prepare !== 'function') {
-    console.error('[saves] no raw db handle · cannot tell a missing save from a corrupt one.');
+    log.error('no raw db handle · cannot tell a missing save from a corrupt one');
     return readSaveRow;
   }
 
@@ -155,7 +316,7 @@ function resolveSaveRowReader() {
     stmt.get(0);                       // smoke test: fail here, not per-request
     readSaveRow = (userId) => stmt.get(userId);
   } catch (e) {
-    console.error('[saves] row reader unavailable:', e.message);
+    log.error('save row reader unavailable', { err: e });
     readSaveRow = null;
   }
   return readSaveRow;
@@ -180,7 +341,8 @@ function loadState(userId) {
     // save", and guessing wrong destroys progress. Refuse instead: a loud
     // outage is recoverable, a wiped save is not.
     const state = (() => {
-      try { return saves.get(userId); } catch (e) { console.error('[saves.get]', e); return null; }
+      try { return saves.get(userId); }
+      catch (e) { log.error('save read failed', { userId, err: e }); return null; }
     })();
     if (state && typeof state === 'object' && !Array.isArray(state)) return normalizeState(state);
     throw new SaveUnreadable(userId);
@@ -191,7 +353,7 @@ function loadState(userId) {
     row = readRow(userId);
   } catch (e) {
     // A failed read is not proof the save is gone. Refuse rather than reset.
-    console.error('[saves.read]', userId, e);
+    log.error('save row read failed', { userId, err: e });
     throw new SaveUnreadable(userId);
   }
 
@@ -206,11 +368,11 @@ function loadState(userId) {
   try {
     parsed = JSON.parse(row.state);
   } catch (e) {
-    console.error('[saves.corrupt] user', userId, '· unparseable save left untouched:', e.message);
+    log.error('unparseable save left untouched', { userId, err: e });
     throw new SaveUnreadable(userId);
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    console.error('[saves.corrupt] user', userId, '· save row is not a state object, left untouched.');
+    log.error('save row is not a state object · left untouched', { userId });
     throw new SaveUnreadable(userId);
   }
 
@@ -248,7 +410,7 @@ function deedHash(deedId, blockNo) {
 }
 
 /**
- * Mirror state.deeds (minted by the game rules) into the ledger table so
+ * Mirror state.deeds (minted by progress.js) into the ledger table so
  * /api/ledger and /api/ledger/claim have rows to work with. Cheap: only writes
  * deeds the table has not seen yet.
  */
@@ -262,7 +424,7 @@ function syncDeeds(userId, state) {
       if (deedsRepo.has(userId, deedId)) continue;
       deedsRepo.add(userId, deedId, blockNo, deedHash(deedId, blockNo));
     } catch (e) {
-      console.error('[deeds.sync]', deedId, e);
+      log.error('deed sync failed', { userId, deedId, err: e });
     }
   }
 }
@@ -303,14 +465,55 @@ function stateEnvelope(state, extra) {
 }
 
 /* ============================================================================
+   SANCTION ENFORCEMENT
+   ----------------------------------------------------------------------------
+   admin.js owns the sanctions table and exports the predicate; the doors are
+   here. A ban already deletes every session row, so the usual outcome is a 401
+   on the very next request. This gate closes the remaining window — a token
+   minted microseconds before the ban landed — and it is what a player who is
+   mid-session actually sees, with the reason and the end date attached rather
+   than a bare "unauthorized".
+
+   Reads and cosmetics stay open on purpose: a suspended player should still be
+   able to load the isle and read WHY they cannot act. Only the two doors that
+   move value are closed.
+
+   isBanned() is fail-open by design (see admin.js): a broken sanctions table
+   must never lock the whole playerbase out of their own accounts. The try/catch
+   below says the same thing a second time, because a throw inside a gate is
+   precisely how an authoritative server locks itself out of production.
+
+   TODO(realtime): the WebSocket authenticates once at connect, so an open
+   socket outlives the session a ban revokes. Refusing the upgrade for a banned
+   account, cutting a mid-session ban on the next heartbeat, and gagging a muted
+   player in chat all belong in realtime.js and are wired separately — see
+   "ENFORCEMENT WIRING" (4a–4d) in admin.js for the exact call sites.
+   ========================================================================== */
+function requireNotBanned(req, res, next) {
+  let ban = null;
+  try {
+    ban = isBanned(req.userId);
+  } catch (e) {
+    log.error('ban lookup failed · allowing the request', { userId: req.userId, err: e });
+    return next();
+  }
+  if (!ban || !ban.banned) return next();
+
+  const until = Number(ban.until) || 0;
+  return httpErr(res, 403, 'ACCOUNT_SUSPENDED', 'this account is suspended', {
+    reason: ban.reason || 'moderation action',
+    until,
+    // The wall-clock form too: the client shows this to a human, and epoch
+    // milliseconds mean nothing to one.
+    untilIso: until > 0 ? new Date(until).toISOString() : null
+  });
+}
+
+/* ============================================================================
    AUTH  — POST /api/auth/{register,login,logout}, GET /api/auth/me
    ========================================================================== */
 mountAuth(app);
 mountWalletAuth(app);
-/* Moderation console. Dark by default: with no ADMIN_TOKEN set, every route
-   under /api/admin answers 404 rather than 401, so the surface is absent
-   rather than merely locked. */
-mountAdmin(app, { db: DB, log, realtime: { onlineTotal, roomCount } });
 
 /* ============================================================================
    GET /api/state — the client's only way to learn what it owns.
@@ -323,7 +526,8 @@ app.get('/api/state', requireAuth, (req, res) => {
   // settled whenever the player checks in. payDividends() is epoch-guarded and
   // therefore safe to call on every request.
   let dividends = 0;
-  try { dividends = payDividends(state) || 0; } catch (e) { console.error('[payDividends]', e); }
+  try { dividends = payDividends(state) || 0; }
+  catch (e) { log.error('dividend settlement failed', { userId: req.userId, err: e }); }
 
   if (dividends > 0) saves.put(req.userId, state);
   syncDeeds(req.userId, state);
@@ -338,17 +542,8 @@ app.get('/api/state', requireAuth, (req, res) => {
 const ANTI_MACRO_WINDOW = 60 * 1000;   // look back one minute…
 const ANTI_MACRO_MAX = 60;             // …and allow at most this many of one action
 
-app.post('/api/action/:name', requireAuth, (req, res) => {
+app.post('/api/action/:name', requireAuth, requireNotBanned, (req, res) => {
   const name = String(req.params.name || '');
-
-  /* A ban has to bite where the value is. Cosmetics and reads stay open so a
-     banned player can still see the isle and read why. */
-  const ban = isBanned(req.userId);
-  if (ban.banned) {
-    return res.status(403).json({
-      error: 'account suspended', until: ban.until, reason: ban.reason || 'moderation action'
-    });
-  }
 
   // hasOwnProperty guard: '/api/action/constructor' must not resolve.
   if (!Object.prototype.hasOwnProperty.call(HANDLERS, name) || typeof HANDLERS[name] !== 'function') {
@@ -362,7 +557,8 @@ app.post('/api/action/:name', requireAuth, (req, res) => {
   const minGap = RATE[name] || 0;
   if (minGap > 0) {
     let last = 0;
-    try { last = actionLog.last(userId, name) || 0; } catch (e) { console.error('[actions.last]', e); }
+    try { last = actionLog.last(userId, name) || 0; }
+    catch (e) { log.error('action cooldown lookup failed', { userId, action: name, err: e }); }
     const elapsed = t - last;
     if (last > 0 && elapsed < minGap) {
       res.set('Retry-After', String(Math.ceil((minGap - elapsed) / 1000)));
@@ -376,20 +572,21 @@ app.post('/api/action/:name', requireAuth, (req, res) => {
       res.set('Retry-After', '60');
       return httpErr(res, 429, 'RATE_LIMIT', 'too fast', { retryAfter: ANTI_MACRO_WINDOW });
     }
-  } catch (e) { console.error('[actions.countSince]', e); }
+  } catch (e) { log.error('anti-macro lookup failed', { userId, action: name, err: e }); }
 
   const state = loadStateFor(req, res);
   if (!state) return;
 
   // Settle any owed dividends first so the handler sees the true balance.
   let dividends = 0;
-  try { dividends = payDividends(state) || 0; } catch (e) { console.error('[payDividends]', e); }
+  try { dividends = payDividends(state) || 0; }
+  catch (e) { log.error('dividend settlement failed', { userId, err: e }); }
 
   let out;
   try {
     out = HANDLERS[name](state, req.body && typeof req.body === 'object' ? req.body : {});
   } catch (e) {
-    console.error(`[action:${name}]`, e);
+    log.error('action handler threw', { userId, action: name, err: e });
     return httpErr(res, 500, 'ACTION_FAILED', 'action failed');
   }
 
@@ -400,19 +597,23 @@ app.post('/api/action/:name', requireAuth, (req, res) => {
     return httpErr(res, 400, 'ACTION_REJECTED', msg);
   }
 
+  /* Resolved once per request and used by both the event broadcasts and the
+     deed announcement below. It has to live out here: scoping it inside the
+     catch/spin branch left the announcement referencing a name that was not in
+     scope, and the only reason nobody saw a ReferenceError is that it happened
+     inside a best-effort try. */
+  let username = '';
+  try {
+    const u = DB.users.findById(userId);
+    username = u && u.username ? String(u.username) : '';
+  } catch (e) { log.error('user lookup failed', { userId, err: e }); }
+
   // --- multiplayer events: derby scoring, wanted bounty, spin drama ---------
   // Runs BEFORE the save below so a bounty credited here persists. Defensive:
   // an events/realtime hiccup must never turn a valid action into a 500.
   if (name === 'catch' || name === 'spin') {
     if (!out.result || typeof out.result !== 'object') out.result = {};
     const result = out.result;
-
-    // One username lookup per request, shared by every event below.
-    let username = '';
-    try {
-      const u = DB.users.findById(userId);
-      username = u && u.username ? String(u.username) : '';
-    } catch (e) { console.error('[users.findById]', e); }
 
     /* The derby and the wanted-fish bounty are contests between people who are
        actually at the rod. An unattended auto-rig catch scores neither — it
@@ -435,7 +636,7 @@ app.post('/api/action/:name', requireAuth, (req, res) => {
             fish: result.fish.name, bounty
           });
         }
-      } catch (e) { console.error('[events.catch]', e); }
+      } catch (e) { log.error('catch event failed', { userId, err: e }); }
     }
 
     if (name === 'spin') {
@@ -446,7 +647,7 @@ app.post('/api/action/:name', requireAuth, (req, res) => {
           fish: (result.fish && result.fish.name) || null,
           lost: result.lost || null
         });
-      } catch (e) { console.error('[events.spin]', e); }
+      } catch (e) { log.error('spin event failed', { userId, err: e }); }
     }
   }
 
@@ -457,17 +658,22 @@ app.post('/api/action/:name', requireAuth, (req, res) => {
     earned = PROGRESS.evaluate(state, mktEpochNow());
     if (earned.ach.length || earned.deeds.length) {
       log.info('progress earned', {
-        userId, ach: earned.ach.map(a => a.id), deeds: earned.deeds.map(d => d.id), coins: earned.coins
+        userId,
+        ach: earned.ach.map(a => a.id),
+        deeds: earned.deeds.map(d => d.id),
+        coins: earned.coins
       });
       for (const d of earned.deeds) {
         if (!d.loud) continue;
-        try { announceAll({ t: 'drama', kind: 'deed', name: username, deed: d.name }); } catch { /* best effort */ }
+        try { announceAll({ t: 'drama', kind: 'deed', name: username, deed: d.name }); }
+        catch (e) { log.error('deed announcement failed', { userId, deed: d.id, err: e }); }
       }
     }
-  } catch (e) { log.error('progress evaluate failed', { userId, err: String(e.message || e) }); }
+  } catch (e) { log.error('progress evaluate failed', { userId, err: e }); }
 
   saves.put(userId, state);
-  try { actionLog.mark(userId, name); } catch (e) { log.warn('actions.mark failed', { userId, err: String(e.message || e) }); }
+  try { actionLog.mark(userId, name); }
+  catch (e) { log.error('action log write failed', { userId, action: name, err: e }); }
   syncDeeds(userId, state);
 
   res.json(stateEnvelope(state, {
@@ -488,7 +694,7 @@ const WARDROBE_SLOTS = ['band', 'scarf', 'vest'];
 const WARDROBE_MAX_COLOR = 31;   // generous bound; palette is far smaller
 const TITLE_MAX_LEN = 32;
 
-app.post('/api/save', requireAuth, (req, res) => {
+app.post('/api/save', requireAuth, requireNotBanned, (req, res) => {
   const body = (req.body && typeof req.body === 'object') ? req.body : {};
   const state = loadStateFor(req, res);
   if (!state) return;
@@ -513,15 +719,15 @@ app.post('/api/save', requireAuth, (req, res) => {
   //     sanitising here rather than a strict membership test.
   if (typeof body.titleId === 'string') {
     const ownsAny = state.ownedT && Object.keys(state.ownedT).length > 0;
-    const clean = body.titleId.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, TITLE_MAX_LEN);
+    const clean = body.titleId.replace(/[ -]/g, '').trim().slice(0, TITLE_MAX_LEN);
     const next = ownsAny ? clean : '';
     if (state.titleId !== next) { state.titleId = next; touched = true; }
   }
 
-  // --- ach / deeds: the server does not evaluate these yet, so they are the
-  //     client's to keep. Accept them APPEND-ONLY (a key may appear and a block
-  //     number may rise, never fall) so a page reload stops wiping the trophy
-  //     wall — without letting a client hand itself a coin reward twice.
+  // --- ach / deeds: progress.js now evaluates both on the server, so these are
+  //     accepted APPEND-ONLY (a key may appear and a block number may rise,
+  //     never fall) purely so a save written by an older client is not lost.
+  //     Nothing here pays a coin: the reward lives in PROGRESS.evaluate().
   for (const field of ['ach', 'deeds']) {
     const incoming = body[field];
     if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) continue;
@@ -618,7 +824,7 @@ function resolveLeaderboardQuery() {
     stmt.all(1);            // smoke test: fails loudly here rather than per-request
     lbQuery = (n) => stmt.all(n);
   } catch (e) {
-    console.error('[leaderboard] disabled:', e.message);
+    log.error('leaderboard disabled', { err: e });
     lbQuery = null;
   }
   return lbQuery;
@@ -639,7 +845,7 @@ app.get('/api/leaderboard', (req, res) => {
   try {
     rows = run(LEADERBOARD_LIMIT) || [];
   } catch (e) {
-    console.error('[leaderboard]', e);
+    log.error('leaderboard query failed', { err: e });
     return httpErr(res, 500, 'LEADERBOARD_UNAVAILABLE', 'leaderboard unavailable');
   }
 
@@ -661,7 +867,7 @@ app.get('/api/leaderboard', (req, res) => {
 /* ============================================================================
    ISLE LEDGER
    ----------------------------------------------------------------------------
-   Deeds are trophies minted by the game rules. /claim binds one to a wallet
+   Deeds are trophies minted by progress.js. /claim binds one to a wallet
    address so a future contract could recognise it.
 
    !! PLACEHOLDER SIGNATURE !!
@@ -674,23 +880,16 @@ app.get('/api/leaderboard', (req, res) => {
    LEDGER_SECRET, but no smart contract can verify it. Swapping in real signing
    means replacing signClaim() below and nothing else — the payload string is
    already the message that would be signed.
+
+   LEDGER_SECRET itself is resolved and validated in the CONFIGURATION section
+   at the top of this file: in production a missing or example value is a
+   refusal to boot, not a runtime 503.
    ========================================================================== */
 const ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
 const DEED_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const CLAIM_RATE = 3000;              // ms between claims, per user
 const CLAIM_MAX_PER_MIN = 10;
 const CLAIM_ACTION = 'ledger_claim';
-
-let LEDGER_SECRET = process.env.LEDGER_SECRET || '';
-if (!LEDGER_SECRET) {
-  if (IS_PROD) {
-    console.error('[ledger] LEDGER_SECRET is not set · /api/ledger/claim will refuse to sign.');
-  } else {
-    LEDGER_SECRET = crypto.randomBytes(32).toString('hex');
-    console.warn('[ledger] LEDGER_SECRET missing; using an ephemeral dev secret. ' +
-                 'Signatures will not survive a restart.');
-  }
-}
 
 /** The exact bytes a real signer would sign, EIP-191 framed. */
 function claimPayload(address, deedId, userId, blockNo) {
@@ -716,7 +915,8 @@ app.get('/api/ledger', requireAuth, (req, res) => {
   syncDeeds(req.userId, state);
 
   let rows = [];
-  try { rows = deedsRepo.list(req.userId) || []; } catch (e) { console.error('[deeds.list]', e); }
+  try { rows = deedsRepo.list(req.userId) || []; }
+  catch (e) { log.error('deed listing failed', { userId: req.userId, err: e }); }
 
   res.json({ deeds: rows, epoch: mktEpochNow(), serverTime: nowMs() });
 });
@@ -748,7 +948,7 @@ app.post('/api/ledger/claim', requireAuth, (req, res) => {
       res.set('Retry-After', '60');
       return httpErr(res, 429, 'RATE_LIMIT', 'too fast', { retryAfter: ANTI_MACRO_WINDOW });
     }
-  } catch (e) { console.error('[ledger.rate]', e); }
+  } catch (e) { log.error('ledger rate lookup failed', { userId, err: e }); }
 
   // Make sure the deed exists for this player before signing anything.
   const state = loadStateFor(req, res);
@@ -756,7 +956,8 @@ app.post('/api/ledger/claim', requireAuth, (req, res) => {
   syncDeeds(userId, state);
 
   let owned = false;
-  try { owned = !!deedsRepo.has(userId, deedId); } catch (e) { console.error('[deeds.has]', e); }
+  try { owned = !!deedsRepo.has(userId, deedId); }
+  catch (e) { log.error('deed ownership lookup failed', { userId, deedId, err: e }); }
   if (!owned) return httpErr(res, 400, 'DEED_NOT_MINTED', 'deed not minted for this player');
 
   const blockNo = Number(state.deeds && state.deeds[deedId]) || 0;
@@ -766,10 +967,11 @@ app.post('/api/ledger/claim', requireAuth, (req, res) => {
   try {
     deedsRepo.setClaim(userId, deedId, address, signature);
   } catch (e) {
-    console.error('[deeds.setClaim]', e);
+    log.error('deed claim write failed', { userId, deedId, err: e });
     return httpErr(res, 500, 'CLAIM_FAILED', 'could not record claim');
   }
-  try { actionLog.mark(userId, CLAIM_ACTION); } catch (e) { console.error('[actions.mark]', e); }
+  try { actionLog.mark(userId, CLAIM_ACTION); }
+  catch (e) { log.error('action log write failed', { userId, action: CLAIM_ACTION, err: e }); }
 
   res.json({
     payload,
@@ -813,7 +1015,8 @@ const hullInfo = (lvl) => {
 /** One shared cooldown across every crew write; admitting is not a hot path. */
 function crewRateLimited(userId, res) {
   let last = 0;
-  try { last = actionLog.last(userId, CREW_ACTION) || 0; } catch (e) { console.error('[crew.rate]', e); }
+  try { last = actionLog.last(userId, CREW_ACTION) || 0; }
+  catch (e) { log.error('crew rate lookup failed', { userId, err: e }); }
   const gap = nowMs() - last;
   if (last > 0 && gap < CREW_RATE) {
     res.set('Retry-After', '1');
@@ -823,7 +1026,8 @@ function crewRateLimited(userId, res) {
   return false;
 }
 const markCrew = (userId) => {
-  try { actionLog.mark(userId, CREW_ACTION); } catch (e) { console.error('[crew.mark]', e); }
+  try { actionLog.mark(userId, CREW_ACTION); }
+  catch (e) { log.error('action log write failed', { userId, action: CREW_ACTION, err: e }); }
 };
 
 /** Resolve a username from the body to a real account, or null. */
@@ -883,7 +1087,10 @@ app.get('/api/crew', requireAuth, (req, res) => {
 app.get('/api/crew/captains', requireAuth, (req, res) => {
   let rows = [];
   try { rows = saves.captains(CREW_LIST_LIMIT * 2, 1) || []; }
-  catch (e) { console.error('[crew.captains]', e); return httpErr(res, 500, 'UNAVAILABLE', 'unavailable'); }
+  catch (e) {
+    log.error('captain listing failed', { userId: req.userId, err: e });
+    return httpErr(res, 500, 'UNAVAILABLE', 'unavailable');
+  }
 
   const mine = new Set(crews.requestsBy(req.userId).map(r => r.ownerId));
   const berth = crews.berthOf(req.userId);
@@ -970,7 +1177,10 @@ app.post('/api/crew/admit', requireAuth, (req, res) => {
   const seats = boatSeats(saves.boatLvl(req.userId));
   let outcome;
   try { outcome = crews.admit(req.userId, target.id, seats); }
-  catch (e) { console.error('[crew.admit]', e); return httpErr(res, 500, 'ADMIT_FAILED', 'could not admit'); }
+  catch (e) {
+    log.error('crew admit failed', { userId: req.userId, targetId: target.id, err: e });
+    return httpErr(res, 500, 'ADMIT_FAILED', 'could not admit');
+  }
 
   const MSG = {
     'no-request': [404, 'that sailor is not waiting to board'],
@@ -1043,12 +1253,15 @@ app.get('/api/derby', (req, res) => {
 // isle. loadState() may throw SaveUnreadable — an unreadable champion save is
 // skipped (events.js never retries a payout, so the prize is forfeit rather
 // than risked being paid twice).
-const derbyTimer = setInterval(() => {
+every(DERBY_EVERY, () => {
   try {
     EV.sweepDerbies((w) => {
       let st = null;
       try { st = loadState(w.userId); }
-      catch (e) { console.error('[derby.payout] save unreadable for', w.userId, e.message); return; }
+      catch (e) {
+        log.error('derby payout skipped · save unreadable', { userId: w.userId, err: e });
+        return;
+      }
       if (!st) return;
       st.pearls = (st.pearls | 0) + w.pearls;
       st.pearlsLife = (st.pearlsLife | 0) + w.pearls;
@@ -1058,9 +1271,8 @@ const derbyTimer = setInterval(() => {
         kg: +w.kg.toFixed(1), pearls: w.pearls
       });
     });
-  } catch (e) { console.error('[derby.sweep]', e); }
-}, 30 * 1000);
-if (typeof derbyTimer.unref === 'function') derbyTimer.unref();
+  } catch (e) { log.error('derby sweep failed', { err: e }); }
+});
 
 /* ============================================================================
    POST /api/report — a player flags another by name (HTTP twin of the
@@ -1073,7 +1285,7 @@ const REPORT_REASON_MAX = 120;
 
 /** Control chars out, whitespace collapsed, cut to `max`. */
 const cleanReportField = (v, max) => String(v ?? '')
-  .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+  .replace(/[ --]/g, ' ')
   .replace(/\s+/g, ' ')
   .trim()
   .slice(0, max);
@@ -1091,57 +1303,125 @@ app.post('/api/report', requireAuth, (req, res) => {
       res.set('Retry-After', String(Math.ceil((REPORT_RATE - (t - last)) / 1000)));
       return httpErr(res, 429, 'RATE_LIMIT', 'too fast', { retryAfter: REPORT_RATE - (t - last) });
     }
-  } catch (e) { console.error('[report.rate]', e); }
+  } catch (e) { log.error('report rate lookup failed', { userId: req.userId, err: e }); }
 
   try {
     DB.reports.add(req.userId, target, reason, '');
   } catch (e) {
-    console.error('[report.add]', e);
+    log.error('report write failed', { userId: req.userId, err: e });
     return httpErr(res, 500, 'REPORT_FAILED', 'could not record report');
   }
-  try { actionLog.mark(req.userId, REPORT_ACTION); } catch (e) { console.error('[actions.mark]', e); }
+  try { actionLog.mark(req.userId, REPORT_ACTION); }
+  catch (e) { log.error('action log write failed', { userId: req.userId, action: REPORT_ACTION, err: e }); }
 
   res.json({ ok: true });
+});
+
+/* ============================================================================
+   HEALTH AND READINESS
+   ----------------------------------------------------------------------------
+   Two endpoints, because a proxy asks two different questions:
+
+     /api/health  liveness  — "is this process still worth talking to?"
+     /api/ready   readiness — "should new traffic be routed here?"
+
+   Both do a REAL round trip to SQLite, because a process that is up with a
+   closed or corrupt database is exactly the failure a flat {ok:true} hides.
+   The probe is a prepared `SELECT 1` rather than db.stats(): stats() runs five
+   COUNT(*) queries and two stat() calls, which is a strange amount of work to
+   repeat every five seconds for an uptime check.
+
+   Readiness additionally requires a migrated schema and flips to 503 the
+   instant shutdown begins, so a load balancer drains us before the listener
+   closes. Health reports the same drain, one signal ahead of the socket dying.
+
+   Both are unauthenticated on purpose — the shell polls them before sign-in —
+   and neither leaks anything but numbers.
+   ========================================================================== */
+const BOOTED_AT = Date.now();
+
+let pingStmt;                 // prepared once; this runs on every probe
+let SHUTTING_DOWN = false;
+
+/**
+ * A real query against SQLite. Returns null when healthy, or a short reason
+ * when it is not — the reason goes into the 503 body so an operator reads the
+ * cause instead of guessing at it.
+ */
+function probeDatabase() {
+  try {
+    const handle = DB.db;
+    if (!handle || typeof handle.prepare !== 'function') return 'no database handle';
+    if (handle.open === false) return 'database handle is closed';
+    if (!pingStmt) pingStmt = handle.prepare('SELECT 1 AS ok');
+    const row = pingStmt.get();
+    if (!row || row.ok !== 1) return 'database probe returned nothing';
+    return null;
+  } catch (e) {
+    log.error('database probe failed', { err: e });
+    return 'database probe threw';
+  }
+}
+
+/** The facts both endpoints report, healthy or not. */
+function healthFacts() {
+  let online = null;
+  try { online = onlineTotal(); } catch { online = null; }
+  return {
+    service: 'reelfortune',
+    now: Date.now(),
+    uptimeMs: Date.now() - BOOTED_AT,
+    uptime: process.uptime(),
+    epoch: mktEpochNow(),
+    schemaVersion: SCHEMA_VERSION,
+    online,
+    serverTime: nowMs()
+  };
+}
+
+app.get('/api/health', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const facts = healthFacts();
+
+  if (SHUTTING_DOWN) {
+    res.set('Retry-After', '15');
+    return res.status(503).json({ ok: false, reason: 'shutting down', db: 'draining', ...facts });
+  }
+
+  const failure = probeDatabase();
+  if (failure) {
+    res.set('Retry-After', '5');
+    return res.status(503).json({ ok: false, reason: failure, db: 'unavailable', ...facts });
+  }
+
+  res.json({ ok: true, db: 'ok', ...facts });
+});
+
+app.get('/api/ready', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const facts = healthFacts();
+
+  const refuse = (reason) => {
+    res.set('Retry-After', '5');
+    return res.status(503).json({ ok: false, ready: false, reason, ...facts });
+  };
+
+  if (SHUTTING_DOWN) return refuse('shutting down');
+
+  const failure = probeDatabase();
+  if (failure) return refuse(failure);
+
+  // A schema version of 0 means the migrations never recorded one, which is a
+  // half-initialised database and not somewhere to send players.
+  if (!(SCHEMA_VERSION > 0)) return refuse('schema not migrated');
+
+  res.json({ ok: true, ready: true, ...facts });
 });
 
 /* ------------------------------------------------------------- online ----- */
 // Head-count per isle, straight out of the realtime layer. Deliberately
 // unauthenticated: the shell shows how busy each world is before you sign in,
 // and it leaks nothing but numbers.
-/* The cheapest endpoint we have, and the only one whose whole job is to answer
-   "are you there, and how fast". The client's connection doctor times this
-   rather than /api/leaderboard, which touches the database on every call. */
-const BOOTED_AT = Date.now();
-app.get('/api/health', (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  /* A health check that never touches storage answers "the process is up",
-     which is the one thing a crashed database still lets you say. Do the read. */
-  let dbOk = true, dbErr = '';
-  try { DB.stats(); } catch (e) { dbOk = false; dbErr = String(e && e.message || e); }
-  const body = {
-    ok: dbOk,
-    service: 'reelfortune',
-    now: Date.now(),
-    uptimeMs: Date.now() - BOOTED_AT,
-    epoch: mktEpochNow(),
-    online: onlineTotal(),
-    db: dbOk ? 'ok' : 'unavailable'
-  };
-  if (!dbOk) { body.reason = dbErr; return res.status(503).json(body); }
-  res.json(body);
-});
-
-/* Readiness is a narrower question than health: is it safe to send traffic yet?
-   Kept separate so a load balancer can drain us without declaring us sick. */
-app.get('/api/ready', (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  if (SHUTTING_DOWN) return res.status(503).json({ ready: false, reason: 'shutting down' });
-  try { DB.stats(); } catch (e) {
-    return res.status(503).json({ ready: false, reason: 'database unavailable' });
-  }
-  res.json({ ready: true, uptimeMs: Date.now() - BOOTED_AT });
-});
-
 app.get('/api/online', (req, res) => {
   res.json({
     total: onlineTotal(),
@@ -1155,13 +1435,30 @@ app.get('/api/online', (req, res) => {
   });
 });
 
-/* ---- unknown /api/* never falls through to the static file server -------- */
-app.use((req, res, next) => {
-  if (req.path === '/api' || req.path.startsWith('/api/')) {
-    return httpErr(res, 404, 'NOT_FOUND', 'not found');
-  }
-  next();
+/* ============================================================================
+   MODERATION CONSOLE
+   ----------------------------------------------------------------------------
+   Mounted after every game route and BEFORE the `unknown /api/* -> 404`
+   catch-all below, or the catch-all would swallow every admin path. Dark by
+   default: with no ADMIN_TOKEN set, every route under /api/admin answers 404
+   rather than 401, so the surface is absent rather than merely locked.
+
+   `realtime: RT` hands over the whole module rather than a hand-picked pair of
+   functions, because admin.js feature-detects a kick hook and a presence
+   listing under several plausible names — passing the namespace means the
+   console gains "who is online, by name" and instant socket cuts on the day
+   realtime.js exports them, with no edit here.
+   ========================================================================== */
+const adminConsole = mountAdmin(app, {
+  db: DB,
+  log: child({ mod: 'admin' }),
+  realtime: RT
 });
+
+/* ---- unknown /api/* never falls through to the static file server -------- */
+// notFoundJson calls next() for non-API paths, so the static handler below
+// still gets its turn at them.
+app.use(notFoundJson);
 
 /* ============================================================================
    STATIC GAME FILES
@@ -1187,40 +1484,48 @@ app.use(express.static(GAME_DIR, {
   }
 }));
 
-/* ------------------------------------------------------------ 404 / 500 --- */
-app.use((req, res) => {
-  httpErr(res, 404, 'NOT_FOUND', 'not found');
-});
+/* ------------------------------------------------------------------ 404 --- */
+// Called with no `next`, which is notFoundJson's signal to answer rather than
+// fall through: there is nothing below this point but the error handlers.
+app.use((req, res) => notFoundJson(req, res));
 
+/* ============================================================================
+   ERRORS — two handlers, and the order between them matters.
+   ----------------------------------------------------------------------------
+   The first one owns the failures this file has a stable machine code for. A
+   client keys its retry policy off `code`, never off the English sentence, so
+   SAVE_UNREADABLE and the body-parser rejections keep answering in that shape
+   rather than being flattened into the generic envelope.
+
+   Everything else — every unexpected throw — is handed to middleware.js's
+   errorHandler, which is deliberately the last word: it logs the stack next to
+   the request id and tells the client nothing but {error, id}. No stack, no
+   message we did not write, not even in development, because the id is what
+   turns a bug report into a `journalctl | grep`.
+   ========================================================================== */
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  // Safety net for a save we refused to read: a route that forgot loadStateFor()
-  // must still answer 503, never 500 and never a silent overwrite.
-  if (err instanceof SaveUnreadable) return refuseUnreadable(res);
-  // Body parser failures arrive here as well.
+  // A save we refused to read: 503, never 500, and never a silent overwrite.
+  if (err instanceof SaveUnreadable) {
+    log.warn('save unreadable', { id: req && req.id, userId: err.userId });
+    return refuseUnreadable(res);
+  }
+
+  // Body-parser failures. They are the client's fault and saying which one
+  // plainly saves everybody a packet capture.
   if (err && err.type === 'entity.too.large') {
+    log.warn('payload too large', { id: req && req.id, path: req && req.path });
     return httpErr(res, 413, 'PAYLOAD_TOO_LARGE', 'payload too large');
   }
-  if (err && (err.type === 'entity.parse.failed' || err instanceof SyntaxError)) {
+  if (err && (err.type === 'entity.parse.failed' || (err instanceof SyntaxError && err.body !== undefined))) {
+    log.warn('malformed json', { id: req && req.id, path: req && req.path });
     return httpErr(res, 400, 'MALFORMED_JSON', 'malformed json');
   }
-  console.error('[unhandled]', err);
-  httpErr(res, 500, 'INTERNAL', 'internal error',
-    IS_PROD ? null : { detail: String((err && err.message) || err) });
+
+  return next(err);
 });
 
-/* ------------------------------------------------------- config guard ----- */
-/* Refuse to run in production with a placeholder secret. A server that boots
-   anyway is a server nobody notices is insecure. */
-if (IS_PROD) {
-  const weak = !process.env.LEDGER_SECRET
-    || /^(changeme|secret|testsecret|please-change|example)/i.test(process.env.LEDGER_SECRET)
-    || process.env.LEDGER_SECRET.length < 16;
-  if (weak) {
-    log.error('refusing to start: LEDGER_SECRET is unset or a placeholder', { hint: 'openssl rand -hex 32' });
-    process.exit(1);
-  }
-}
+app.use(errorHandler);
 
 /* --------------------------------------------------------------- listen --- */
 // Bound to loopback on purpose: nginx terminates TLS and proxies to us.
@@ -1228,50 +1533,136 @@ const server = app.listen(PORT, '127.0.0.1', () => {
   log.info('server listening', {
     url: `http://127.0.0.1:${PORT}`,
     gameDir: GAME_DIR,
-    cors: CORS_ORIGIN,
+    corsOrigin: CORS_ORIGIN,
     epoch: mktEpochNow(),
-    env: IS_PROD ? 'production' : 'development',
-    admin: process.env.ADMIN_TOKEN ? 'enabled' : 'disabled'
+    adminConsole: adminConsole && adminConsole.enabled ? 'enabled' : 'disabled'
   });
+});
+
+server.on('error', (err) => {
+  // EADDRINUSE and EACCES land here, and neither is survivable: nothing is
+  // listening, so staying up would only be a process that answers nothing.
+  log.error('http server error', { err });
+  process.exit(1);
 });
 
 // The realtime layer rides on the same HTTP server: attach() takes the socket
 // upgrades for itself and leaves every route above untouched.
 attach(server);
 
-/* ---------------------------------------------------- scheduled upkeep ---- */
-/* SQLite is happy to run for months untouched, right up until the WAL is a
-   gigabyte. Checkpoint often, vacuum rarely, and keep the handles so shutdown
-   can stop them. */
-const upkeep = [
-  setInterval(() => { try { DB.checkpoint(); } catch (e) { log.warn('checkpoint failed', { err: String(e.message || e) }); } }, 5 * 60 * 1000),
-  setInterval(() => { try { DB.vacuumIfNeeded(); } catch (e) { log.warn('vacuum failed', { err: String(e.message || e) }); } }, 6 * 60 * 60 * 1000)
-];
-for (const t of upkeep) t.unref();
+/* ============================================================================
+   GRACEFUL SHUTDOWN
+   ----------------------------------------------------------------------------
+   systemd sends SIGTERM on both `restart` and `stop`, and a deploy that drops
+   in-flight requests or leaves the WAL unmerged is a deploy that loses coins.
+   A restart should look like a blink to a player, not a mystery disconnect:
 
-/* ------------------------------------------------------------ shutdown ---- */
-/* A restart should look like a blink to a player, not a mystery disconnect:
-   tell every socket why it is closing, stop taking new work, flush the database,
-   and only then exit. */
-let SHUTTING_DOWN = false;
-function shutdown(reason, code = 0) {
+     1. flip /api/health and /api/ready to 503, so the proxy stops sending work
+     2. stop the maintenance timers, so none of them fire into a closing handle
+     3. close the listener to new connections; in-flight requests finish
+     4. close every WebSocket with 1001 "going away" — the code a browser reads
+        as "restarting, reconnect shortly" rather than as an error
+     5. checkpoint the WAL back into the .db file, then close it
+     6. exit 0
+
+   SHUTDOWN_GRACE_MS is a hard deadline, not a suggestion. The deadline timer is
+   deliberately NOT unref'd: an unref'd one lets an idle loop exit around it,
+   and the whole point is that a socket which will never close cannot keep a
+   half-dead process holding the port. Eight seconds sits comfortably inside
+   systemd's default 90s TimeoutStopSec.
+   ========================================================================== */
+const SHUTDOWN_GRACE_MS = 8000;
+const SOCKET_FLUSH_MS = 300;      // long enough for a close frame to leave
+const LISTENER_WAIT_MS = 2000;    // then we stop waiting on server.close()
+
+async function shutdown(signal, code = 0) {
   if (SHUTTING_DOWN) return;
   SHUTTING_DOWN = true;
-  log.info('shutting down', { reason });
+  log.info('shutdown started', { signal });
 
-  for (const t of upkeep) clearInterval(t);
-  try { closeAllSockets(1001, 'server restarting'); } catch (e) { log.warn('socket close failed', { err: String(e.message || e) }); }
-
-  const done = () => {
-    try { DB.close(); } catch (e) { log.warn('db close failed', { err: String(e.message || e) }); }
-    log.info('shutdown complete');
+  const deadline = setTimeout(() => {
+    log.error('graceful shutdown timed out · exiting anyway', { graceMs: SHUTDOWN_GRACE_MS });
     process.exit(code);
-  };
-  server.close(done);
-  /* Never hang a deploy on one stuck connection. */
-  setTimeout(() => { log.warn('shutdown timed out · forcing exit'); done(); }, 8000).unref();
+  }, SHUTDOWN_GRACE_MS);
+
+  for (const timer of TIMERS) {
+    try { clearInterval(timer); } catch { /* never thrown in practice */ }
+  }
+
+  const listenerClosed = new Promise((resolve) => {
+    try { server.close(() => resolve()); } catch { resolve(); }
+  });
+  if (typeof server.closeIdleConnections === 'function') {
+    try { server.closeIdleConnections(); } catch { /* older node */ }
+  }
+
+  // realtime.js owns the peer set (it runs with clientTracking off, so
+  // wss.clients is empty by design); closeAllSockets also stops its own timers.
+  let sockets = 0;
+  try { sockets = closeAllSockets(1001, 'server restarting') || 0; }
+  catch (e) { log.error('socket close failed', { err: e }); }
+  if (sockets > 0) log.info('websockets closed', { sockets, code: 1001 });
+
+  /* An upgraded socket still counts as a server connection, so without this
+     server.close() would wait on a peer that is never going to answer. Give the
+     close frames a moment to leave, then drop whatever is left holding on. */
+  await sleep(SOCKET_FLUSH_MS);
+  if (typeof server.closeAllConnections === 'function') {
+    try { server.closeAllConnections(); } catch { /* older node */ }
+  }
+  await Promise.race([listenerClosed, sleep(LISTENER_WAIT_MS)]);
+  log.info('listener closed');
+
+  // Fold the WAL back in before closing, so the .db file on disk is complete
+  // even if the -wal sibling is lost along with the machine.
+  try {
+    const cp = DB.checkpoint();
+    log.info('wal checkpointed', cp || { skipped: true });
+  } catch (e) {
+    log.error('checkpoint failed during shutdown', { err: e });
+  }
+  try {
+    DB.close();
+  } catch (e) {
+    log.error('database close failed', { err: e });
+  }
+
+  clearTimeout(deadline);
+  log.info('shutdown complete', { signal });
+  // stdout to the journal flushes asynchronously; a bare exit() here can eat
+  // the line above. Not unref'd, so the loop cannot leave without us.
+  setTimeout(() => process.exit(code), 50);
 }
-for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => shutdown(sig));
-onFatal(() => shutdown('fatal error', 1));
+
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    if (SHUTTING_DOWN) {
+      // A second Ctrl+C means "I am not waiting" — honour it.
+      log.warn('second signal during shutdown · exiting now', { signal: sig });
+      process.exit(1);
+    }
+    shutdown(sig).catch((e) => {
+      log.error('shutdown failed', { signal: sig, err: e });
+      process.exit(1);
+    });
+  });
+}
+
+/* An uncaughtException takes a different path. middleware.js gives these hooks
+   FATAL_GRACE_MS (3s) and then exits regardless, and the state they run against
+   is by definition broken — so everything here is synchronous best-effort, and
+   the only goals are getting the WAL onto disk and releasing the port. */
+onFatal(() => {
+  SHUTTING_DOWN = true;
+  for (const timer of TIMERS) {
+    try { clearInterval(timer); } catch { /* nothing to stop */ }
+  }
+  try { closeAllSockets(1012, 'server error'); } catch { /* nothing left to close */ }
+  try { server.close(); } catch { /* never listening */ }
+  try {
+    if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+  } catch { /* older node */ }
+  try { DB.close(); } catch { /* db.close() logs its own failure */ }
+});
 
 export default app;
