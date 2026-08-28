@@ -7,7 +7,9 @@
 "use strict";
 const THREE = window.THREE;
 const errBox = document.getElementById('err');
-function fail(msg){ if(errBox){ errBox.style.display='flex'; errBox.innerHTML=msg; } console.error(msg); }
+function fail(msg){ if(errBox){ errBox.style.display='flex'; errBox.innerHTML=msg; } console.error(msg);
+  // a fatal is still an error the notify mod may want to log or relay before the box takes over
+  try{ if(window.RF && RF.err) RF.err('boot', new Error(String(msg).replace(/<[^>]*>/g,' ').trim()), 'fatal'); }catch(e){} }
 if(!THREE){ fail("Three.js failed to load.<br>Make sure the folder still contains <b>lib/three.min.js</b>."); return; }
 
 const lerp=(a,b,t)=>a+(b-a)*t, clamp=(v,a,b)=>Math.max(a,Math.min(b,v)), rand=(a,b)=>a+Math.random()*(b-a), TAU=Math.PI*2;
@@ -28,7 +30,27 @@ const RF = window.RF = {
   override: Object.create(null),      // named take-overs: return true to replace core behaviour
   _queue: [],
   _quiet: false,
-  warn(where, e){ if(!RF._quiet) console.warn('[RF] "' + where + '" threw:', e); },
+  warn(where, e){ RF.err(where, e, 'warn'); },
+  /* ---- THE ERROR FUNNEL ------------------------------------------------
+     Every failure the game is able to catch lands here: a hook that threw,
+     a rejected server action, a dead WebGL context, a full localStorage, a
+     frame that blew up mid-render. mods/notify.js turns these into on-screen
+     notifications; until it loads (or if it never does) the ring buffer below
+     still holds the last 300, so nothing is ever silently swallowed.
+     'error' handlers are called directly, NOT through emit(), so a handler
+     that throws can never recurse back into the funnel. ------------------- */
+  errors: [],
+  errSeq: 0,
+  err(where, e, level){
+    const rec = { id: ++RF.errSeq, t: Date.now(), where: String(where == null ? '?' : where),
+      level: level || 'error',
+      msg: (e && e.message) || (typeof e === 'string' ? e : '') || 'unknown error',
+      name: (e && e.name) || '', stack: (e && e.stack) || '', raw: e };
+    RF.errors.push(rec); if(RF.errors.length > 300) RF.errors.shift();
+    if(!RF._quiet){ try{ (rec.level === 'warn' ? console.warn : console.error)('[RF] ' + rec.where + ': ' + rec.msg, e); }catch(_){} }
+    const L = RF.hooks['error'];
+    if(L) for(let i = 0; i < L.length; i++){ try{ L[i](rec); }catch(_){} }
+    return rec; },
   /* ---- event bus ---- */
   on(evt, fn, prio){ const L = RF.hooks[evt] || (RF.hooks[evt] = []);
     fn._p = prio || 0; L.push(fn); L.sort((a,b)=>(a._p|0)-(b._p|0)); return fn; },
@@ -1251,6 +1273,39 @@ const shovelMesh=new THREE.Group();
 const lineGeo=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(),new THREE.Vector3()]);
 const fishLine=new THREE.Line(lineGeo,new THREE.LineBasicMaterial({color:0xeeeeee,transparent:true,opacity:0.65}));
 fishLine.frustumCulled=false; fishLine.visible=false; scene.add(fishLine);
+
+/* ---- THE AUTO-RIG's hardware. It is a real thing standing in the world, not
+   a mode the hero is in: once it is planted you can walk off and mine, chop or
+   trade while it fishes. So it carries its own rod, bobber and line, and the
+   hero's gear above is left completely alone. ---- */
+const rigProp=new THREE.Group();
+{ const bark=new THREE.MeshLambertMaterial({map:TEX.bark});
+  const leg=(x,rz)=>{ const m=new THREE.Mesh(new THREE.BoxGeometry(0.09,0.95,0.09),bark);
+    m.position.set(x,0.44,0); m.rotation.z=rz; return m; };
+  const blank=new THREE.Mesh(new THREE.BoxGeometry(0.08,1.7,0.08),bark);
+  blank.position.set(0,0.9,0.2); blank.rotation.x=0.62;      // leans out over the water (local +Z)
+  const grip=new THREE.Mesh(new THREE.BoxGeometry(0.13,0.3,0.13),new THREE.MeshLambertMaterial({color:0xd8483f}));
+  grip.position.set(0,0.28,-0.24); grip.rotation.x=0.62;
+  const crate=new THREE.Mesh(new THREE.BoxGeometry(0.42,0.3,0.34),bark);
+  crate.position.set(0.34,0.15,-0.16); crate.rotation.y=0.3;
+  /* the bell at the tip is the tier badge: bare wood, then brass, then a
+     tidewatch lamp — you can read someone's rig across the bay */
+  const bell=new THREE.Mesh(new THREE.BoxGeometry(0.15,0.15,0.15),
+    new THREE.MeshLambertMaterial({color:0x9a6b3a,emissive:0x000000}));
+  bell.position.set(0,1.53,0.94);
+  rigProp.add(leg(-0.17,0.3),leg(0.17,-0.3),blank,grip,crate,bell);
+  rigProp.userData.bell=bell;
+  rigProp.userData.tip=new THREE.Vector3(0,1.62,0.98);        // where the line leaves the blank
+  rigProp.traverse(m=>{m.castShadow=true;}); rigProp.visible=false; scene.add(rigProp); }
+const rigBob=new THREE.Group();
+{ const t=new THREE.Mesh(new THREE.BoxGeometry(0.26,0.18,0.26),new THREE.MeshLambertMaterial({color:0x39d7c4}));
+  t.position.y=0.15;
+  const b=new THREE.Mesh(new THREE.BoxGeometry(0.26,0.15,0.26),new THREE.MeshLambertMaterial({color:0xf2f2f2}));
+  rigBob.add(t,b); rigBob.visible=false; scene.add(rigBob); }
+const rigLineGeo=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(),new THREE.Vector3()]);
+const rigLine=new THREE.Line(rigLineGeo,new THREE.LineBasicMaterial({color:0xeeeeee,transparent:true,opacity:0.55}));
+rigLine.frustumCulled=false; rigLine.visible=false; scene.add(rigLine);
+const rigTip=new THREE.Vector3();
 const rodTip=new THREE.Vector3();
 function updateFishLine(){
   fishLine.visible=bobber.visible;
@@ -1291,8 +1346,9 @@ function fxUpdate(dt){
   fxMesh.instanceMatrix.needsUpdate=true; if(fxMesh.instanceColor)fxMesh.instanceColor.needsUpdate=true;
   fxDirty=any; }
 let trauma=0,freezeT=0;
-function addShake(a){trauma=Math.min(1,trauma+a);}
-function addFreeze(t){freezeT=Math.max(freezeT,t);}
+// piped so an accessibility mod can damp — or kill — camera shake and hit-stop
+function addShake(a){ a=RF.pipe('shake',a); if(!(a>0))return; trauma=Math.min(1,trauma+a); }
+function addFreeze(t){ t=RF.pipe('freeze',t); if(!(t>0))return; freezeT=Math.max(freezeT,t); }
 // DOM coin fly: little gems arcing to the coin counter
 function coinFly(n){ const hud=document.getElementById('hud-coins'); if(!hud||!hud.getBoundingClientRect)return;
   const r=hud.getBoundingClientRect(), cx=window.innerWidth/2, cy=window.innerHeight*0.62;
@@ -1322,14 +1378,34 @@ addEventListener('keydown',e=>{
   if(e.code==='KeyF'&&running&&!chatOpen&&!marketOpen&&!casinoOpen&&!invOpen&&!harborOpen){ e.preventDefault(); toggleAuto(); }
   if(e.code==='KeyP'&&running){ e.preventDefault(); togglePhoto(); }
   if(e.code==='KeyC'&&running&&!chatOpen&&!marketOpen&&!casinoOpen&&!invOpen&&!harborOpen){ e.preventDefault(); toggleCam(); }
-  if(e.code==='Escape'){ if(marketOpen)closeMarket(); else if(casinoOpen)closeCasino(); else if(harborOpen)closeHarbor(); else if(invOpen)closeInv(); else if(capCam)closeCam(); else if(autoFish.on)setAuto(false,'Auto-fishing off'); else if(fishing.state!=='idle')cancelFish(); else if(mining.node)cancelMine(); else if(chopping.tree)cancelChop(); else if(digging.active){digging.active=false;hint('');} }},{passive:false});
+  if(e.code==='Escape'){ if(marketOpen)closeMarket(); else if(casinoOpen)closeCasino(); else if(harborOpen)closeHarbor(); else if(invOpen)closeInv(); else if(capCam)closeCam(); else if(fishing.state!=='idle')cancelFish(); else if(autoFish.on)packRig(); else if(mining.node)cancelMine(); else if(chopping.tree)cancelChop(); else if(digging.active){digging.active=false;hint('');} }},{passive:false});
 addEventListener('keyup',e=>{RF.emit('keyup',e);const m=KMAP[e.code]; if(m)keys[m]=false;});
 addEventListener('blur',()=>{for(const k in keys)keys[k]=false;});
 
 let AC=null,muted=false;
-function initAudio(){if(AC)return;try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){}}
+let masterGain=null,musGain=null,sfxGain=null;
+/* One mixer graph, built the moment the context is: every sound effect joins
+   sfxBus, the music bed joins musBus, and both feed master. Without it there is
+   nothing between a voice and the speakers, so "music quieter than effects" is
+   simply not expressible — which is why the settings panel can offer it now. */
+function initAudio(){ if(AC)return;
+  try{ AC=new (window.AudioContext||window.webkitAudioContext)(); }
+  catch(e){ if(window.RF&&RF.err)RF.err('audio:context',e,'warn'); return; }
+  try{ masterGain=AC.createGain(); masterGain.gain.value=1; masterGain.connect(AC.destination);
+    musGain=AC.createGain(); musGain.gain.value=1; musGain.connect(masterGain);
+    sfxGain=AC.createGain(); sfxGain.gain.value=1; sfxGain.connect(masterGain); }
+  catch(e){ masterGain=musGain=sfxGain=null;   // fall back to talking straight to the speakers
+    if(window.RF&&RF.err)RF.err('audio:mixer',e,'warn'); } }
+const sfxBus=()=>sfxGain||(AC?AC.destination:null);
+const musBus=()=>musGain||(AC?AC.destination:null);
+/* Mute is a state, not a button: the panel and the ♪ chip both drive this. */
+function setMuted(v){ muted=!!v;
+  const b=document.getElementById('mute');
+  if(b){ b.textContent=muted?'♪ MUTED':'♪ SOUND'; b.style.color=muted?'var(--faint)':''; }
+  if(musMaster)musMaster.gain.value=muted?0:MUS_VOL;
+  if(window.RF)RF.emit('muted',muted); }
 function beep(f,d,t,v){if(!AC||muted)return;const o=AC.createOscillator(),g=AC.createGain();o.type=t||'sine';o.frequency.value=f;
-  g.gain.value=.0001;o.connect(g);g.connect(AC.destination);const n=AC.currentTime;
+  g.gain.value=.0001;o.connect(g);g.connect(sfxBus());const n=AC.currentTime;
   g.gain.exponentialRampToValueAtTime(v||.05,n+.01);g.gain.exponentialRampToValueAtTime(.0001,n+d);o.start(n);o.stop(n+d+.02);}
 /* white noise, built once and cached: footsteps, splashes, tool impacts and
    thunder all need a filtered burst, and oscillators alone can't make one */
@@ -1343,11 +1419,11 @@ function nz(dur,cut,vol,o){ if(!AC||muted)return; o=o||{}; const n=AC.currentTim
   const g=AC.createGain(); g.gain.setValueAtTime(.0001,n);
   g.gain.exponentialRampToValueAtTime(vol,n+(o.atk||.008));
   g.gain.exponentialRampToValueAtTime(.0001,n+dur);
-  src.connect(f); f.connect(g); g.connect(AC.destination); src.start(n); src.stop(n+dur+.03); }
+  src.connect(f); f.connect(g); g.connect(sfxBus()); src.start(n); src.stop(n+dur+.03); }
 function sweep(f0,f1,d,t,v){ if(!AC||muted)return; const o=AC.createOscillator(),g=AC.createGain(),n=AC.currentTime;
   o.type=t||'sine'; o.frequency.setValueAtTime(f0,n); o.frequency.exponentialRampToValueAtTime(f1,n+d);
   g.gain.setValueAtTime(.0001,n); g.gain.exponentialRampToValueAtTime(v,n+.02);
-  g.gain.exponentialRampToValueAtTime(.0001,n+d); o.connect(g); g.connect(AC.destination); o.start(n); o.stop(n+d+.03); }
+  g.gain.exponentialRampToValueAtTime(.0001,n+d); o.connect(g); g.connect(sfxBus()); o.start(n); o.stop(n+d+.03); }
 // footfalls read the ground: soft on grass, gritty on sand, hard on stone, crunchy on snow
 const STEPFX={grass:{d:.07,f:2200,t:900,v:.035,q:.9},sand:{d:.08,f:1500,t:600,v:.032,q:.7},
   stone:{d:.055,f:1000,t:380,v:.042,q:1.6},snow:{d:.09,f:3200,t:1400,v:.03,q:.8},
@@ -1400,8 +1476,7 @@ const sfx={cast:()=>beep(300,.15,'sine',.05),bite:()=>{beep(880,.08,'square',.06
     [[784,988,1175],[880,1109,1318,1568],[1046,1318,1568,2093]][Math.max(0,Math.min(2,n-2))]
       .forEach((f,i)=>setTimeout(()=>beep(f,.18,'triangle',.045),i*80));
     if(shiny)setTimeout(()=>{for(let i=0;i<4;i++)setTimeout(()=>beep(2093+Math.random()*900,.06,'sine',.02),i*70);},120); }};
-document.getElementById('mute').onclick=()=>{muted=!muted;const b=document.getElementById('mute');b.textContent=muted?'♪ MUTED':'♪ SOUND';b.style.color=muted?'var(--faint)':'';
-  if(musMaster)musMaster.gain.value=muted?0:MUS_VOL;};
+document.getElementById('mute').onclick=()=>setMuted(!muted);
 
 /* ---- one track per isle — chiptune + ambience, pure WebAudio, no assets ----
    Travel reloads the page, so the world's entry is chosen once in startMusic()
@@ -1461,7 +1536,7 @@ function schedMusic(){ if(!AC||!musMaster||!MUS)return; const M=MUS;
     musNext+=M.step; musStep++; } }
 function startMusic(){ if(!AC||musMaster)return;
   MUS=MUSIC[worldKey]||MUSIC.isle;
-  musMaster=AC.createGain(); musMaster.gain.value=muted?0:MUS_VOL; musMaster.connect(AC.destination);
+  musMaster=AC.createGain(); musMaster.gain.value=muted?0:MUS_VOL; musMaster.connect(musBus());
   // ambience bed: looped noise through a slowly wobbling lowpass — surf on the isles,
   // a dull roar in the crater, thin wind on the ice, dripping stillness underground
   const A=MUS.amb, len=(2*AC.sampleRate)|0, buf=AC.createBuffer(1,len,AC.sampleRate), d=buf.getChannelData(0);
@@ -1941,8 +2016,25 @@ const rodLuck=lvl=>+(0.18*(clamp(lvl|0||1,1,MAXLVL)-1)).toFixed(4);
    worth as much as one you fought for. These numbers decide the OFFLINE game
    only; signed in, the server rolls all of it and this never runs. ---- */
 const AUTO={W:{common:1,uncommon:0.45,rare:0.1,epic:0.03,legendary:0.008},
-  luck:0.25,val:0.7,shiny:0.25,pearls:0.5,gapMs:4500};
-const autoWeight=rar=>AUTO.W[rar]!==undefined?AUTO.W[rar]:1;
+  luck:0.25,val:0.7,shiny:0.25,pearls:0.5};
+/* `q` lifts everything ABOVE common and never commons themselves, so a better
+   rig thins the sardines out rather than raising the whole table with it. */
+const autoWeight=(rar,q)=>{ const w=AUTO.W[rar]!==undefined?AUTO.W[rar]:1;
+  return rar==='common'?w:w*(q>0?q:1); };
+/* ---- THE RIG LADDER — mirrors server/src/game/rules.js RIGS.
+   Bought with PEARLS at the Pearl Kiosk, so the rig is paid for with activity
+   and never with coins: nobody buys their way straight to an AFK income.
+     gapMs  floor between two catches (the server enforces this one)
+     q      quality, fed to autoWeight() above
+     bite   how long it waits for a bite, as a multiple of the rod's own timer
+   Mk I is free and every save starts with it — the whole feature has to be
+   reachable by someone who just walked off the boat. ---- */
+const RIGS=[null,
+  {name:'Driftwood Rig',sub:'two sticks and a lot of patience',cost:0,   gapMs:4500,q:1,  bite:1,   tint:0x9a6b3a},
+  {name:'Braced Rig',   sub:'a hull cleat and a brass bell',   cost:700, gapMs:3800,q:1.7,bite:0.78,tint:0xffd24f},
+  {name:'Tidewatch Rig',sub:'it reads the water for you',      cost:2000,gapMs:3100,q:2.6,bite:0.6, tint:0x39d7c4}];
+const MAX_RIG=RIGS.length-1;
+const rigOf=lvl=>RIGS[clamp((lvl|0)||1,1,MAX_RIG)];
 /* Bait: bought by the pack with coins, spent one per fish LANDED (a snapped
    line is free). `min` is a hard floor — the pool is filtered to that rarity
    and up, so Siren's Chum cannot hook anything but a legend. `shiny` scales
@@ -1962,6 +2054,7 @@ const state={coins:0,bucket:[],ores:{wood:0,coal:0,iron:0,gold:0,diamond:0},rodL
   dex:{},treasure:null,worlds:['isle'],ach:{},
   stocks:{own:{},basis:{},lastDiv:null,lastShareEpoch:0,gotFirst:0},
   pearls:0,pearlsLife:0,wardrobe:{},titleId:'',ownedT:{},ownedW:{},bucketTier:0,boosts:{chumUntil:0},tipEpoch:0,deeds:{},
+  rigLvl:1,   // everybody owns the Driftwood Rig; the Kiosk sells the two above it
   bait:{},baitId:'',
   pet:0,charm:0,jackpot:0,bounty:null,bountyEpoch:0,
   stats:{caught:0,mined:0,wood:0,earned:0,bestWin:0,spins:0,winsCt:0,losses:0,divEarned:0}};
@@ -1984,17 +2077,27 @@ const SRV={
     try{ const r=await RFNet.action(name,body||{});
       if(r&&r.state)this.apply(r.state);
       return r?r.result:null; }
-    catch(e){ if(e.status===429)toast('Slow down…');
-      else toast('Server: '+(e.message||'error'),'bad');
+    catch(e){
+      // mods/notify.js claims this to render a richer card (with a Retry); if no
+      // mod takes it, the plain toast below is still the fallback it always was.
+      const ev={action:name,body:body||{},status:e&&e.status,error:e,handled:false};
+      RF.emit('actionfail',ev); RF.err('action:'+name,e,(e&&e.status===429)?'warn':'error');
+      if(!ev.handled){ if(e.status===429)toast('Slow down…');
+        else toast('Server: '+(e.message||'error'),'bad'); }
       return null; }
     finally{ this.busy=false; }
   }
 };
 function save(){ if(SRV.on){ // server holds the economy; only mirror what it lets us keep
     try{ RFNet.saveCosmetics({wardrobe:state.wardrobe,titleId:state.titleId,tipEpoch:state.tipEpoch,
-      ach:state.ach,deeds:state.deeds}); }catch(e){}   // append-only on the server side
+      ach:state.ach,deeds:state.deeds}).catch(e=>RF.err('save:cosmetics',e,'warn')); }
+    catch(e){ RF.err('save:cosmetics',e,'warn'); }   // append-only on the server side
     return; }
-  try{localStorage.setItem(SAVE,JSON.stringify(state));}catch(e){}}
+  // A save that silently fails is the worst bug this game can have: the player
+  // keeps playing and loses everything on refresh. Report it, every time.
+  try{ localStorage.setItem(SAVE,JSON.stringify(state)); if(saveBroken){ saveBroken=false; RF.emit('save',true); } }
+  catch(e){ if(!saveBroken){ saveBroken=true; RF.err('save',e,'fatal'); RF.emit('save',false,e); } } }
+let saveBroken=false;
 function load(){try{const r=localStorage.getItem(SAVE);if(r){const s=JSON.parse(r);
   state.coins=s.coins||0;state.bucket=Array.isArray(s.bucket)?s.bucket:[];
   if(s.ores)for(const k in state.ores)state.ores[k]=s.ores[k]|0;
@@ -2015,6 +2118,7 @@ function load(){try{const r=localStorage.getItem(SAVE);if(r){const s=JSON.parse(
   if(s.ownedT&&typeof s.ownedT==='object')state.ownedT=s.ownedT;
   state.titleId=typeof s.titleId==='string'?s.titleId:'';
   state.bucketTier=clamp(s.bucketTier|0,0,4);
+  state.rigLvl=clamp((s.rigLvl|0)||1,1,MAX_RIG);
   if(s.bait&&typeof s.bait==='object'){ state.bait={};
     for(const k in BAITS){ const n=clamp(s.bait[k]|0,0,BAIT_MAX); if(n>0)state.bait[k]=n; } }
   state.baitId=typeof s.baitId==='string'&&state.bait[s.baitId]>0?s.baitId:''; // no stock = bare hook
@@ -2087,9 +2191,9 @@ function mkFish(t,mul,auto){ return {uid:(Date.now()+Math.random()).toString(36)
   // never below 1: an auto-caught sardine is cheap, not free
   val:Math.max(1,Math.round(t.val*mul*rand(0.85,1.18)*(auto?AUTO.val:1))),
   kg:+(t.val/9*rand(0.5,1.6)+0.2).toFixed(1),wins:0}; }
-function rollOnce(luck,minRar,auto){ const pool=fishPool(minRar); if(!pool.length)return null;
+function rollOnce(luck,minRar,auto,rigQ){ const pool=fishPool(minRar); if(!pool.length)return null;
   const mul=typeof WORLD!=='undefined'?WORLD.fishMul||1:1;
-  const wt=pool.map(e=>e[1]*luckWeight(e[0].rar,luck||0)*(auto?autoWeight(e[0].rar):1));
+  const wt=pool.map(e=>e[1]*luckWeight(e[0].rar,luck||0)*(auto?autoWeight(e[0].rar,rigQ||1):1));
   let tot=0; for(const x of wt)tot+=x; let r=Math.random()*tot;
   for(let i=0;i<pool.length;i++){ r-=wt[i]; if(r<=0)return mkFish(pool[i][0],mul,auto); }
   return mkFish(pool[pool.length-1][0],mul,auto); }
@@ -2098,7 +2202,7 @@ function rollOnce(luck,minRar,auto){ const pool=fishPool(minRar); if(!pool.lengt
 function rollFish(noBait,auto){ // an unattended hook carries no bait: no luck from it, no rarity floor either
   const b=(noBait||auto)?null:activeBait(), min=b?b.min:null,
     luck=auto?rodLuck(state.rodLvl)*AUTO.luck:rodLuck(state.rodLvl)+(b?b.luck:0);
-  let f=rollOnce(luck,min,auto);
+  let f=rollOnce(luck,min,auto,auto?rigOf(state.rigLvl).q:1);
   // weather and hull only stir up better fish for someone holding the rod —
   // the lazy line gets one flat draw and no second chances
   if(!auto){
@@ -2193,6 +2297,7 @@ function grantShare(k){ const e=mktEpochNow(), st=state.stocks;
   const n=st.own[k]|0, p=stockPrice(k,e);
   st.basis[k]=((st.basis[k]||p)*n+p)/(n+1); st.own[k]=n+1;
   const first=!st.gotFirst; st.gotFirst=1;
+  RF.emit('share',{ticker:k,price:p,owned:st.own[k]});
   toast(`${pixSVG('chart',13)} +1 share ${k} · ${STOCKS[k].name}`,'gold'); sfx.ore(); addShake(0.08);
   if(first)setTimeout(()=>toast('Shares pay hourly dividends · see ISLE EXCHANGE at the Trader','good'),1000);
   updateHUD(); if(typeof marketOpen!=='undefined'&&marketOpen)renderMarketAll(); save(); return true; }
@@ -2365,7 +2470,9 @@ function buyOrSail(k){ const w=WORLDS[k]; if(!w||k===worldKey)return;
     if(state.boatLvl<br){ sfx.deny(); toast('Your '+BOATS[state.boatLvl].name+" can't make that voyage · see the Harbor dock",'bad'); return; }
     if(state.coins<w.cost){ sfx.deny(); return; }
     state.coins-=w.cost; state.worlds.push(k); sfx.win(); addShake(0.1);
+    RF.emit('unlock',{world:k,cost:w.cost});
     toast(pixSVG('island',13)+' '+w.name+' unlocked!','gold'); updateHUD(); renderUpg(); save(); return; }
+  RF.emit('travel',{from:worldKey,to:k});
   save(); try{localStorage.setItem('reelfortune3d-world',k);}catch(e){}
   sfx.sail(); toast(pixSVG('boat',13)+' Sailing to '+w.name+'…','good');
   setTimeout(()=>location.reload(),600); }
@@ -2451,6 +2558,11 @@ function renderKiosk(){ if(!kioskList)return; let h='';
   const chumOn=Date.now()<state.boosts.chumUntil;
   h+=`<div class="fishrow"><span class="nm">Chum Jar <span style="color:var(--faint);font-size:10px">bites 2× faster · 10 min${chumOn?' · ACTIVE':''}</span></span>
     <span class="vv" style="color:var(--teal)">◉ 80</span><button class="btn" data-kiosk="chum" ${state.pearls<80||chumOn?'disabled':''}>${chumOn?'Active':'Buy'}</button></div>`;
+  { const lv=state.rigLvl|0, g=rigOf(lv), nx=lv<MAX_RIG?RIGS[lv+1]:null;
+    const line=`${g.name} <span style="color:var(--faint);font-size:10px">a line every ${(g.gapMs/1000).toFixed(1)}s · ${g.sub}</span>`;
+    h+=nx?`<div class="fishrow"><span class="nm">${line}</span>
+        <span class="vv" style="color:var(--teal)">◉ ${nx.cost}</span><button class="btn" data-kiosk="rig" ${state.pearls<nx.cost?'disabled':''}>→ ${nx.name}</button></div>`
+      :`<div class="fishrow"><span class="nm">${line}</span><span class="rr" style="color:var(--gold)">MAX</span></div>`; }
   const bt=state.bucketTier;
   h+=bt>=4?`<div class="fishrow"><span class="nm">Deep Bucket <span style="color:var(--teal)">cap ${cap()}</span></span><span class="rr" style="color:var(--gold)">MAX</span></div>`
     :`<div class="fishrow"><span class="nm">Deep Bucket <span style="color:var(--faint);font-size:10px">bucket ${cap()} → ${cap()+2} (permanent)</span></span>
@@ -2508,17 +2620,21 @@ document.getElementById('sellAll').onclick=()=>{ if(!state.bucket.length){toast(
   state.bucket=state.bucket.filter(f=>{ if(f.wins>0){kept++;return true;} g+=Math.round(f.val*pm); return false; });
   if(!g){toast(kept?'Only ★ starred fish left · sell them one by one':'Bucket empty');return;}
   state.coins+=g;state.stats.earned+=g;coinFly(g);sfx.sell();
+  RF.emit('sold',{kind:'allfish',gained:g,kept:kept});
   toast('+'+fmt(g)+' coins'+(kept?` (kept ${kept} ★)`:''),'gold');updateHUD();renderMarketAll();save();};
 marketEl.addEventListener('click',e=>{
   const t1=e.target.closest?e.target.closest('[data-sellone]'):null;
   if(t1){const i=+t1.getAttribute('data-sellone'),f=state.bucket[i];
     if(SRV.on){ SRV.act('sell',{kind:'fish',index:i}).then(r=>{ if(r&&r.gained){coinFly(r.gained);sfx.sell();toast('+'+fmt(r.gained)+' coins','gold');} }); return; }
-    if(f){const g=Math.round(f.val*priceMult('fish'));state.coins+=g;state.stats.earned+=g;state.bucket.splice(i,1);sfx.sell();toast('+'+fmt(g)+' coins','gold');updateHUD();renderMarketAll();save();} return;}
+    if(f){const g=Math.round(f.val*priceMult('fish'));state.coins+=g;state.stats.earned+=g;state.bucket.splice(i,1);sfx.sell();
+      RF.emit('sold',{kind:'fish',gained:g,fish:f});
+      toast('+'+fmt(g)+' coins','gold');updateHUD();renderMarketAll();save();} return;}
   const t2=e.target.closest?e.target.closest('[data-sellore]'):null;
   if(t2){const k=t2.getAttribute('data-sellore'),n=state.ores[k];
     if(SRV.on){ SRV.act('sell',{kind:'ore',oreKey:k}).then(r=>{ if(r&&r.gained){coinFly(r.gained);sfx.sell();toast('+'+fmt(r.gained)+' coins','gold');} }); return; }
     if(n>0){const bulk=n>=100?1.15:n>=50?1.1:n>=20?1.05:1;   // big hauls beat trickle-trading
       const g=Math.round(n*ORE_INFO[k].price*priceMult(k)*bulk);state.coins+=g;state.stats.earned+=g;state.ores[k]=0;sfx.sell();
+      RF.emit('sold',{kind:'ore',oreKey:k,count:n,gained:g,bulk:bulk});
       toast('+'+fmt(g)+' coins'+(bulk>1?` · bulk +${Math.round((bulk-1)*100)}%`:''),'gold');updateHUD();renderMarketAll();save();} return;}
   const t3=e.target.closest?e.target.closest('[data-buy]'):null;
   if(t3){const kind=t3.getAttribute('data-buy');
@@ -2529,7 +2645,9 @@ marketEl.addEventListener('click',e=>{
         req=(lvlKey==='axeLvl'?AXE_REQ:UP_REQ)[lvl+1];
       if(state.coins<cost||!haveOres(req))return;
       state.coins-=cost; for(const k in req)state.ores[k]-=req[k];
-      state[lvlKey]=lvl+1; sfx.craft(); addShake(0.1); toast(pixSVG(lvlKey==='rodLvl'?'rod':'pick',13)+' '+names[lvl+1]+' crafted!','gold'); };
+      state[lvlKey]=lvl+1; sfx.craft(); addShake(0.1);
+      RF.emit('crafted',{tool:lvlKey.replace('Lvl',''),lvl:lvl+1,name:names[lvl+1],cost:cost,req:req});
+      toast(pixSVG(lvlKey==='rodLvl'?'rod':'pick',13)+' '+names[lvl+1]+' crafted!','gold'); };
     if(kind==='rod')doCraft('rodLvl',ROD_BASE,ROD_NAMES);
     else if(kind==='pick')doCraft('pickLvl',PICK_BASE,PICK_NAMES);
     else if(kind==='axe')doCraft('axeLvl',AXE_BASE,AXE_NAMES);
@@ -2571,10 +2689,15 @@ marketEl.addEventListener('click',e=>{
   const t7=e.target.closest?e.target.closest('[data-kiosk]'):null;
   if(t7){ const id=t7.getAttribute('data-kiosk');
     if(SRV.on){ SRV.act('kiosk',{item:id}).then(r=>{ if(r){ sfx.ore(); if(r.message)toast(r.message,'good');
+      /* a planted rig wears its tier on the bell, so re-tint it in place */
+      if(r.rigLvl&&autoFish.on)rigProp.userData.bell.material.color.setHex(rigOf(r.rigLvl).tint);
       applyWardrobe(); applyTitle(); } }); return; }
     const buy=(cost,fn)=>{ if(state.pearls<cost)return; state.pearls-=cost; fn(); sfx.ore(); updateHUD(); renderMarketAll(); save(); };
     if(id==='wardrobe')buy(80,()=>{state.ownedW.wardrobe=1;toast('Wardrobe unlocked · pick your colors!','good');});
     else if(id==='chum')buy(80,()=>{state.boosts.chumUntil=Date.now()+600000;toast('Chum in the water · bites 2× faster for 10 min','good');});
+    else if(id==='rig'&&state.rigLvl<MAX_RIG)buy(RIGS[state.rigLvl+1].cost,()=>{ state.rigLvl++;
+      const g=rigOf(state.rigLvl); if(autoFish.on)rigProp.userData.bell.material.color.setHex(g.tint);
+      toast(`${g.name} · the rig works a line every ${(g.gapMs/1000).toFixed(1)}s now`,'gold'); });
     else if(id==='bucket'&&state.bucketTier<4)buy(BUCKET_COST[state.bucketTier],()=>{state.bucketTier++;toast('Deep Bucket! Capacity is now '+cap(),'good');});
     else if(id==='tip')buy(30,()=>{state.tipEpoch=mktEpochNow()+1;renderBanner();const m=mktModsAt(mktEpochNow()+1);
       toast(`Tip: next HOT ${catLabel(m.hot)} · SURPLUS ${catLabel(m.cold)}`,'gold');});
@@ -2906,6 +3029,7 @@ function resolveSpin(sa){ const idx=sa.winIdx,fish=sa.fish,coins=sa.coins||0,col
       fxBurst(ballWP.x,ballWP.y+0.15,ballWP.z,{n:14,cols:[0xff5d7a,0x8a2033,0x242a30],speed:2.2,up:2.6,size:1,grav:8});
       spinResult.innerHTML=`<span class="lose">▼ ${PL} · ${r.message||'the eel swallowed it.'}</span>`;
       toast(r.message||'Lost it','bad'); sfx.lose(); }
+    RF.emit('spin',{won:!!r.won,pocket:idx,color:color,bet:sa.bet,fish:fish,coins:coins,payout:r.payout||0,server:true});
     spinning=false; betColor=null; stakeIdx=-1; coinStake=0;
     document.querySelectorAll('.betbtn[data-bet]').forEach(b=>b.classList.remove('sel'));
     renderStakes(); updateHUD(); updateSpinBtn(); return; }
@@ -2935,6 +3059,7 @@ function resolveSpin(sa){ const idx=sa.winIdx,fish=sa.fish,coins=sa.coins||0,col
       spinResult.innerHTML=`<span class="lose">▼ ${PL} · the eel swallowed your ${lost}. Gone.</span>`; toast('Lost your '+lost,'bad'); }
     else{ spinResult.innerHTML=`<span class="lose">▼ ${PL} · the eel gulped your ◈${fmt(coins)}.</span>`; toast('Lost ◈'+fmt(coins),'bad'); }
     sfx.lose(); }
+  RF.emit('spin',{won:won,pocket:idx,color:color,bet:sa.bet,fish:fish,coins:coins,server:false});
   spinning=false;betColor=null;document.querySelectorAll('.betbtn').forEach(b=>b.classList.remove('sel'));
   renderStakes();updateHUD();updateSpinBtn();save(); }
 
@@ -2942,32 +3067,8 @@ function resolveSpin(sa){ const idx=sa.winIdx,fish=sa.fish,coins=sa.coins||0,col
    12. FISHING (3D)
    ======================================================================== */
 const fishing={state:'idle',t:0,biteAt:0,reel:0,reelT:0,tx:0,tz:0,cast:0,
-  tens:0,fight:0,surge:0,surgeT:0,hooked:null,auto:false}; // tens/fight/surge drive the reel-in tug-of-war
+  tens:0,fight:0,surge:0,surgeT:0,hooked:null}; // tens/fight/surge drive the reel-in tug-of-war
 
-/* ---- THE AUTO-RIG ------------------------------------------------------
-   Toggle it with F and the loop plays itself: it casts at the nearest water,
-   sets the hook a beat after the bite, and reels with a hand steady enough
-   that the line never snaps. You do not have to be at the keyboard for any
-   of it — which is the whole point, and exactly what it pays for with the
-   AUTO table above.
-
-   `nextAt` is wall-clock, not a frame counter: the server enforces the same
-   AUTO.gapMs floor between two auto catches, so the rig paces itself a
-   quarter-second on the safe side of it rather than being bounced by a 400. */
-const autoFish={on:false,nextAt:0};
-const isMoving=()=>!!(keys.up||keys.down||keys.left||keys.right);
-function paintAuto(){ const el=document.getElementById('hud-auto'); if(!el)return;
-  el.classList.toggle('on',autoFish.on);
-  const v=document.getElementById('autoVal'); if(v)v.textContent=autoFish.on?'fishing':'off';
-  const b=document.getElementById('autoBtn'); if(b)b.classList.toggle('lit',autoFish.on); }
-function setAuto(on,why){
-  if(autoFish.on===!!on)return;
-  autoFish.on=!!on; autoFish.nextAt=0;
-  if(!autoFish.on&&fishing.state!=='idle')cancelFish();
-  paintAuto();
-  if(autoFish.on)toast(`${pixSVG('rod',13)} Auto-fishing ON · the rig only brings up cheap fish`,'good');
-  else toast(why||'Auto-fishing off'); }
-function toggleAuto(){ if(!running)return; initAudio(); setAuto(!autoFish.on); }
 // how hard each rarity pulls — legendaries will snap a starter rod if you just hold E
 const FIGHT={common:0.52,uncommon:0.66,rare:0.86,epic:1.06,legendary:1.32};
 function cancelFish(){fishing.state='idle';bobber.visible=false;fishing.hooked=null;fishing.tens=0;hint('');}
@@ -2978,23 +3079,22 @@ function nearestWater(){ const [ci,cj]=cellIndex(pWorld.x,pWorld.z); let bestC=n
   for(let i=ci-3;i<=ci+3;i++)for(let j=cj-3;j<=cj+3;j++){ if(i<0||j<0||i>=N||j>=N)continue; if(heightMap[i][j]>2)continue;
     const wx2=i-HALF,wz2=j-HALF,d=Math.hypot(wx2-pWorld.x,wz2-pWorld.z); if(d<bd){bd=d;bestC={x:wx2,z:wz2,dist:d};} } return bestC; }
 function startCast(w){ initAudio(); fishing.state='cast';fishing.cast=0;fishing.tx=w.x;fishing.tz=w.z;
-  fishing.auto=autoFish.on;   // whose cast this is, decided once — toggling mid-fight cannot change it
   bobber.visible=true;bobber.position.set(pWorld.x,pWorld.y+1,pWorld.z);sfx.cast(); }
 function updateFishing(dt){ const f=fishing;
   if(RF.override.fishing&&RF.override.fishing(dt,f)===true)return;
   if(f.state==='cast'){ f.cast=Math.min(1,f.cast+dt*2.2);
     bobber.position.x=lerp(pWorld.x,f.tx,f.cast);bobber.position.z=lerp(pWorld.z,f.tz,f.cast);
-    bobber.position.y=lerp(pWorld.y+1,WATER_TOP+0.1,f.cast)+Math.sin(f.cast*Math.PI)*1.2; hint(f.auto?'The rig casts…':'Casting…');
+    bobber.position.y=lerp(pWorld.y+1,WATER_TOP+0.1,f.cast)+Math.sin(f.cast*Math.PI)*1.2; hint('Casting…');
     if(f.cast>=1){f.state='wait';f.biteAt=biteTime();f.t=0;sfx.splash(0.06);
       fxBurst(f.tx,WATER_TOP+0.15,f.tz,{n:8,cols:[0x7fdcff,0xd9f6ff,0xffffff],speed:1.8,up:2.6,size:0.9,grav:7});} }
-  else if(f.state==='wait'){ f.t+=dt; bobber.position.y=WATER_TOP+0.1+Math.sin(clock*3)*0.05; hint(f.auto?`${pixSVG('rod',13)} the rig waits for a bite… <span class="key">F</span> stop`:'Waiting for a bite… <span class="key">ESC</span> reel in');
+  else if(f.state==='wait'){ f.t+=dt; bobber.position.y=WATER_TOP+0.1+Math.sin(clock*3)*0.05; hint('Waiting for a bite… <span class="key">ESC</span> reel in');
     if(f.t>=f.biteAt){f.state='bite';f.t=0;sfx.bite();
       fxBurst(bobber.position.x,WATER_TOP+0.15,bobber.position.z,{n:6,cols:[0x7fdcff,0xffffff],speed:1.6,up:2.2,size:0.8,grav:7});} }
   else if(f.state==='bite'){ f.t+=dt; bobber.position.y=WATER_TOP+0.05+Math.sin(clock*22)*0.14;
-    hint(f.auto?'<b style="color:var(--rose)">!</b> the rig sets the hook…':'<b style="color:var(--rose)">!</b> <b>BITE!</b> press <span class="key">E</span> now!');
-    if(actEdge||(f.auto&&f.t>0.3)){ f.state='reel'; f.reel=0; f.reelT=0; f.tens=0; f.surge=0; f.surgeT=rand(0.5,1.1);
+    hint('<b style="color:var(--rose)">!</b> <b>BITE!</b> press <span class="key">E</span> now!');
+    if(actEdge){ f.state='reel'; f.reel=0; f.reelT=0; f.tens=0; f.surge=0; f.surgeT=rand(0.5,1.1);
       // hook the fish NOW so the fight has real weight behind it — the one you fight is the one you land
-      f.hooked=SRV.on?null:rollFish(false,f.auto);
+      f.hooked=SRV.on?null:rollFish();
       f.fight=f.hooked?FIGHT[f.hooked.rar]:0.7; }
     else if(f.t>0.85){cancelFish();sfx.miss();catchStreak=0;toast('It got away…');} }
   else if(f.state==='reel'){ f.reelT+=dt;
@@ -3004,18 +3104,13 @@ function updateFishing(dt){ const f=fishing;
       if(f.surge){ sfx.bite(); addShake(0.05);
         fxBurst(bobber.position.x,WATER_TOP+0.15,bobber.position.z,{n:5,cols:[0x7fdcff,0xffffff],speed:2,up:2.4,size:0.8,grav:7}); } }
     const strain=f.fight*(f.surge?2.6:0.8)/(1+(state.rodLvl-1)*0.13); // a better rod takes more punishment
-    /* The rig has a steadier hand than any player: it hauls only while the line
-       is slack enough and gives every surge straight back, so it never snaps.
-       That patience is the other half of what it trades the good fish away for
-       — it lands everything it hooks, and it hooks almost nothing worth having. */
-    const hold=f.auto?(!f.surge&&f.tens<0.55):keys.act;
-    if(hold){ f.reel+=dt*0.62; f.tens+=dt*strain; if(Math.random()<0.08)sfx.reel(); if(f.tens>0.72&&Math.random()<0.07)sfx.creak(); }
+    if(keys.act){ f.reel+=dt*0.62; f.tens+=dt*strain; if(Math.random()<0.08)sfx.reel(); if(f.tens>0.72&&Math.random()<0.07)sfx.creak(); }
     else { f.reel-=dt*0.1; f.tens-=dt*1.25; }                          // let go to bleed tension off
     f.reel=clamp(f.reel,0,1); f.tens=clamp(f.tens,0,1);
     bobber.position.y=WATER_TOP+0.1+f.reel*0.3;
     { const rk=Math.floor(f.reel*8), tk=Math.floor(f.tens*8),
         tc=f.tens>0.78?'var(--rose)':f.tens>0.5?'var(--gold)':'var(--teal)';
-      hint(`${f.auto?'the rig works it in · ':f.surge?'<b style="color:var(--rose)">IT RUNS!</b> let go · ':'hold <span class="key">E</span> · '}`
+      hint(`${f.surge?'<b style="color:var(--rose)">IT RUNS!</b> let go · ':'hold <span class="key">E</span> · '}`
         +`line <b style="color:${tc}">${'▰'.repeat(tk)+'▱'.repeat(8-tk)}</b>  fish <b>${'▰'.repeat(rk)+'▱'.repeat(8-rk)}</b>`); }
     if(f.tens>=1){ // snapped — the fish and the streak are both gone
       cancelFish(); sfx.miss(); addShake(0.18);
@@ -3026,24 +3121,140 @@ function updateFishing(dt){ const f=fishing;
       const land=fish=>{ sfx.splash(0.11); fxBurst(bx,WATER_TOP+0.2,bz,{n:16,cols:[0x7fdcff,0xd9f6ff,0xffffff],speed:2.6,up:4,size:1.1,grav:7});
         addShake(fish.rar==='legendary'||fish.rar==='epic'?0.25:0.1);
         if(fish.rar==='legendary')addFreeze(0.14); };
-      const auto=f.auto;
-      // pace the next cast off the wall clock, a hair wider than the floor the
-      // server enforces between two auto catches
-      if(auto)autoFish.nextAt=Date.now()+AUTO.gapMs+250;
       if(SRV.on){ // the server rolls the fish and banks it
-        SRV.act('catch',{night:isNight(),wet:wState,storm:wState==='storm',auto}).then(r=>{
+        SRV.act('catch',{night:isNight(),wet:wState,storm:wState==='storm'}).then(r=>{
           if(!r||!r.fish)return; land(r.fish); revealServerCatch(r); });
-      } else { const fish=f.hooked||rollFish(false,auto); land(fish);
-        // the streak is a reward for playing the fish yourself; an unattended
-        // rig neither builds it nor keeps one alive
-        if(auto)catchStreak=0;
-        else{ catchStreak++;
-          if(catchStreak>1){ const m=streakMult();    // a clean run pays a rising bonus on the fish's value
-            fish.val=Math.round(fish.val*m);
-            if(catchStreak%3===0)toast(`${pixSVG('fish',13)} ${catchStreak} in a row · ×${m.toFixed(2)} value!`,'gold'); } }
+      } else { const fish=f.hooked||rollFish(); land(fish);
+        catchStreak++;
+        if(catchStreak>1){ const m=streakMult();      // a clean run pays a rising bonus on the fish's value
+          fish.val=Math.round(fish.val*m);
+          if(catchStreak%3===0)toast(`${pixSVG('fish',13)} ${catchStreak} in a row · ×${m.toFixed(2)} value!`,'gold'); }
         f.hooked=null;
-        if(state.bucket.length<cap()){ onCatch(fish,auto); if(!auto)noteBaitSpent(useBait()); updateHUD(); save(); }
+        if(state.bucket.length<cap()){ onCatch(fish); noteBaitSpent(useBait()); updateHUD(); save(); }
         else toast('Bucket full · sell some fish!'); } } }
+}
+
+/* ========================================================================
+   12b. THE AUTO-RIG — a rod you leave standing in the water.
+
+   Press F at the shore and the rig is PLANTED where you stand: from then on it
+   is a prop in the world with its own rod, bobber and line, and it fishes on
+   its own clock whether you are beside it, across the isle at the ore face, or
+   inside the Market with the panel open. That is the whole feature — you do
+   not have to be at the keyboard, and you do not even have to be fishing.
+
+   What it costs you is everything in the AUTO table: the rig draws from a
+   table where the good fish have been crushed out (a legendary runs ~1 in
+   26,000 casts against ~1 in 74 on a held rod), it lands them worth 30% less,
+   it never bottles a treasure map, it burns no bait, and it scores nothing in
+   the derby or the wanted-fish bounty. A held rod out-earns it about six to
+   one. It is the "leave it running" income, not the good one.
+
+   `nextAt` is wall-clock, not a frame counter: the server enforces the same
+   per-rig gap between two auto catches, so the rig paces itself a quarter of
+   a second on the safe side of it rather than getting bounced by a 400.
+   ======================================================================== */
+const autoFish={on:false,state:'idle',t:0,dur:0,nextAt:0,
+  px:0,py:0,pz:0,tx:0,tz:0,ty:0,      // where the stand is planted / where the bobber sits
+  world:'',caught:0,earned:0,note:''};
+const isMoving=()=>!!(keys.up||keys.down||keys.left||keys.right);
+const rigGear=()=>rigOf(state.rigLvl);
+function paintAuto(){ const el=document.getElementById('hud-auto'); if(!el)return;
+  el.classList.toggle('on',autoFish.on);
+  const v=document.getElementById('autoVal');
+  if(v)v.innerHTML=!autoFish.on?'off'
+    :autoFish.note?`<span style="color:var(--gold)">${autoFish.note}</span>`
+    :`${autoFish.caught} fish · ◈ ${fmt(autoFish.earned)}`;
+  const b=document.getElementById('autoBtn'); if(b)b.classList.toggle('lit',autoFish.on); }
+function rigNote(n){ if(autoFish.note===n)return; autoFish.note=n; paintAuto(); }
+
+/* Plant the rig where the hero stands, aimed at the water cell `w`. */
+function deployRig(w){ const a=autoFish, g=rigGear();
+  a.on=true; a.state='hold'; a.t=0; a.nextAt=0; a.note='';
+  a.caught=0; a.earned=0; a.world=worldKey;
+  /* heightAt, not pWorld.y: the hero's y is eased toward the ground every frame,
+     so planting on it can leave the stand floating a few centimetres */
+  a.px=pWorld.x; a.pz=pWorld.z; a.py=heightAt(a.px,a.pz); a.tx=w.x; a.tz=w.z;
+  rigProp.position.set(a.px,a.py,a.pz);
+  rigProp.rotation.y=Math.atan2(a.tx-a.px,a.tz-a.pz);   // the blank leans out at the water
+  rigProp.userData.bell.material.color.setHex(g.tint);
+  rigProp.visible=true;
+  initAudio(); paintAuto(); sfx.cast();
+  toast(`${pixSVG('rod',13)} ${g.name} planted · it fishes while you do anything else`,'good'); }
+
+function packRig(why){ const a=autoFish; if(!a.on)return;
+  const n=a.caught, coins=a.earned;
+  a.on=false; a.state='idle'; a.note='';
+  rigProp.visible=false; rigBob.visible=false; rigLine.visible=false;
+  paintAuto();
+  toast(why||(n?`${pixSVG('rod',13)} Rig packed up · it landed ${n} fish worth ◈${fmt(coins)}`:'Rig packed up')); }
+
+function toggleAuto(){ if(!running)return; initAudio();
+  if(autoFish.on){ packRig(); return; }
+  const w=nearestWater();
+  if(!w||w.dist>2.4){ toast('Stand at the water to plant your rig','bad'); return; }
+  deployRig(w); }
+
+/* One landed fish, from whichever side rolled it. */
+function rigLand(fish){ const a=autoFish;
+  a.caught++; a.earned+=fish.val|0;
+  fxBurst(a.tx,WATER_TOP+0.2,a.tz,{n:12,cols:[0x7fdcff,0xd9f6ff,0xffffff],speed:2.2,up:3.2,size:1,grav:7});
+  /* the rig is meant to be ignored, so anything above uncommon gets a shout —
+     that is the only way an AFK player learns it found something */
+  if(RORDER[fish.rar]>=2)toast(`${pixSVG('rod',13)} Your rig landed <b>${fish.name}</b> · ◈${fmt(fish.val)}`,'gold');
+  paintAuto(); }
+
+function rigTick(dt){ const a=autoFish;
+  if(!a.on||!running)return;
+  if(RF.override.rig&&RF.override.rig(dt,a)===true)return;
+  /* sailing takes the rig with you rather than stranding it on another isle */
+  if(a.world!==worldKey){ packRig('Rig stowed for the crossing'); return; }
+  const g=rigGear(), tipW=rigProp.userData.tip;
+
+  if(a.state==='hold'){
+    if(state.bucket.length>=cap()){ rigNote('bucket full'); a.nextAt=Date.now()+1200; return; }
+    if(a.note)rigNote('');
+    if(Date.now()<a.nextAt)return;
+    a.state='cast'; a.t=0; rigBob.visible=true; sfx.cast();
+    return; }
+
+  if(a.state==='cast'){ a.t=Math.min(1,a.t+dt*1.9);
+    rigBob.position.x=lerp(a.px,a.tx,a.t); rigBob.position.z=lerp(a.pz,a.tz,a.t);
+    rigBob.position.y=lerp(a.py+1.4,WATER_TOP+0.1,a.t)+Math.sin(a.t*Math.PI)*1.1;
+    if(a.t>=1){ a.state='wait'; a.t=0; a.dur=biteTime()*g.bite;
+      fxBurst(a.tx,WATER_TOP+0.15,a.tz,{n:6,cols:[0x7fdcff,0xd9f6ff,0xffffff],speed:1.6,up:2.2,size:0.8,grav:7}); } }
+  else if(a.state==='wait'){ a.t+=dt;
+    rigBob.position.y=WATER_TOP+0.1+Math.sin(clock*3+1.7)*0.05;
+    if(a.t>=a.dur){ a.state='bite'; a.t=0; sfx.bite();
+      fxBurst(a.tx,WATER_TOP+0.15,a.tz,{n:5,cols:[0x7fdcff,0xffffff],speed:1.5,up:2,size:0.8,grav:7}); } }
+  else if(a.state==='bite'){ a.t+=dt;
+    rigBob.position.y=WATER_TOP+0.05+Math.sin(clock*22)*0.13;
+    if(a.t>=0.45){ a.state='reel'; a.t=0; } }
+  else if(a.state==='reel'){ a.t+=dt;
+    const k=Math.min(1,a.t/0.95);
+    rigBob.position.x=lerp(a.tx,a.px,k*0.55); rigBob.position.z=lerp(a.tz,a.pz,k*0.55);
+    rigBob.position.y=WATER_TOP+0.1+k*0.3;
+    if(Math.random()<0.05)sfx.reel();
+    if(k>=1){
+      a.state='hold'; a.t=0; a.nextAt=Date.now()+g.gapMs+250; rigBob.visible=false;
+      if(state.bucket.length>=cap()){ rigNote('bucket full'); return; }
+      if(SRV.on){ SRV.act('catch',{night:isNight(),wet:wState,storm:wState==='storm',auto:true}).then(r=>{
+          /* the fish is banked either way; only the on-rig tally needs the rig
+             to still be standing when the reply lands */
+          if(!r||!r.fish)return; if(autoFish.on)rigLand(r.fish); revealServerCatch(r); }); }
+      else { const fish=rollFish(false,true);
+        rigLand(fish); onCatch(fish,true); updateHUD(); save(); } } }
+
+  /* the line follows the rod tip wherever the stand ended up */
+  rigLine.visible=rigBob.visible;
+  if(rigLine.visible){ rigTip.copy(tipW); rigProp.localToWorld(rigTip);
+    const q=rigLineGeo.attributes.position;
+    q.setXYZ(0,rigTip.x,rigTip.y,rigTip.z);
+    q.setXYZ(1,rigBob.position.x,rigBob.position.y,rigBob.position.z);
+    q.needsUpdate=true; rigLineGeo.computeBoundingSphere(); }
+  /* the bell glows through a bite so you can spot it from across the isle */
+  { const lit=a.state==='bite'||a.state==='reel';
+    rigProp.userData.bell.material.emissive.setHex(lit?rigGear().tint:0x000000); }
 }
 
 /* ========================================================================
@@ -3842,6 +4053,7 @@ function skyUpdate(dt){
     else if(isAsh()) wState=r<0.5?'clear':r<0.82?'ash':'storm';
     else wState=r<0.55?'clear':r<0.88?'rain':'storm';
     wTimer=rand(70,160);
+    if(wState!==prev)RF.emit('weather',wState,prev);
     if(running&&wState!==prev){ (wState==='storm'?sfx.thunder:sfx.gust)();
       if(wState==='rain')toast(pixSVG('rain',13)+' Rain · fish bite faster!','good');
       else if(wState==='snow')toast(pixSVG('rain',13)+' Snowfall · the ice fish rise…','good');
@@ -3962,16 +4174,6 @@ function interactions(){
   const dT=Math.hypot(pWorld.x-TRADER_POS.x,pWorld.z-TRADER_POS.z), dC=Math.hypot(pWorld.x-CASINO_POS.x,pWorld.z-CASINO_POS.z);
   const ore=nearestOre(), met=nearestMeteor();
   const w=nearestWater(), canFish=w&&w.dist<2.4;
-  /* The rig owns the interact loop, but ONLY while you are standing still at
-     the water. Walk away and every other prompt — Trader, Harbor, ore — reads
-     exactly as it does with the rig off, so you can still go sell your bucket
-     without switching it off first. */
-  if(autoFish.on&&canFish&&!isMoving()){
-    if(state.bucket.length>=cap())setAuto(false,'Bucket full · the auto-rig stopped');
-    else{ const wait=Math.max(0,(autoFish.nextAt-Date.now())/1000);
-      hint(`${pixSVG('rod',13)} <b>auto-rig</b> ${wait>0.05?`resetting the line… <b>${wait.toFixed(1)}s</b>`:'casting'} · <span class="key">F</span> stop`);
-      if(wait<=0)startCast(w);
-      return; } }
   if(dT<2.6){ hint('<span class="key">E</span> Trade at the Market'); if(actEdge){initAudio();openMarket();} }
   else if(dC<2.8){ hint('<span class="key">E</span> Enter the Spinning Eel'); if(actEdge){initAudio();openCasino();} }
   else if(PORTAL_POS&&Math.hypot(pWorld.x-PORTAL_POS.x,pWorld.z-PORTAL_POS.z)<2.2){
@@ -3989,7 +4191,10 @@ function interactions(){
   else if(met){ hint('☄ <span class="key">E</span> <b style="color:var(--gold)">Crack the meteorite</b>'); if(actEdge){initAudio();claimMeteor(met);} }
   else if(ore){ hint(`<span class="key">E</span> ${ore.geode?'<b style="color:var(--gold)">Crack the geode</b>':'Mine '+ORE_INFO[ore.type].name}`); if(actEdge)startMine(ore); }
   else if((tree=nearestTree())){ hint(pixSVG('axe',13)+' <span class="key">E</span> Chop wood'); if(actEdge){initAudio();chopping.tree=tree;chopping.t=0;chopping.dur=1.4/(1+(state.axeLvl-1)*0.22);} }
-  else if(canFish){ if(state.bucket.length>=cap())hint('Bucket full · sell at the Trader'); else { hint('<span class="key">E</span> Cast your line'); if(actEdge)startCast(w); } }
+  else if(canFish){ if(state.bucket.length>=cap())hint('Bucket full · sell at the Trader');
+    /* E is still your own rod; F plants the rig and walks away from it */
+    else hint(`<span class="key">E</span> Cast your line${autoFish.on?'':` · <span class="key">F</span> plant your ${rigGear().name}`}`);
+    if(actEdge&&state.bucket.length<cap())startCast(w); }
   else hint('');
 }
 let lastBiome='',bannerT=0,mktEpochSeen=Math.floor(Date.now()/MKT_MS);
@@ -4005,7 +4210,25 @@ const vPos=new THREE.Vector3(pWorld.x+CAM_OFF.x,pWorld.y+CAM_OFF.y,pWorld.z+CAM_
       vLook=new THREE.Vector3(pWorld.x,pWorld.y+1,pWorld.z);
 let vSize=camSize;
 const swing={p:0,last:0}; let leanT=0,mineFlinch=0; // action-animation state (windup→strike→impact)
+/* The rAF chain is re-armed on the LAST line of animateFrame(), so anything that
+   threw before it used to freeze the game stone dead. The wrapper re-arms it
+   instead, funnels the error, and — if the very same frame keeps failing — gives
+   up loudly rather than burning the CPU on a broken loop forever. */
+let frameFails=0, frameDead=false;
 function animate(now){
+  if(frameDead)return;
+  try{ animateFrame(now); }
+  catch(e){
+    frameFails++;
+    if(window.RF&&RF.err)RF.err('frame',e,frameFails>240?'fatal':'error');
+    if(frameFails>240){ frameDead=true;
+      fail('The render loop failed 240 frames in a row and was stopped.<br><b>'
+        +String((e&&e.message)||e).replace(/[<>]/g,'')+'</b><br>'
+        +'<small>Reload the page to try again — your save is untouched.</small>');
+      return; }
+    requestAnimationFrame(animate); }
+}
+function animateFrame(now){
   // clamp BOTH ends: a backwards or NaN rAF timestamp made dt negative, which flipped
   // vk=1-exp(-4.5*dt) hugely negative and blew the camera lerp out to garbage coordinates
   let dt=clamp((now-last)/1000||0,0,0.033); last=now;
@@ -4081,7 +4304,7 @@ function animate(now){
     biomeCheck();
     if((achT+=dt)>1.4){achT=0;checkAch();checkDeeds();payDividends();checkBounties();}
     if(oreComboT>0&&(oreComboT-=dt)<=0)oreCombo=0;   // the vein goes cold if you dawdle
-    updateMeteors(dt); updatePet(dt);
+    updateMeteors(dt); updatePet(dt); rigTick(rdt);   // rdt: a hit-stop must not stall the rig
     if(titleSprite){ titleSprite.visible=!capCam; titleSprite.position.set(pWorld.x,pWorld.y+2.95,pWorld.z); }
     if(marketOpen===true&&clock-bannerT>0.5){bannerT=clock;renderBanner();
       const e=Math.floor(Date.now()/MKT_MS);
@@ -4167,6 +4390,7 @@ function animate(now){
   renderer.clearDepth();
   renderer.render(scene,camera);      // …then the world on top of it
   RF.emit('afterRender',dt,rdt);
+  if(frameFails)frameFails=0;         // a frame that reached the end clears the streak
   requestAnimationFrame(animate);
 }
 
@@ -4266,7 +4490,8 @@ function chatPush(name,msg,cls,peerId){ if(!chatLog)return;
     who.title='click to mute / report '+name; who.style.cursor='pointer';
     who.onclick=()=>chatMenu(name,peerId); d.appendChild(who); }
   d.appendChild(document.createTextNode(msg));  // textContent → no HTML injection
-  chatLog.appendChild(d); while(chatLog.children.length>60)chatLog.removeChild(chatLog.firstChild);
+  chatLog.appendChild(d); RF.emit('chat',{name:name||'',msg:msg,cls:cls||'',peerId:peerId,el:d});
+  while(chatLog.children.length>60)chatLog.removeChild(chatLog.firstChild);
   if(name)sfx.chat();                                    // someone spoke; system lines stay silent
   chatLog.scrollTop=chatLog.scrollHeight;
   if(chatBox){ chatBox.classList.add('show'); clearTimeout(chatBox._t);
@@ -4293,6 +4518,8 @@ const CHAT_HELP='commands:  /mute NAME   /unmute NAME   /report NAME reason   /h
 function chatCommand(m){
   const [cmd,...rest]=m.slice(1).split(/\s+/), who=rest[0]||'';
   const c=cmd.toLowerCase();
+  // a mod may add commands of its own; claiming one skips every built-in below
+  if(RF.claim('chatcmd',c,rest,m))return true;
   if(c==='help'){ chatPush('',CHAT_HELP,'sys'); return true; }
   if(c==='mute'&&who){ mutedNames.add(who); saveMuted(); chatPush('','· muted '+who+' ·','sys'); return true; }
   if(c==='unmute'&&who){ mutedNames.delete(who); saveMuted(); chatPush('','· unmuted '+who+' ·','sys'); return true; }
@@ -4455,6 +4682,7 @@ Object.assign(RF, {
   WORLD: WORLD, WORLDS: WORLDS, worldKey: worldKey, WORLD_ORDER: WORLD_ORDER, TEX: TEX,
   N: N, HALF: HALF, WATER_TOP: WATER_TOP, SAVE: SAVE, MAXLVL: MAXLVL,
   fishing: fishing, mining: mining, chopping: chopping, digging: digging, autoFish: autoFish,
+  AUTO: AUTO, RIGS: RIGS, MAX_RIG: MAX_RIG, rigProp: rigProp, rigBob: rigBob,
   oreNodes: oreNodes, treeData: treeData, landCells: landCells, grassCells: grassCells,
   heightMap: heightMap, pathSet: pathSet, usedCells: usedCells, decorUsed: decorUsed,
   spawnCell: spawnCell, peers: peers, LABELS: LABELS, PROPS: PROPS,
@@ -4473,6 +4701,7 @@ Object.assign(RF, {
     heightAt: heightAt, isWaterAt: isWaterAt, cellType: cellType, cellIndex: cellIndex,
     reachable: reachable, findCellNear: findCellNear, keyOf: keyOf,
     isNight: isNight, isCold: isCold, isAsh: isAsh, cap: cap, isMoving: isMoving,
+    rigOf: rigOf, rigGear: rigGear, deployRig: deployRig, packRig: packRig, toggleAuto: toggleAuto,
     priceMult: priceMult, mktMods: mktMods, mktEpochNow: mktEpochNow, catLabel: catLabel,
     stockPrice: stockPrice, stockAsk: stockAsk, stockBid: stockBid,
     rollFish: rollFish, mkFish: mkFish, onCatch: onCatch, reveal: reveal, fishPool: fishPool,
@@ -4489,6 +4718,9 @@ Object.assign(RF, {
   sfx: sfx,
   TAU: TAU
 });
+RF.fn.chatPush = chatPush;
+RF.fn.chatCommand = chatCommand;
+RF.fn.mutedNames = () => mutedNames;
 Object.defineProperties(RF, {
   clock:      {get:()=>clock},
   running:    {get:()=>running},
@@ -4499,7 +4731,7 @@ Object.defineProperties(RF, {
   camSize:    {get:()=>camSize, set:v=>{camSize=clamp(v,4,40); fitCamera();}},
   actEdge:    {get:()=>actEdge},
   hotSlot:    {get:()=>hotSlot},
-  muted:      {get:()=>muted},
+  muted:      {get:()=>muted, set:v=>setMuted(v)},
   photoMode:  {get:()=>photoMode},
   capCam:     {get:()=>capCam},
   chatOpen:   {get:()=>chatOpen},
@@ -4510,6 +4742,39 @@ Object.defineProperties(RF, {
   harborOpen: {get:()=>harborOpen},
   online:     {get:()=>!!(window.RFNet&&RFNet.online)}
 });
+/* ---- THE MIXER ---------------------------------------------------------
+   Three plain 0..1 multipliers on the gain nodes built in initAudio(). Mute
+   still runs through core's `muted` flag, which every voice already checks,
+   so a mod never has to reach into the audio graph itself. ---------------- */
+RF.audio = {
+  get ctx(){ return AC; },
+  get ready(){ return !!(AC && masterGain); },
+  get suspended(){ return !!(AC && AC.state === 'suspended'); },
+  /* browsers only start a context inside a gesture; call this from a click */
+  resume(){ try{ initAudio(); if(AC && AC.state === 'suspended') return AC.resume(); }
+    catch(e){ RF.err('audio:resume', e, 'warn'); } },
+  get master(){ return masterGain ? masterGain.gain.value : 1; },
+  set master(v){ if(masterGain) masterGain.gain.value = clamp(+v || 0, 0, 1.5); },
+  get music(){ return musGain ? musGain.gain.value : 1; },
+  set music(v){ if(musGain) musGain.gain.value = clamp(+v || 0, 0, 1.5); },
+  get sfx(){ return sfxGain ? sfxGain.gain.value : 1; },
+  set sfx(v){ if(sfxGain) sfxGain.gain.value = clamp(+v || 0, 0, 1.5); },
+  get muted(){ return muted; },
+  setMuted: setMuted,
+  /* The raw nodes, for a mod that wants its own sub-bus (an ambience bed, say)
+     riding under the same master fader instead of talking to the speakers. */
+  get masterNode(){ return masterGain; },
+  get musicNode(){ return musGain; },
+  get sfxNode(){ return sfxGain; },
+  /* A named sub-bus under master. Returns null before the context exists. */
+  bus(under){ if(!AC)return null;
+    const dest = under === 'music' ? musGain : under === 'sfx' ? sfxGain : masterGain;
+    if(!dest)return null;
+    try{ const g = AC.createGain(); g.gain.value = 1; g.connect(dest); return g; }
+    catch(e){ RF.err('audio:bus', e, 'warn'); return null; } }
+};
+RF.fn.setMuted = setMuted;
+RF.fn.payDividends = payDividends;
 RF._boot();
 
 // idle preview loop: the island is already alive behind the start menu

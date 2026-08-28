@@ -70,7 +70,7 @@ const Net={
      No transaction is ever built, no chain is read, no funds are touched. ---- */
   hasWallet(){ return !!(window.ethereum); },
   async walletLogin(){
-    if(!window.ethereum) throw new Error('No wallet found — install MetaMask or use Guest');
+    if(!window.ethereum) throw new Error('No wallet found · install MetaMask or use Guest');
     const accs=await window.ethereum.request({method:'eth_requestAccounts'});
     const address=(accs&&accs[0]||'').toLowerCase();
     if(!/^0x[0-9a-f]{40}$/.test(address)) throw new Error('Wallet gave no address');

@@ -137,7 +137,7 @@ function makeRateLimiter(max, windowMs) {
     if (rec.count > max) {
       const retryAfter = Math.max(1, Math.ceil((rec.resetAt - now) / 1000));
       res.set('Retry-After', String(retryAfter));
-      return res.status(429).json({ error: 'too many attempts, try again later' });
+      return res.status(429).json({ error: 'too many attempts, try again later', code: 'RATE_LIMIT' });
     }
     next();
   };
@@ -156,7 +156,7 @@ export function mountWalletAuth(app) {
   app.get('/api/auth/wallet/nonce', walletLimit, (req, res) => {
     const addr = typeof req.query.address === 'string' ? req.query.address : '';
     if (!ADDRESS_RE.test(addr)) {
-      return res.status(400).json({ error: 'invalid address' });
+      return res.status(400).json({ error: 'invalid address', code: 'BAD_ADDRESS' });
     }
 
     const now = Date.now();
@@ -174,7 +174,7 @@ export function mountWalletAuth(app) {
     const addr = typeof body.address === 'string' ? body.address : '';
     const signature = typeof body.signature === 'string' ? body.signature : '';
     if (!ADDRESS_RE.test(addr)) {
-      return res.status(400).json({ error: 'invalid address' });
+      return res.status(400).json({ error: 'invalid address', code: 'BAD_ADDRESS' });
     }
 
     const addrLower = addr.toLowerCase();
@@ -183,12 +183,12 @@ export function mountWalletAuth(app) {
     // never be replayed and brute-forcing gets one guess per nonce.
     pendingNonces.delete(addrLower);
     if (!entry || entry.exp <= Date.now()) {
-      return res.status(400).json({ error: 'nonce missing or expired, request a new one' });
+      return res.status(400).json({ error: 'nonce missing or expired, request a new one', code: 'NONCE_EXPIRED' });
     }
 
     const recovered = recoverAddress(personalDigest(entry.message), signature);
     if (!recovered || recovered !== addrLower) {
-      return res.status(401).json({ error: 'signature does not match address' });
+      return res.status(401).json({ error: 'signature does not match address', code: 'BAD_SIGNATURE' });
     }
 
     let row = wallets.findUser(addrLower);
@@ -227,7 +227,7 @@ export function mountWalletAuth(app) {
       }
     }
     if (id === null) {
-      return res.status(500).json({ error: 'could not allocate guest account' });
+      return res.status(500).json({ error: 'could not allocate guest account', code: 'GUEST_ALLOC_FAILED' });
     }
 
     const token = sessions.create(id);

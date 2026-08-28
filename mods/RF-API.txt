@@ -1,0 +1,188 @@
+/* ========================================================================
+   0. MOD HOST — the extension surface every mods/*.js file builds on.
+   Declared before anything else so hook sites further down can always fire
+   into it; the reference table at the very bottom of this file fills in the
+   engine handles once the world, the state and the UI all exist.
+   ======================================================================== */
+const RF = window.RF = {
+  version: 1,
+  ready: false,
+  mods: Object.create(null),          // name -> {name, ok, error}
+  order: [],
+  hooks: Object.create(null),
+  override: Object.create(null),      // named take-overs: return true to replace core behaviour
+  _queue: [],
+  _quiet: false,
+  warn(where, e){ RF.err(where, e, 'warn'); },
+  /* ---- THE ERROR FUNNEL ------------------------------------------------
+     Every failure the game is able to catch lands here: a hook that threw,
+     a rejected server action, a dead WebGL context, a full localStorage, a
+     frame that blew up mid-render. mods/notify.js turns these into on-screen
+     notifications; until it loads (or if it never does) the ring buffer below
+     still holds the last 300, so nothing is ever silently swallowed.
+     'error' handlers are called directly, NOT through emit(), so a handler
+     that throws can never recurse back into the funnel. ------------------- */
+  errors: [],
+  errSeq: 0,
+  err(where, e, level){
+    const rec = { id: ++RF.errSeq, t: Date.now(), where: String(where == null ? '?' : where),
+      level: level || 'error',
+      msg: (e && e.message) || (typeof e === 'string' ? e : '') || 'unknown error',
+      name: (e && e.name) || '', stack: (e && e.stack) || '', raw: e };
+    RF.errors.push(rec); if(RF.errors.length > 300) RF.errors.shift();
+    if(!RF._quiet){ try{ (rec.level === 'warn' ? console.warn : console.error)('[RF] ' + rec.where + ': ' + rec.msg, e); }catch(_){} }
+    const L = RF.hooks['error'];
+    if(L) for(let i = 0; i < L.length; i++){ try{ L[i](rec); }catch(_){} }
+    return rec; },
+  /* ---- event bus ---- */
+  on(evt, fn, prio){ const L = RF.hooks[evt] || (RF.hooks[evt] = []);
+    fn._p = prio || 0; L.push(fn); L.sort((a,b)=>(a._p|0)-(b._p|0)); return fn; },
+  off(evt, fn){ const L = RF.hooks[evt]; if(!L) return;
+    const i = L.indexOf(fn); if(i >= 0) L.splice(i,1); },
+  emit(evt, a, b, c, d){ const L = RF.hooks[evt]; if(!L) return;
+    for(let i=0;i<L.length;i++){ try{ L[i](a,b,c,d); }catch(e){ RF.warn(evt,e); } } },
+  /* like emit, but the first handler returning true claims the event */
+  claim(evt, a, b, c, d){ const L = RF.hooks[evt]; if(!L) return false;
+    for(let i=0;i<L.length;i++){ try{ if(L[i](a,b,c,d) === true) return true; }catch(e){ RF.warn(evt,e); } }
+    return false; },
+  /* ---- value pipelines: RF.modify('oreYield',fn) then core calls RF.pipe(...) ---- */
+  modify(name, fn, prio){ return RF.on('~'+name, fn, prio); },
+  pipe(name, v, ctx){ const L = RF.hooks['~'+name]; if(!L) return v;
+    for(let i=0;i<L.length;i++){ try{ const r = L[i](v, ctx); if(r !== undefined && r === r) v = r; }catch(e){ RF.warn(name,e); } }
+    return v; },
+  /* ---- per-mod persistence, independent of the server-owned `state` ---- */
+  store: {
+    get(name, def){ try{ const r = localStorage.getItem('rf-mod-'+name);
+        return r ? JSON.parse(r) : (def === undefined ? null : def); }
+      catch(e){ return def === undefined ? null : def; } },
+    set(name, val){ try{ localStorage.setItem('rf-mod-'+name, JSON.stringify(val)); }catch(e){} },
+    del(name){ try{ localStorage.removeItem('rf-mod-'+name); }catch(e){} }
+  },
+  /* ---- DOM/CSS helpers so a mod ships its own look without touching index.html ---- */
+  css(text, id){ const el = document.createElement('style');
+    if(id){ const old = document.getElementById(id); if(old) old.remove(); el.id = id; }
+    el.textContent = text; document.head.appendChild(el); return el; },
+  el(html, parent){ const t = document.createElement('div'); t.innerHTML = String(html).trim();
+    const n = t.firstElementChild; if(n && parent !== null) (parent || document.body).appendChild(n); return n; },
+  /* ---- frame timers, driven by the 'frame' hook ---- */
+  every(sec, fn){ let acc = 0; return RF.on('frame', dt => { acc += dt; if(acc >= sec){ acc = 0; fn(); } }); },
+  /* ---- registration: every mods/*.js calls RF.mod('name', RF => {...}) once ---- */
+  mod(name, fn){ if(!RF.ready){ RF._queue.push([name, fn]); return; } RF._run(name, fn); },
+  _run(name, fn){ const rec = {name: name, ok: false, error: null};
+    RF.mods[name] = rec; RF.order.push(name);
+    try{ fn(RF); rec.ok = true; }
+    catch(e){ rec.error = e; console.error('[RF] mod "' + name + '" failed to load:', e); } },
+  _boot(){ RF.ready = true;
+    const q = RF._queue.slice(); RF._queue.length = 0;
+    for(const [n, f] of q) RF._run(n, f);
+    RF.emit('ready'); }
+};
+
+
+
+/* ===== REFERENCE TABLE + MIXER (bottom of game.js) ===== */
+/* ========================================================================
+   18. MOD HOST — the reference table.
+   Everything a mods/*.js file is allowed to reach lives here. Getters are
+   used for anything the engine reassigns, so a mod always reads live values.
+   ======================================================================== */
+Object.assign(RF, {
+  THREE: THREE, scene: scene, camera: camera, renderer: renderer,
+  skyScene: skyScene, skyCam: skyCam, sun: sun, hemiL: hemiL, ambL: ambL,
+  state: state, player: player, pWorld: pWorld, keys: keys, SRV: SRV, H: H,
+  WORLD: WORLD, WORLDS: WORLDS, worldKey: worldKey, WORLD_ORDER: WORLD_ORDER, TEX: TEX,
+  N: N, HALF: HALF, WATER_TOP: WATER_TOP, SAVE: SAVE, MAXLVL: MAXLVL,
+  fishing: fishing, mining: mining, chopping: chopping, digging: digging, autoFish: autoFish,
+  AUTO: AUTO, RIGS: RIGS, MAX_RIG: MAX_RIG, rigProp: rigProp, rigBob: rigBob,
+  oreNodes: oreNodes, treeData: treeData, landCells: landCells, grassCells: grassCells,
+  heightMap: heightMap, pathSet: pathSet, usedCells: usedCells, decorUsed: decorUsed,
+  spawnCell: spawnCell, peers: peers, LABELS: LABELS, PROPS: PROPS,
+  ORE_INFO: ORE_INFO, TABLE: TABLE, ALL_FISH: ALL_FISH, RAR: RAR, RORDER: RORDER,
+  BAITS: BAITS, BAIT_ORDER: BAIT_ORDER, BOATS: BOATS, STOCKS: STOCKS, STOCK_KEYS: STOCK_KEYS,
+  ACH: ACH, DEEDS: DEEDS, MKT_CATS: MKT_CATS, MKT_MS: MKT_MS, KIOSK_TITLES: KIOSK_TITLES,
+  SEG: SEG, SEGCOL: SEGCOL, EMO: EMO, PIX: PIX, CAM_OFF: CAM_OFF,
+  TRADER_POS: TRADER_POS, CASINO_POS: CASINO_POS, HARBOR_POS: HARBOR_POS, PORTAL_POS: PORTAL_POS,
+  water: water, trader: trader, casino: casino, lamps: lamps, bobber: bobber,
+  fn: {
+    toast: toast, hint: hint, setArea: setArea, updateHUD: updateHUD, updateHotbar: updateHotbar,
+    pixSVG: pixSVG, pixFish: pixFish, fmt: fmt, shade: shade, coinFly: coinFly,
+    fxBurst: fxBurst, addShake: addShake, addFreeze: addFreeze,
+    beep: beep, nz: nz, sweep: sweep, initAudio: initAudio,
+    save: save, addPearls: addPearls, grantShare: grantShare, checkAch: checkAch,
+    heightAt: heightAt, isWaterAt: isWaterAt, cellType: cellType, cellIndex: cellIndex,
+    reachable: reachable, findCellNear: findCellNear, keyOf: keyOf,
+    isNight: isNight, isCold: isCold, isAsh: isAsh, cap: cap, isMoving: isMoving,
+    rigOf: rigOf, rigGear: rigGear, deployRig: deployRig, packRig: packRig, toggleAuto: toggleAuto,
+    priceMult: priceMult, mktMods: mktMods, mktEpochNow: mktEpochNow, catLabel: catLabel,
+    stockPrice: stockPrice, stockAsk: stockAsk, stockBid: stockBid,
+    rollFish: rollFish, mkFish: mkFish, onCatch: onCatch, reveal: reveal, fishPool: fishPool,
+    startCast: startCast, cancelFish: cancelFish, nearestWater: nearestWater,
+    openMarket: openMarket, closeMarket: closeMarket, openInv: openInv, closeInv: closeInv,
+    openCasino: openCasino, closeCasino: closeCasino, openHarbor: openHarbor, closeHarbor: closeHarbor,
+    renderInv: renderInv, renderMarketAll: renderMarketAll, setInvTab: setInvTab,
+    applyWardrobe: applyWardrobe, applyTitle: applyTitle, playEmote: playEmote,
+    humanoid: humanoid, texturedBox: texturedBox, makeLabel: makeLabel, mat: mat,
+    upCost: upCost, axeCost: axeCost, haveOres: haveOres, reqLabel: reqLabel,
+    lerp: lerp, clamp: clamp, rand: rand, lerpAngle: lerpAngle, mulberry32: mulberry32,
+    px: px, toTex: toTex, noiseFill: noiseFill
+  },
+  sfx: sfx,
+  TAU: TAU
+});
+RF.fn.chatPush = chatPush;
+RF.fn.chatCommand = chatCommand;
+RF.fn.mutedNames = () => mutedNames;
+Object.defineProperties(RF, {
+  clock:      {get:()=>clock},
+  running:    {get:()=>running},
+  dayT:       {get:()=>dayT},
+  dayCount:   {get:()=>dayCount},
+  weather:    {get:()=>wState},
+  viewMode:   {get:()=>viewMode},
+  camSize:    {get:()=>camSize, set:v=>{camSize=clamp(v,4,40); fitCamera();}},
+  actEdge:    {get:()=>actEdge},
+  hotSlot:    {get:()=>hotSlot},
+  muted:      {get:()=>muted, set:v=>setMuted(v)},
+  photoMode:  {get:()=>photoMode},
+  capCam:     {get:()=>capCam},
+  chatOpen:   {get:()=>chatOpen},
+  panelOpen:  {get:()=>!!(marketOpen||casinoOpen||invOpen||harborOpen||capCam)},
+  marketOpen: {get:()=>marketOpen},
+  invOpen:    {get:()=>invOpen},
+  casinoOpen: {get:()=>casinoOpen},
+  harborOpen: {get:()=>harborOpen},
+  online:     {get:()=>!!(window.RFNet&&RFNet.online)}
+});
+/* ---- THE MIXER ---------------------------------------------------------
+   Three plain 0..1 multipliers on the gain nodes built in initAudio(). Mute
+   still runs through core's `muted` flag, which every voice already checks,
+   so a mod never has to reach into the audio graph itself. ---------------- */
+RF.audio = {
+  get ctx(){ return AC; },
+  get ready(){ return !!(AC && masterGain); },
+  get suspended(){ return !!(AC && AC.state === 'suspended'); },
+  /* browsers only start a context inside a gesture; call this from a click */
+  resume(){ try{ initAudio(); if(AC && AC.state === 'suspended') return AC.resume(); }
+    catch(e){ RF.err('audio:resume', e, 'warn'); } },
+  get master(){ return masterGain ? masterGain.gain.value : 1; },
+  set master(v){ if(masterGain) masterGain.gain.value = clamp(+v || 0, 0, 1.5); },
+  get music(){ return musGain ? musGain.gain.value : 1; },
+  set music(v){ if(musGain) musGain.gain.value = clamp(+v || 0, 0, 1.5); },
+  get sfx(){ return sfxGain ? sfxGain.gain.value : 1; },
+  set sfx(v){ if(sfxGain) sfxGain.gain.value = clamp(+v || 0, 0, 1.5); },
+  get muted(){ return muted; },
+  setMuted: setMuted,
+  /* The raw nodes, for a mod that wants its own sub-bus (an ambience bed, say)
+     riding under the same master fader instead of talking to the speakers. */
+  get masterNode(){ return masterGain; },
+  get musicNode(){ return musGain; },
+  get sfxNode(){ return sfxGain; },
+  /* A named sub-bus under master. Returns null before the context exists. */
+  bus(under){ if(!AC)return null;
+    const dest = under === 'music' ? musGain : under === 'sfx' ? sfxGain : masterGain;
+    if(!dest)return null;
+    try{ const g = AC.createGain(); g.gain.value = 1; g.connect(dest); return g; }
+    catch(e){ RF.err('audio:bus', e, 'warn'); return null; } }
+};
+RF.fn.setMuted = setMuted;
+RF.fn.payDividends = payDividends;

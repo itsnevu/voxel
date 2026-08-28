@@ -439,6 +439,110 @@
   #err{position:fixed;inset:0;z-index:40;display:none;align-items:center;justify-content:center;background:#0a1418;color:#ff9db0;
     font-family:"IBM Plex Mono";font-size:14px;text-align:center;padding:40px;line-height:1.7;}
   a:focus-visible,button:focus-visible{outline:2px solid var(--teal);outline-offset:2px;}
+
+  /* ==== in-game polish pass: neon districts + press physics ====
+     Appended last on purpose — these override the base rules above by cascade order. */
+  /* 1. district tokens: each venue keeps the same glass, lit by its own ambient color */
+  #market .card{--district:255,207,92;}
+  #inv .card{--district:181,205,201;}
+  #harbor .card{--district:57,215,196;}
+  #casino .card-c{--district:255,93,122;
+    background:radial-gradient(120% 42% at 50% -6%,rgba(255,93,122,.15),transparent 64%),var(--glass-sheen),var(--glass);
+    box-shadow:var(--glass-hi),0 24px 70px rgba(0,0,0,.45),0 0 48px -6px rgba(255,93,122,.26);}
+  #market .card,#inv .card,#harbor .card{
+    background:radial-gradient(92% 44% at 50% -8%,rgba(var(--district),.10),transparent 62%),var(--glass-sheen),var(--glass-strong);}
+  #market .card,#harbor .card{box-shadow:var(--glass-hi),0 30px 80px rgba(0,0,0,.5),0 0 52px -10px rgba(var(--district),.16);}
+  #casino h2{text-shadow:0 0 16px rgba(255,93,122,.4);}
+  .card-head .sub{text-shadow:0 0 12px rgba(var(--district,255,255,255),.55),0 1px 4px rgba(2,8,10,.5);}
+  /* 2. section rhythm: glowing district tick + fading hairline */
+  .seclab,.bet-lab{display:flex;align-items:center;gap:9px;color:var(--lab);}
+  .seclab::before,.bet-lab::before{content:"";flex:0 0 3px;width:3px;height:11px;border-radius:2px;
+    background:rgba(var(--district,138,166,162),.9);box-shadow:0 0 8px rgba(var(--district,138,166,162),.6);}
+  .seclab::after,.bet-lab::after{content:"";flex:1;height:1px;min-width:24px;
+    background:linear-gradient(90deg,rgba(var(--district,138,166,162),.25),transparent 85%);}
+  /* 3. press physics: the title CTA's hard ledge, scaled to card chrome */
+  .btn{box-shadow:0 2px 0 rgba(7,20,24,.85),inset 0 1px 0 rgba(255,255,255,.12);transition:transform .06s,border-color .12s,box-shadow .12s;}
+  .btn:hover:not(:disabled){border-color:rgba(57,215,196,.6);box-shadow:0 2px 0 rgba(7,20,24,.85),inset 0 1px 0 rgba(255,255,255,.12),0 0 12px rgba(57,215,196,.22);}
+  .btn:active:not(:disabled){transform:translateY(2px);box-shadow:inset 0 1px 0 rgba(255,255,255,.08);}
+  .btn.gold{box-shadow:0 2px 0 #6e4f1e,inset 0 1px 0 rgba(255,255,255,.12);}
+  .btn.gold:hover:not(:disabled){border-color:var(--gold);box-shadow:0 2px 0 #6e4f1e,inset 0 1px 0 rgba(255,255,255,.14),0 0 12px rgba(255,207,92,.25);}
+  .btn.rose{box-shadow:0 2px 0 #7a2136,inset 0 1px 0 rgba(255,255,255,.12);}
+  .x{box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 2px 0 rgba(4,12,14,.5);transition:transform .07s,box-shadow .07s,color .12s,border-color .12s;}
+  .x:hover{transform:translateY(-1px);color:var(--rose);border-color:rgba(255,93,122,.55);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 3px 0 rgba(4,12,14,.5),0 0 12px rgba(255,93,122,.2);}
+  .x:active{transform:translateY(2px);box-shadow:inset 0 1px 0 rgba(255,255,255,.08);}
+  .tabbtn{box-shadow:0 2px 0 rgba(4,12,14,.45);transition:transform .07s,box-shadow .07s,color .12s,border-color .12s;}
+  .tabbtn:hover{transform:translateY(-1px);box-shadow:0 3px 0 rgba(4,12,14,.45);}
+  .tabbtn:active{transform:translateY(2px);box-shadow:none;}
+  .tabbtn.sel{transform:translateY(-1px);background:rgba(57,215,196,.10);border-color:rgba(57,215,196,.55);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 3px 0 #1c9c8c,0 0 14px rgba(57,215,196,.18);}
+  /* 4. casino: one rose color story from stake to spin */
+  .betbtn{box-shadow:0 2px 0 rgba(7,20,24,.8),inset 0 1px 0 rgba(255,255,255,.08);transition:transform .06s,border-color .12s,box-shadow .12s;}
+  .betbtn:hover{transform:translateY(-1px);border-color:currentColor;box-shadow:0 3px 0 rgba(7,20,24,.8),inset 0 1px 0 rgba(255,255,255,.1),0 0 14px -4px currentColor;}
+  .betbtn:active{transform:translateY(2px);box-shadow:inset 0 1px 0 rgba(255,255,255,.06);}
+  .betbtn.sel{transform:translateY(-1px);border-color:currentColor;
+    box-shadow:0 3px 0 rgba(7,20,24,.8),inset 0 0 0 1.5px currentColor,0 0 18px -2px currentColor;text-shadow:0 0 10px currentColor;}
+  .stake{transition:transform .08s,border-color .12s,background .12s,box-shadow .12s;}
+  .stake:hover{border-color:rgba(255,93,122,.55);background:rgba(255,255,255,.08);}
+  .stake:active{transform:translateY(1px);}
+  .stake.sel{border-color:var(--rose);background:rgba(255,93,122,.08);box-shadow:inset 0 0 0 1px var(--rose),0 0 14px rgba(255,93,122,.26);}
+  #spinBtn{width:100%;margin-top:6px;padding:13px 0;font-size:15px;font-weight:700;letter-spacing:.14em;border-radius:12px;
+    color:#ffe3e9;border:1px solid rgba(255,120,145,.9);
+    background:linear-gradient(180deg,rgba(255,93,122,.26),rgba(255,93,122,.09) 55%,rgba(255,93,122,.14)),var(--glass-row);
+    box-shadow:0 3px 0 #7a2136,inset 0 1px 0 rgba(255,255,255,.25),0 0 24px rgba(255,93,122,.38);
+    text-shadow:0 0 12px rgba(255,93,122,.75);transition:transform .06s,box-shadow .15s,border-color .12s;}
+  #spinBtn:not(:disabled){animation:spinArm 2.8s ease-in-out infinite;}
+  @keyframes spinArm{
+    0%,100%{box-shadow:0 3px 0 #7a2136,inset 0 1px 0 rgba(255,255,255,.25),0 0 24px rgba(255,93,122,.38);}
+    50%{box-shadow:0 3px 0 #7a2136,inset 0 1px 0 rgba(255,255,255,.25),0 0 40px rgba(255,93,122,.62);}}
+  #spinBtn:hover:not(:disabled){border-color:#ffa3b4;box-shadow:0 3px 0 #7a2136,inset 0 1px 0 rgba(255,255,255,.25),0 0 38px rgba(255,93,122,.6);}
+  #spinBtn:active:not(:disabled){transform:translateY(3px);box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 0 16px rgba(255,93,122,.35);}
+  #spinBtn:disabled{opacity:1;cursor:default;color:rgba(255,163,180,.55);border-color:rgba(255,93,122,.32);
+    background:linear-gradient(180deg,rgba(255,93,122,.08),rgba(255,93,122,.03)),var(--glass-row);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 0 14px -4px rgba(255,93,122,.3);text-shadow:none;}
+  /* 5. market: the HOT banner becomes the ticket-stub marquee it deserves */
+  #mktBanner{position:relative;overflow:hidden;font-family:"Chakra Petch";font-size:13px;font-weight:600;letter-spacing:.02em;
+    padding:9px 14px 12px 17px;border:1px solid rgba(255,207,92,.4);
+    background:linear-gradient(100deg,rgba(255,207,92,.09),rgba(255,207,92,.02) 45%,rgba(127,179,201,.07)),var(--glass-row);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.12),inset 3px 0 0 var(--gold),0 0 14px -6px rgba(255,207,92,.35);}
+  #mktBanner::after{content:"";position:absolute;left:12px;right:12px;bottom:0;height:3px;
+    background:repeating-linear-gradient(90deg,var(--gold) 0 9px,transparent 9px 18px);opacity:.3;animation:mkticker 14s linear infinite;}
+  @keyframes mkticker{from{background-position:0 0;}to{background-position:180px 0;}}
+  @media (prefers-reduced-motion:reduce){#mktBanner::after{animation:none;}}
+  .mkthot{text-shadow:0 0 10px rgba(255,207,92,.55);}
+  .mktcold{text-shadow:0 0 10px rgba(127,179,201,.5);}
+  .fishrow .hot{display:inline-block;font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:#ffb3c1;
+    background:rgba(255,93,122,.16);border:1px solid rgba(255,93,122,.45);border-radius:5px;padding:2px 6px;margin-left:4px;
+    vertical-align:1px;box-shadow:0 0 10px -3px rgba(255,93,122,.6);white-space:nowrap;}
+  /* 6. HUD: readable area pill + keycap hints */
+  #area{padding:6px 18px 7px;border-radius:12px;background:linear-gradient(180deg,rgba(8,17,21,.62),rgba(8,17,21,.46));
+    backdrop-filter:blur(12px) saturate(1.5);-webkit-backdrop-filter:blur(12px) saturate(1.5);
+    border:1px solid rgba(255,255,255,.12);box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 6px 20px rgba(2,8,10,.32);
+    text-shadow:0 2px 8px rgba(0,0,0,.7);}
+  #area small{margin-top:2px;color:var(--teal);text-shadow:0 0 9px rgba(57,215,196,.65),0 1px 4px rgba(0,0,0,.85);}
+  #hotbar .invkey{background:var(--glass-hud);backdrop-filter:blur(14px) saturate(1.6);-webkit-backdrop-filter:blur(14px) saturate(1.6);
+    border:1px solid var(--glass-bd);color:var(--lab);box-shadow:var(--glass-hi),0 4px 14px rgba(2,8,10,.35);
+    border-radius:9px;padding:5px 9px 5px 6px;letter-spacing:.04em;white-space:nowrap;}
+  #hotbar .invkey b{display:inline-block;font-family:"Chakra Petch";font-weight:700;font-size:10px;line-height:1;
+    color:var(--teal-ink);background:var(--teal);border-radius:4px;padding:3px 6px;margin-right:4px;vertical-align:-2px;box-shadow:0 2px 0 #1c9c8c;}
+  /* 7. toasts pop in on a hard ledge with a neon rim */
+  .toast{font-family:"Chakra Petch";font-weight:700;letter-spacing:.02em;
+    box-shadow:var(--glass-hi),0 3px 0 rgba(4,12,14,.55),0 10px 24px rgba(2,8,10,.45);
+    animation:toast 2.2s cubic-bezier(.22,1,.36,1) forwards;}
+  .toast.good,.toast.gold,.toast.bad{box-shadow:var(--glass-hi),0 3px 0 rgba(4,12,14,.55),0 10px 24px rgba(2,8,10,.45),0 0 18px -4px currentColor;}
+  @keyframes toast{0%{opacity:0;transform:translateY(16px) scale(.85);}9%{opacity:1;transform:translateY(-3px) scale(1.05);}
+    15%{transform:none;}82%{opacity:1;transform:none;}100%{opacity:0;transform:translateY(-12px) scale(.96);}}
+  /* 8. district-tinted slim scrollbars */
+  .card,#casino .card-c,.stake-list{scrollbar-width:thin;scrollbar-color:rgba(var(--district,138,166,162),.35) transparent;}
+  .card::-webkit-scrollbar,#casino .card-c::-webkit-scrollbar,.stake-list::-webkit-scrollbar{width:10px;}
+  .card::-webkit-scrollbar-track,#casino .card-c::-webkit-scrollbar-track,.stake-list::-webkit-scrollbar-track{background:transparent;margin:14px 0;}
+  .card::-webkit-scrollbar-thumb,#casino .card-c::-webkit-scrollbar-thumb,.stake-list::-webkit-scrollbar-thumb{
+    background:rgba(var(--district,138,166,162),.3);border:3px solid transparent;background-clip:padding-box;border-radius:8px;min-height:40px;}
+  .card::-webkit-scrollbar-thumb:hover,#casino .card-c::-webkit-scrollbar-thumb:hover,.stake-list::-webkit-scrollbar-thumb:hover{
+    background:rgba(var(--district,138,166,162),.5);border:3px solid transparent;background-clip:padding-box;}
+  /* 9. harbor: the boat preview sits in lit water */
+  #dockView{background:radial-gradient(85% 95% at 50% 100%,rgba(57,215,196,.13),transparent 70%),var(--glass-row);
+    border:1px solid rgba(57,215,196,.3);box-shadow:inset 0 1px 0 rgba(255,255,255,.09),0 0 24px -8px rgba(57,215,196,.3);}
 </style>
 </head>
 <body>
@@ -471,7 +575,7 @@
   <div class="slot" data-slot="4" title="Ore Pouch (5)"><span class="sk">5</span><span class="sic" data-pix="gem" data-pix-size="26"></span><span class="sb" id="hbPouch">0</span></div>
   <div class="invkey"><b>I</b> inventory</div>
   <div class="invkey" id="capBtn"><b>C</b> captain</div>
-  <div class="invkey" id="autoBtn"><b>F</b> auto-fish</div>
+  <div class="invkey" id="autoBtn"><b>F</b> auto-rig</div>
 </div>
 <div id="derby"></div>
 <div id="chat">
@@ -620,7 +724,7 @@
       <div class="c"><b>E</b> interact</div>
       <div class="c"><b>I</b> bag</div>
       <div class="c"><b>C</b> cam</div>
-      <div class="c"><b>F</b> auto-fish</div>
+      <div class="c"><b>F</b> auto-rig</div>
       <div class="c"><b>scroll</b> zoom</div>
       <div class="c"><b>ESC</b> cancel</div>
     </div>
@@ -634,6 +738,7 @@
 <script src="game.js"></script>
 
 <!-- the mod layer: each file extends the game through window.RF (see mods/_README.md) -->
+<script src="mods/00-notify.js"></script>
 <script src="mods/01-angler.js"></script>
 <script src="mods/02-hud.js"></script>
 <script src="mods/03-panels.js"></script>
@@ -644,5 +749,9 @@
 <script src="mods/08-fortune.js"></script>
 <script src="mods/09-social.js"></script>
 <script src="mods/10-comfort.js"></script>
+<script src="mods/11-touch.js"></script>
+<script src="mods/12-boot.js"></script>
+<script src="mods/13-audio.js"></script>
+<script src="mods/14-npc.js"></script>
 </body>
 </html>

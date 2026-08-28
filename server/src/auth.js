@@ -86,7 +86,7 @@ export function requireAuth(req, res, next) {
   const token = tokenFrom(req);
   const userId = token ? sessions.verify(token) : null;
   if (!userId) {
-    return res.status(401).json({ error: 'not authenticated' });
+    return res.status(401).json({ error: 'not authenticated', code: 'UNAUTHENTICATED' });
   }
   req.userId = userId;
   req.token = token;
@@ -128,7 +128,7 @@ function rateLimit(req, res, next) {
   if (rec.count > RL_MAX) {
     const retryAfter = Math.max(1, Math.ceil((rec.resetAt - now) / 1000));
     res.set('Retry-After', String(retryAfter));
-    return res.status(429).json({ error: 'too many attempts, try again later' });
+    return res.status(429).json({ error: 'too many attempts, try again later', code: 'RATE_LIMIT' });
   }
   next();
 }
@@ -151,15 +151,17 @@ export function mountAuth(app) {
     if (!USERNAME_RE.test(username)) {
       return res.status(400).json({
         error: 'username must be 3-20 characters: letters, numbers, or underscore',
+        code: 'BAD_USERNAME',
       });
     }
     if (password.length < MIN_PASSWORD || password.length > MAX_PASSWORD) {
       return res.status(400).json({
         error: `password must be at least ${MIN_PASSWORD} characters`,
+        code: 'BAD_PASSWORD',
       });
     }
     if (users.findByName(username)) {
-      return res.status(409).json({ error: 'username already taken' });
+      return res.status(409).json({ error: 'username already taken', code: 'USERNAME_TAKEN' });
     }
 
     let id;
@@ -168,7 +170,7 @@ export function mountAuth(app) {
     } catch (err) {
       // Lost a race against a concurrent registration of the same name.
       if (String(err?.code || '').includes('SQLITE_CONSTRAINT')) {
-        return res.status(409).json({ error: 'username already taken' });
+        return res.status(409).json({ error: 'username already taken', code: 'USERNAME_TAKEN' });
       }
       throw err;
     }
@@ -191,7 +193,7 @@ export function mountAuth(app) {
       ? verifyPassword(password, row.pass_hash)
       : (verifyPassword(password, DECOY_HASH), false);
     if (!okPass) {
-      return res.status(401).json({ error: 'invalid username or password' });
+      return res.status(401).json({ error: 'invalid username or password', code: 'BAD_CREDENTIALS' });
     }
 
     const token = sessions.create(row.id);
@@ -206,7 +208,7 @@ export function mountAuth(app) {
 
   app.get('/api/auth/me', requireAuth, (req, res) => {
     const row = users.findById(req.userId);
-    if (!row) return res.status(401).json({ error: 'not authenticated' });
+    if (!row) return res.status(401).json({ error: 'not authenticated', code: 'UNAUTHENTICATED' });
     res.json({ user: publicUser(row) });
   });
 }

@@ -80,6 +80,18 @@ app.use(express.json({ limit: '64kb' }));
 /* ------------------------------------------------------------- helpers ---- */
 const nowMs = () => Date.now();
 
+/* ----------------------------------------------------------------------------
+   Every error answer carries BOTH a human sentence and a stable machine code.
+   The browser shows the sentence; the notification centre keys its explanation,
+   its retry policy and its "sign in again" prompt off the code, because English
+   copy is allowed to change and a client must never have to match on it.
+   -------------------------------------------------------------------------- */
+function httpErr(res, status, code, error, extra) {
+  const body = { error, code };
+  if (extra) Object.assign(body, extra);
+  return res.status(status).json(body);
+}
+
 /* ============================================================================
    SAVE LOADING
    ----------------------------------------------------------------------------
@@ -120,7 +132,7 @@ function resolveSaveRowReader() {
 
   const raw = DB.db || DB.database || (DB.default && DB.default.db);
   if (!raw || typeof raw.prepare !== 'function') {
-    console.error('[saves] no raw db handle — cannot tell a missing save from a corrupt one.');
+    console.error('[saves] no raw db handle · cannot tell a missing save from a corrupt one.');
     return readSaveRow;
   }
 
@@ -180,11 +192,11 @@ function loadState(userId) {
   try {
     parsed = JSON.parse(row.state);
   } catch (e) {
-    console.error('[saves.corrupt] user', userId, '— unparseable save left untouched:', e.message);
+    console.error('[saves.corrupt] user', userId, '· unparseable save left untouched:', e.message);
     throw new SaveUnreadable(userId);
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    console.error('[saves.corrupt] user', userId, '— save row is not a state object, left untouched.');
+    console.error('[saves.corrupt] user', userId, '· save row is not a state object, left untouched.');
     throw new SaveUnreadable(userId);
   }
 
@@ -194,9 +206,8 @@ function loadState(userId) {
 /** 503 for a save we refused to read. Nothing has been written. */
 function refuseUnreadable(res) {
   res.set('Retry-After', '30');
-  return res.status(503).json({
-    error: 'your save could not be read — it has been left untouched, please try again shortly'
-  });
+  return httpErr(res, 503, 'SAVE_UNREADABLE',
+    'your save could not be read · it has been left untouched, please try again shortly');
 }
 
 /**
@@ -314,7 +325,7 @@ app.post('/api/action/:name', requireAuth, (req, res) => {
 
   // hasOwnProperty guard: '/api/action/constructor' must not resolve.
   if (!Object.prototype.hasOwnProperty.call(HANDLERS, name) || typeof HANDLERS[name] !== 'function') {
-    return res.status(404).json({ error: 'unknown action' });
+    return httpErr(res, 404, 'UNKNOWN_ACTION', 'unknown action');
   }
 
   const userId = req.userId;
@@ -328,7 +339,7 @@ app.post('/api/action/:name', requireAuth, (req, res) => {
     const elapsed = t - last;
     if (last > 0 && elapsed < minGap) {
       res.set('Retry-After', String(Math.ceil((minGap - elapsed) / 1000)));
-      return res.status(429).json({ error: 'too fast', retryAfter: minGap - elapsed });
+      return httpErr(res, 429, 'RATE_LIMIT', 'too fast', { retryAfter: minGap - elapsed });
     }
   }
 
@@ -336,7 +347,7 @@ app.post('/api/action/:name', requireAuth, (req, res) => {
   try {
     if (actionLog.countSince(userId, name, t - ANTI_MACRO_WINDOW) > ANTI_MACRO_MAX) {
       res.set('Retry-After', '60');
-      return res.status(429).json({ error: 'too fast', retryAfter: ANTI_MACRO_WINDOW });
+      return httpErr(res, 429, 'RATE_LIMIT', 'too fast', { retryAfter: ANTI_MACRO_WINDOW });
     }
   } catch (e) { console.error('[actions.countSince]', e); }
 
@@ -352,14 +363,14 @@ app.post('/api/action/:name', requireAuth, (req, res) => {
     out = HANDLERS[name](state, req.body && typeof req.body === 'object' ? req.body : {});
   } catch (e) {
     console.error(`[action:${name}]`, e);
-    return res.status(500).json({ error: 'action failed' });
+    return httpErr(res, 500, 'ACTION_FAILED', 'action failed');
   }
 
   if (!out || out.ok !== true) {
     const msg = (out && out.error) ? String(out.error) : 'invalid action';
     // A rejected action still persists any dividends we just credited.
     if (dividends > 0) saves.put(userId, state);
-    return res.status(400).json({ error: msg });
+    return httpErr(res, 400, 'ACTION_REJECTED', msg);
   }
 
   // --- multiplayer events: derby scoring, wanted bounty, spin drama ---------
@@ -585,7 +596,7 @@ app.get('/api/leaderboard', (req, res) => {
     rows = run(LEADERBOARD_LIMIT) || [];
   } catch (e) {
     console.error('[leaderboard]', e);
-    return res.status(500).json({ error: 'leaderboard unavailable' });
+    return httpErr(res, 500, 'LEADERBOARD_UNAVAILABLE', 'leaderboard unavailable');
   }
 
   const entries = rows
@@ -629,7 +640,7 @@ const CLAIM_ACTION = 'ledger_claim';
 let LEDGER_SECRET = process.env.LEDGER_SECRET || '';
 if (!LEDGER_SECRET) {
   if (IS_PROD) {
-    console.error('[ledger] LEDGER_SECRET is not set — /api/ledger/claim will refuse to sign.');
+    console.error('[ledger] LEDGER_SECRET is not set · /api/ledger/claim will refuse to sign.');
   } else {
     LEDGER_SECRET = crypto.randomBytes(32).toString('hex');
     console.warn('[ledger] LEDGER_SECRET missing; using an ephemeral dev secret. ' +
@@ -640,7 +651,7 @@ if (!LEDGER_SECRET) {
 /** The exact bytes a real signer would sign, EIP-191 framed. */
 function claimPayload(address, deedId, userId, blockNo) {
   const body =
-    `Reel Fortune 3D — Isle Ledger claim\n` +
+    `Reel Fortune 3D · Isle Ledger claim\n` +
     `deed: ${deedId}\n` +
     `block: ${blockNo}\n` +
     `player: ${userId}\n` +
@@ -668,15 +679,15 @@ app.get('/api/ledger', requireAuth, (req, res) => {
 
 app.post('/api/ledger/claim', requireAuth, (req, res) => {
   if (!LEDGER_SECRET) {
-    return res.status(503).json({ error: 'ledger signing is not configured' });
+    return httpErr(res, 503, 'LEDGER_DISABLED', 'ledger signing is not configured');
   }
 
   const body = (req.body && typeof req.body === 'object') ? req.body : {};
   const deedId = String(body.deedId || '');
   const rawAddr = String(body.address || '').trim();
 
-  if (!DEED_ID_RE.test(deedId)) return res.status(400).json({ error: 'invalid deedId' });
-  if (!ADDR_RE.test(rawAddr)) return res.status(400).json({ error: 'invalid address' });
+  if (!DEED_ID_RE.test(deedId)) return httpErr(res, 400, 'BAD_DEED_ID', 'invalid deedId');
+  if (!ADDR_RE.test(rawAddr)) return httpErr(res, 400, 'BAD_ADDRESS', 'invalid address');
   const address = rawAddr.toLowerCase();
 
   const userId = req.userId;
@@ -687,11 +698,11 @@ app.post('/api/ledger/claim', requireAuth, (req, res) => {
     const last = actionLog.last(userId, CLAIM_ACTION) || 0;
     if (last > 0 && t - last < CLAIM_RATE) {
       res.set('Retry-After', '3');
-      return res.status(429).json({ error: 'too fast', retryAfter: CLAIM_RATE - (t - last) });
+      return httpErr(res, 429, 'RATE_LIMIT', 'too fast', { retryAfter: CLAIM_RATE - (t - last) });
     }
     if (actionLog.countSince(userId, CLAIM_ACTION, t - ANTI_MACRO_WINDOW) > CLAIM_MAX_PER_MIN) {
       res.set('Retry-After', '60');
-      return res.status(429).json({ error: 'too fast', retryAfter: ANTI_MACRO_WINDOW });
+      return httpErr(res, 429, 'RATE_LIMIT', 'too fast', { retryAfter: ANTI_MACRO_WINDOW });
     }
   } catch (e) { console.error('[ledger.rate]', e); }
 
@@ -702,7 +713,7 @@ app.post('/api/ledger/claim', requireAuth, (req, res) => {
 
   let owned = false;
   try { owned = !!deedsRepo.has(userId, deedId); } catch (e) { console.error('[deeds.has]', e); }
-  if (!owned) return res.status(400).json({ error: 'deed not minted for this player' });
+  if (!owned) return httpErr(res, 400, 'DEED_NOT_MINTED', 'deed not minted for this player');
 
   const blockNo = Number(state.deeds && state.deeds[deedId]) || 0;
   const payload = claimPayload(address, deedId, userId, blockNo);
@@ -712,7 +723,7 @@ app.post('/api/ledger/claim', requireAuth, (req, res) => {
     deedsRepo.setClaim(userId, deedId, address, signature);
   } catch (e) {
     console.error('[deeds.setClaim]', e);
-    return res.status(500).json({ error: 'could not record claim' });
+    return httpErr(res, 500, 'CLAIM_FAILED', 'could not record claim');
   }
   try { actionLog.mark(userId, CLAIM_ACTION); } catch (e) { console.error('[actions.mark]', e); }
 
@@ -762,7 +773,7 @@ function crewRateLimited(userId, res) {
   const gap = nowMs() - last;
   if (last > 0 && gap < CREW_RATE) {
     res.set('Retry-After', '1');
-    res.status(429).json({ error: 'too fast', retryAfter: CREW_RATE - gap });
+    httpErr(res, 429, 'RATE_LIMIT', 'too fast', { retryAfter: CREW_RATE - gap });
     return true;
   }
   return false;
@@ -828,7 +839,7 @@ app.get('/api/crew', requireAuth, (req, res) => {
 app.get('/api/crew/captains', requireAuth, (req, res) => {
   let rows = [];
   try { rows = saves.captains(CREW_LIST_LIMIT * 2, 1) || []; }
-  catch (e) { console.error('[crew.captains]', e); return res.status(500).json({ error: 'unavailable' }); }
+  catch (e) { console.error('[crew.captains]', e); return httpErr(res, 500, 'UNAVAILABLE', 'unavailable'); }
 
   const mine = new Set(crews.requestsBy(req.userId).map(r => r.ownerId));
   const berth = crews.berthOf(req.userId);
@@ -859,28 +870,28 @@ app.post('/api/crew/request', requireAuth, (req, res) => {
   if (crewRateLimited(req.userId, res)) return;
 
   const target = lookupUser(req.body, 'captain');
-  if (!target) return res.status(404).json({ error: 'no such captain' });
-  if (target.id === req.userId) return res.status(400).json({ error: 'that is your own boat' });
+  if (!target) return httpErr(res, 404, 'NO_SUCH_CAPTAIN', 'no such captain');
+  if (target.id === req.userId) return httpErr(res, 400, 'OWN_BOAT', 'that is your own boat');
 
   if (crews.berthOf(req.userId)) {
-    return res.status(409).json({ error: 'you are already aboard a boat — leave it first' });
+    return httpErr(res, 409, 'ALREADY_ABOARD', 'you are already aboard a boat · leave it first');
   }
   if (crews.count(req.userId) > 0) {
-    return res.status(409).json({ error: 'send your own crew ashore before boarding another boat' });
+    return httpErr(res, 409, 'HOSTING_CREW', 'send your own crew ashore before boarding another boat');
   }
   if (crews.berthOf(target.id)) {
-    return res.status(409).json({ error: 'that captain is sailing as a guest right now' });
+    return httpErr(res, 409, 'CAPTAIN_IS_GUEST', 'that captain is sailing as a guest right now');
   }
 
   const slots = crewSlots(saves.boatLvl(target.id));
-  if (slots <= 0) return res.status(409).json({ error: 'that hull has no room for crew' });
-  if (crews.count(target.id) >= slots) return res.status(409).json({ error: 'that crew is full' });
+  if (slots <= 0) return httpErr(res, 409, 'HULL_HAS_NO_BERTHS', 'that hull has no room for crew');
+  if (crews.count(target.id) >= slots) return httpErr(res, 409, 'CREW_FULL', 'that crew is full');
 
   if (crews.hasRequest(target.id, req.userId)) {
-    return res.status(409).json({ error: 'already waiting on that captain' });
+    return httpErr(res, 409, 'ALREADY_WAITING', 'already waiting on that captain');
   }
   if (crews.requestsBy(req.userId).length >= CREW_MAX_OUTGOING) {
-    return res.status(429).json({ error: `you may only await ${CREW_MAX_OUTGOING} captains at once` });
+    return httpErr(res, 429, 'TOO_MANY_REQUESTS_OUT', `you may only await ${CREW_MAX_OUTGOING} captains at once`);
   }
 
   crews.addRequest(target.id, req.userId);
@@ -893,7 +904,7 @@ app.post('/api/crew/request', requireAuth, (req, res) => {
 app.post('/api/crew/cancel', requireAuth, (req, res) => {
   if (crewRateLimited(req.userId, res)) return;
   const target = lookupUser(req.body, 'captain');
-  if (!target) return res.status(404).json({ error: 'no such captain' });
+  if (!target) return httpErr(res, 404, 'NO_SUCH_CAPTAIN', 'no such captain');
 
   crews.dropRequest(target.id, req.userId);
   markCrew(req.userId);
@@ -906,26 +917,26 @@ app.post('/api/crew/admit', requireAuth, (req, res) => {
   if (crewRateLimited(req.userId, res)) return;
 
   const target = lookupUser(req.body, 'user');
-  if (!target) return res.status(404).json({ error: 'no such sailor' });
-  if (target.id === req.userId) return res.status(400).json({ error: 'you already crew your own boat' });
+  if (!target) return httpErr(res, 404, 'NO_SUCH_SAILOR', 'no such sailor');
+  if (target.id === req.userId) return httpErr(res, 400, 'OWN_BOAT', 'you already crew your own boat');
   if (crews.berthOf(req.userId)) {
-    return res.status(409).json({ error: 'you are a guest aboard another boat — step ashore to captain your own' });
+    return httpErr(res, 409, 'GUEST_ELSEWHERE', 'you are a guest aboard another boat · step ashore to captain your own');
   }
 
   const seats = boatSeats(saves.boatLvl(req.userId));
   let outcome;
   try { outcome = crews.admit(req.userId, target.id, seats); }
-  catch (e) { console.error('[crew.admit]', e); return res.status(500).json({ error: 'could not admit' }); }
+  catch (e) { console.error('[crew.admit]', e); return httpErr(res, 500, 'ADMIT_FAILED', 'could not admit'); }
 
   const MSG = {
     'no-request': [404, 'that sailor is not waiting to board'],
     'aboard':     [409, 'that sailor already boarded another boat'],
     'captain':    [409, 'that sailor has their own crew aboard'],
-    'full':       [409, 'your boat is full — a bigger hull seats more']
+    'full':       [409, 'your boat is full · a bigger hull seats more']
   };
   if (outcome !== 'ok') {
     const [code, error] = MSG[outcome] || [400, 'could not admit'];
-    return res.status(code).json({ error });
+    return httpErr(res, code, 'CREW_REJECTED', error);
   }
 
   markCrew(req.userId);
@@ -937,10 +948,10 @@ app.post('/api/crew/admit', requireAuth, (req, res) => {
 app.post('/api/crew/deny', requireAuth, (req, res) => {
   if (crewRateLimited(req.userId, res)) return;
   const target = lookupUser(req.body, 'user');
-  if (!target) return res.status(404).json({ error: 'no such sailor' });
+  if (!target) return httpErr(res, 404, 'NO_SUCH_SAILOR', 'no such sailor');
 
   if (!crews.dropRequest(req.userId, target.id)) {
-    return res.status(404).json({ error: 'that sailor is not waiting to board' });
+    return httpErr(res, 404, 'NOT_WAITING', 'that sailor is not waiting to board');
   }
   markCrew(req.userId);
   const me = DB.users.findById(req.userId);
@@ -951,10 +962,10 @@ app.post('/api/crew/deny', requireAuth, (req, res) => {
 app.post('/api/crew/kick', requireAuth, (req, res) => {
   if (crewRateLimited(req.userId, res)) return;
   const target = lookupUser(req.body, 'user');
-  if (!target) return res.status(404).json({ error: 'no such sailor' });
+  if (!target) return httpErr(res, 404, 'NO_SUCH_SAILOR', 'no such sailor');
 
   if (!crews.removeMember(req.userId, target.id)) {
-    return res.status(404).json({ error: 'that sailor is not on your boat' });
+    return httpErr(res, 404, 'NOT_ABOARD', 'that sailor is not on your boat');
   }
   markCrew(req.userId);
   const me = DB.users.findById(req.userId);
@@ -1027,14 +1038,14 @@ app.post('/api/report', requireAuth, (req, res) => {
   const body = (req.body && typeof req.body === 'object') ? req.body : {};
   const target = cleanReportField(body.target, REPORT_TARGET_MAX);
   const reason = cleanReportField(body.reason, REPORT_REASON_MAX);
-  if (!target) return res.status(400).json({ error: 'missing target' });
+  if (!target) return httpErr(res, 400, 'MISSING_TARGET', 'missing target');
 
   const t = nowMs();
   try {
     const last = actionLog.last(req.userId, REPORT_ACTION) || 0;
     if (last > 0 && t - last < REPORT_RATE) {
       res.set('Retry-After', String(Math.ceil((REPORT_RATE - (t - last)) / 1000)));
-      return res.status(429).json({ error: 'too fast', retryAfter: REPORT_RATE - (t - last) });
+      return httpErr(res, 429, 'RATE_LIMIT', 'too fast', { retryAfter: REPORT_RATE - (t - last) });
     }
   } catch (e) { console.error('[report.rate]', e); }
 
@@ -1042,7 +1053,7 @@ app.post('/api/report', requireAuth, (req, res) => {
     DB.reports.add(req.userId, target, reason, '');
   } catch (e) {
     console.error('[report.add]', e);
-    return res.status(500).json({ error: 'could not record report' });
+    return httpErr(res, 500, 'REPORT_FAILED', 'could not record report');
   }
   try { actionLog.mark(req.userId, REPORT_ACTION); } catch (e) { console.error('[actions.mark]', e); }
 
@@ -1053,6 +1064,22 @@ app.post('/api/report', requireAuth, (req, res) => {
 // Head-count per isle, straight out of the realtime layer. Deliberately
 // unauthenticated: the shell shows how busy each world is before you sign in,
 // and it leaks nothing but numbers.
+/* The cheapest endpoint we have, and the only one whose whole job is to answer
+   "are you there, and how fast". The client's connection doctor times this
+   rather than /api/leaderboard, which touches the database on every call. */
+const BOOTED_AT = Date.now();
+app.get('/api/health', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    ok: true,
+    service: 'reelfortune',
+    now: Date.now(),
+    uptimeMs: Date.now() - BOOTED_AT,
+    epoch: mktEpochNow(),
+    online: onlineTotal()
+  });
+});
+
 app.get('/api/online', (req, res) => {
   res.json({
     total: onlineTotal(),
@@ -1074,7 +1101,7 @@ app.get('/api/health', (req, res) => {
 /* ---- unknown /api/* never falls through to the static file server -------- */
 app.use((req, res, next) => {
   if (req.path === '/api' || req.path.startsWith('/api/')) {
-    return res.status(404).json({ error: 'not found' });
+    return httpErr(res, 404, 'NOT_FOUND', 'not found');
   }
   next();
 });
@@ -1087,7 +1114,7 @@ app.use((req, res, next) => {
 const BLOCKED_PATH = /^\/(?:server|node_modules|\.git|\.env|contracts)(?:\/|$)/i;
 
 app.use((req, res, next) => {
-  if (BLOCKED_PATH.test(req.path)) return res.status(403).json({ error: 'forbidden' });
+  if (BLOCKED_PATH.test(req.path)) return httpErr(res, 403, 'FORBIDDEN', 'forbidden');
   next();
 });
 
@@ -1105,7 +1132,7 @@ app.use(express.static(GAME_DIR, {
 
 /* ------------------------------------------------------------ 404 / 500 --- */
 app.use((req, res) => {
-  res.status(404).json({ error: 'not found' });
+  httpErr(res, 404, 'NOT_FOUND', 'not found');
 });
 
 // eslint-disable-next-line no-unused-vars
@@ -1115,16 +1142,14 @@ app.use((err, req, res, next) => {
   if (err instanceof SaveUnreadable) return refuseUnreadable(res);
   // Body parser failures arrive here as well.
   if (err && err.type === 'entity.too.large') {
-    return res.status(413).json({ error: 'payload too large' });
+    return httpErr(res, 413, 'PAYLOAD_TOO_LARGE', 'payload too large');
   }
   if (err && (err.type === 'entity.parse.failed' || err instanceof SyntaxError)) {
-    return res.status(400).json({ error: 'malformed json' });
+    return httpErr(res, 400, 'MALFORMED_JSON', 'malformed json');
   }
   console.error('[unhandled]', err);
-  res.status(500).json({
-    error: 'internal error',
-    ...(IS_PROD ? null : { detail: String((err && err.message) || err) })
-  });
+  httpErr(res, 500, 'INTERNAL', 'internal error',
+    IS_PROD ? null : { detail: String((err && err.message) || err) });
 });
 
 /* --------------------------------------------------------------- listen --- */
@@ -1142,7 +1167,7 @@ attach(server);
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
-    console.log(`\n${sig} — closing.`);
+    console.log(`\n${sig} · closing.`);
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 5000).unref();
   });

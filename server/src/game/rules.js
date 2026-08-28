@@ -281,8 +281,39 @@ export const AUTO = {
   pearls: 0.5,
   gapMs: 4500
 };
-/** The auto-rig's rarity multiplier for a species (1 for anything unknown). */
-export const autoWeight = (rar) => (has(AUTO.W, rar) ? AUTO.W[rar] : 1);
+/**
+ * The rig's rarity multiplier for a species. `q` is the rig's quality, from
+ * RIGS below: it lifts everything ABOVE common, and never commons themselves,
+ * so a better rig thins the sardines out rather than raising the whole table.
+ * Even the top rig lands well short of a held rod — that is the point of it.
+ */
+export const autoWeight = (rar, q = 1) => {
+  const w = has(AUTO.W, rar) ? AUTO.W[rar] : 1;
+  return rar === 'common' ? w : w * (q > 0 ? q : 1);
+};
+
+/* ---- THE RIG LADDER -----------------------------------------------------
+   Bought with PEARLS at the Pearl Kiosk, so the rig is paid for with activity
+   rather than with coins — you cannot buy your way straight to an AFK income.
+
+     gapMs  the floor between two catches, enforced here on every request
+     q      quality, fed to autoWeight() above
+     bite   how long the rig waits for a bite, as a multiple of the rod's own
+            bite timer (client-side pacing only; the server does not time it)
+
+   Mk I is free and every save starts with it: the whole feature has to be
+   reachable by someone who just walked off the boat, or it is not the "more
+   people can play" button it was asked to be.
+   ------------------------------------------------------------------------ */
+export const RIGS = [
+  null,
+  { name: 'Driftwood Rig', sub: 'two sticks and a lot of patience', cost: 0,    gapMs: 4500, q: 1,   bite: 1    },
+  { name: 'Braced Rig',    sub: 'a hull cleat and a brass bell',    cost: 700,  gapMs: 3800, q: 1.7, bite: 0.78 },
+  { name: 'Tidewatch Rig', sub: 'it reads the water for you',       cost: 2000, gapMs: 3100, q: 2.6, bite: 0.6  }
+];
+export const MAX_RIG = RIGS.length - 1;
+/** The rig record for a level — always a real rig, never null. */
+export const rigOf = (lvl) => RIGS[clamp((lvl | 0) || 1, 1, MAX_RIG)];
 
 /** Coin cost to go from `lvl` -> `lvl+1`. */
 export const upCost = (base, lvl) => Math.round(base * Math.pow(1.75, lvl - 1));
@@ -349,8 +380,9 @@ export function newState() {
     bait: {}, baitId: '',
     boosts: { chumUntil: 0 },
     /* wall-clock ms of the last auto-rig catch — the server's own pacing floor
-       for the lazy line, so it cannot be run faster than AUTO.gapMs */
+       for the lazy line, so it cannot be run faster than the rig's gapMs */
     autoAt: 0,
+    rigLvl: 1,          // everybody owns Mk I; the Kiosk sells the two above it
     tipEpoch: 0,
     deeds: {},
     stats: { caught: 0, mined: 0, earned: 0, bestWin: 0, spins: 0, winsCt: 0, losses: 0, divEarned: 0 }
@@ -485,6 +517,7 @@ export function normalizeState(raw) {
   st.baitId = typeof s.baitId === 'string' && st.bait[s.baitId] > 0 ? s.baitId : '';
   st.tipEpoch = Math.max(0, num(s.tipEpoch, 0));
   st.autoAt = Math.max(0, num(s.autoAt, 0));
+  st.rigLvl = clamp(int0(s.rigLvl) || 1, 1, MAX_RIG);
   const boosts = obj(s.boosts);
   if (boosts) st.boosts.chumUntil = Math.max(0, num(boosts.chumUntil, 0));
   st.rodLvl = clamp(int0(s.rodLvl) || 1, 1, MAXLVL);
@@ -549,18 +582,18 @@ function makeFish(t, mul, auto = false) {
 }
 
 /**
- * One weighted draw from a world's pool — the client's rollOnce().
+ * One weighted draw from a world's pool · the client's rollOnce().
  * `luck` re-weights the table by rarity, `minRar` floors it, and `auto` folds
  * the lazy line's rarity multipliers in on top of both.
  * Returns null only if the pool is somehow empty (never, for shipped tables).
  */
 export function rollOnce(opts = {}) {
-  const { world = 'isle', fishMul, luck = 0, minRar = null, auto = false } = opts;
+  const { world = 'isle', fishMul, luck = 0, minRar = null, auto = false, rigQ = 1 } = opts;
   const mul = Number.isFinite(+fishMul) ? +fishMul : (WORLDS[world]?.fishMul || 1);
   const pool = fishPool(world, opts, minRar);
   if (!pool.length) return null;
 
-  const wt = pool.map((e) => e[1] * luckWeight(e[0].rar, luck) * (auto ? autoWeight(e[0].rar) : 1));
+  const wt = pool.map((e) => e[1] * luckWeight(e[0].rar, luck) * (auto ? autoWeight(e[0].rar, rigQ) : 1));
   let tot = 0;
   for (const x of wt) tot += x;
   let r = Math.random() * tot;
@@ -583,12 +616,13 @@ export function rollOnce(opts = {}) {
  */
 export function rollFish({ rodLvl = 1, bait = null, boatLvl = 0, fishMul,
                            night = false, wet = false, storm = false, world = 'isle',
-                           auto = false } = {}) {
+                           auto = false, rigLvl = 1 } = {}) {
   /* an unattended hook carries no bait, so neither its luck nor its rarity
      floor apply — Siren's Chum cannot be left fishing for legendaries */
   const b = auto ? null : baitOf(bait);
   const opts = {
     world, fishMul, night, wet, storm, auto,
+    rigQ: auto ? rigOf(rigLvl).q : 1,
     luck: auto ? rodLuck(rodLvl) * AUTO.luck : fishLuck({ rodLvl, bait }),
     minRar: b ? b.min : null
   };

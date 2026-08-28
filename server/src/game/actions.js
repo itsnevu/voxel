@@ -49,7 +49,7 @@ import {
   BAITS, BAIT_ORDER, BAIT_MAX, baitOf,
   BOATS, BOAT_REQ, MAX_BOAT, haveOres,
   upCost, axeCost,
-  cap, rollFish, pearlsForFish, dexNameOf, AUTO,
+  cap, rollFish, pearlsForFish, dexNameOf, AUTO, RIGS, MAX_RIG, rigOf,
   rollOreType, oreTypeFor,
   rand, clamp
 } from './rules.js';
@@ -336,7 +336,8 @@ function rollFor(state, body, { useBait: withBait = true, auto = false } = {}) {
     night: !!body.night,
     wet,
     storm,
-    auto
+    auto,
+    rigLvl: state.rigLvl
   });
 }
 
@@ -408,7 +409,7 @@ export const HANDLERS = {
   catch: handler((state, body) => {
     const limit = cap(state);
     if (state.bucket.length >= limit) {
-      return err(`Bucket is full (${limit}) — sell your catch at the Trader first`);
+      return err(`Bucket is full (${limit}) · sell your catch at the Trader first`);
     }
 
     /* `auto` is the one fact in `body` a client may assert about itself, and
@@ -419,10 +420,11 @@ export const HANDLERS = {
     const auto = !!body.auto;
     const now = Date.now();
     if (auto) {
+      const gap = rigOf(state.rigLvl).gapMs;
       const last = num(state.autoAt, 0);
       if (last > now) state.autoAt = 0;            // clock skew / hand-edited save
-      else if (last > 0 && now - last < AUTO.gapMs) {
-        return err('The auto-rig is still resetting the line…');
+      else if (last > 0 && now - last < gap) {
+        return err('The rig is still resetting the line…');
       }
     }
 
@@ -469,7 +471,7 @@ export const HANDLERS = {
     if (rawId !== undefined && rawId !== null && !hasId) return err('No such ore node');
     const type = hasId ? oreTypeFor(state.world, idNum) : rollOreType();
     if (!MINE_TYPES.includes(type)) {
-      return err(`Unknown ore node — expected one of ${MINE_TYPES.join(', ')}`);
+      return err(`Unknown ore node · expected one of ${MINE_TYPES.join(', ')}`);
     }
     /* shared world: a vein someone already stripped stays stripped for everyone */
     if (hasId && sharedNodes.isDown(state.world, 'node', idNum)) {
@@ -653,7 +655,7 @@ export const HANDLERS = {
         return false;
       });
       if (!sold) {
-        return err(kept ? 'Only ★ starred fish left — sell them one by one' : 'Bucket empty');
+        return err(kept ? 'Only ★ starred fish left · sell them one by one' : 'Bucket empty');
       }
       state.coins += coins;
       state.stats.earned += coins;
@@ -661,7 +663,7 @@ export const HANDLERS = {
         message: `+${coins} coins` + (kept ? ` (kept ${kept} ★)` : '') });
     }
 
-    return err("Unknown sell kind — expected 'fish', 'ore' or 'allfish'");
+    return err("Unknown sell kind · expected 'fish', 'ore' or 'allfish'");
   }),
 
   /* --------------------------------------------------------------------------
@@ -670,7 +672,7 @@ export const HANDLERS = {
      -------------------------------------------------------------------------- */
   craft: handler((state, body) => {
     const tool = String(body.tool || '');
-    if (!has(CRAFT_SPEC, tool)) return err("Unknown tool — expected 'rod', 'pick' or 'axe'");
+    if (!has(CRAFT_SPEC, tool)) return err("Unknown tool · expected 'rod', 'pick' or 'axe'");
     const spec = CRAFT_SPEC[tool];
 
     const lvl = state[spec.key];
@@ -679,11 +681,11 @@ export const HANDLERS = {
     const cost = tool === 'axe' ? axeCost(lvl) : upCost(spec.base, lvl);
     const req = spec.reqs[lvl + 1] || {};
 
-    if (state.coins < cost) return err(`Not enough coins — that costs ${cost}`);
+    if (state.coins < cost) return err(`Not enough coins · that costs ${cost}`);
     for (const k in req) {
       if ((state.ores[k] | 0) < req[k]) {
         const name = ORE_INFO[k] ? ORE_INFO[k].name : k;
-        return err(`Not enough ${name} — you need ${req[k]}`);
+        return err(`Not enough ${name} · you need ${req[k]}`);
       }
     }
 
@@ -704,13 +706,13 @@ export const HANDLERS = {
      -------------------------------------------------------------------------- */
   boat: handler((state) => {
     const level = state.boatLvl + 1;
-    if (level > MAX_BOAT) return err('Your fleet is complete — there is nothing bigger to build');
+    if (level > MAX_BOAT) return err('Your fleet is complete · there is nothing bigger to build');
     const b = BOATS[level];
 
-    if (state.coins < b.cost) return err(`Not enough coins — the ${b.name} costs ${b.cost}`);
+    if (state.coins < b.cost) return err(`Not enough coins · the ${b.name} costs ${b.cost}`);
     if (!haveOres(state.ores, b.req)) {
       const k = shortOre(state.ores, b.req);
-      return err(`Not enough ${oreName(k)} — the ${b.name} needs ${b.req[k]}`);
+      return err(`Not enough ${oreName(k)} · the ${b.name} needs ${b.req[k]}`);
     }
 
     state.coins -= b.cost;
@@ -728,16 +730,16 @@ export const HANDLERS = {
   stock: handler((state, body) => {
     const op = String(body.op || '');
     const k = String(body.ticker || '');
-    if (!STOCK_KEYS.includes(k)) return err(`Unknown ticker — expected one of ${STOCK_KEYS.join(', ')}`);
+    if (!STOCK_KEYS.includes(k)) return err(`Unknown ticker · expected one of ${STOCK_KEYS.join(', ')}`);
 
     const e = mktEpochNow();
     const sk = state.stocks;
     const own = sk.own[k] | 0;
 
     if (op === 'buy') {
-      if (own >= STOCK_CAP) return err(`Position capped — you already hold ${STOCK_CAP} ${k}`);
+      if (own >= STOCK_CAP) return err(`Position capped · you already hold ${STOCK_CAP} ${k}`);
       const ask = stockAsk(k, e);
-      if (state.coins < ask) return err(`Not enough coins — ${k} is asking ${ask}`);
+      if (state.coins < ask) return err(`Not enough coins · ${k} is asking ${ask}`);
 
       state.coins -= ask;
       /* basis tracks the mid price, not the ask: the spread is the fee you paid */
@@ -763,7 +765,7 @@ export const HANDLERS = {
         gained: bid, message: `Sold 1 ${k} for ◈${bid}` });
     }
 
-    return err("Unknown stock op — expected 'buy' or 'sell'");
+    return err("Unknown stock op · expected 'buy' or 'sell'");
   }),
 
   /* --------------------------------------------------------------------------
@@ -805,7 +807,7 @@ export const HANDLERS = {
     if (fit < 1) return err(`You cannot carry any more ${b.name}`);
 
     const cost = b.cost * fit;
-    if (state.coins < cost) return err(`Not enough coins — that costs ${cost}, you have ${state.coins}`);
+    if (state.coins < cost) return err(`Not enough coins · that costs ${cost}, you have ${state.coins}`);
 
     state.coins -= cost;
     state.bait[id] = have + b.pack * fit;
@@ -823,7 +825,7 @@ export const HANDLERS = {
     if (item === 'wcolor') {
       if (!state.ownedW.wardrobe) return err('Buy the Hero Wardrobe first');
       const slot = String(body.slot || '');
-      if (!W_SLOTS.includes(slot)) return err(`Unknown slot — expected one of ${W_SLOTS.join(', ')}`);
+      if (!W_SLOTS.includes(slot)) return err(`Unknown slot · expected one of ${W_SLOTS.join(', ')}`);
       const color = intOrNull(body.color);
       if (color === null || color < 0 || color >= W_COLORS) return err('Unknown wardrobe color');
       state.wardrobe[slot] = color;
@@ -836,14 +838,14 @@ export const HANDLERS = {
       state.pearls -= cost;
       return true;
     };
-    const short = (cost) => err(`Not enough pearls — that costs ${cost}, you have ${state.pearls}`);
+    const short = (cost) => err(`Not enough pearls · that costs ${cost}, you have ${state.pearls}`);
 
     if (item === 'wardrobe') {
       if (state.ownedW.wardrobe) return err('You already own the Hero Wardrobe');
       if (!spend(WARDROBE_COST)) return short(WARDROBE_COST);
       state.ownedW.wardrobe = 1;
       return ok({ item, cost: WARDROBE_COST, pearls: state.pearls,
-        message: 'Wardrobe unlocked — pick your colors!' });
+        message: 'Wardrobe unlocked · pick your colors!' });
     }
 
     if (item === 'chum') {
@@ -851,7 +853,7 @@ export const HANDLERS = {
       if (!spend(CHUM_COST)) return short(CHUM_COST);
       state.boosts.chumUntil = Date.now() + CHUM_MS;
       return ok({ item, cost: CHUM_COST, chumUntil: state.boosts.chumUntil, pearls: state.pearls,
-        message: 'Chum in the water — bites 2× faster for 10 min' });
+        message: 'Chum in the water · bites 2× faster for 10 min' });
     }
 
     if (item === 'bucket') {
@@ -861,6 +863,17 @@ export const HANDLERS = {
       state.bucketTier++;
       return ok({ item, cost, bucketTier: state.bucketTier, cap: cap(state), pearls: state.pearls,
         message: `Deep Bucket! Capacity is now ${cap(state)}` });
+    }
+
+    if (item === 'rig') {
+      if (state.rigLvl >= MAX_RIG) return err('The Tidewatch Rig is the last one there is');
+      const next = state.rigLvl + 1;
+      const cost = RIGS[next].cost;
+      if (!spend(cost)) return short(cost);
+      state.rigLvl = next;
+      const r = rigOf(next);
+      return ok({ item, cost, rigLvl: next, pearls: state.pearls,
+        message: `${r.name} · the rig works a line every ${(r.gapMs / 1000).toFixed(1)}s now` });
     }
 
     if (item === 'tip') {
@@ -889,7 +902,7 @@ export const HANDLERS = {
       if (!spend(CHARM_COST)) return short(CHARM_COST);
       state.charm = 1;
       return ok({ item, cost: CHARM_COST, charm: 1, pearls: state.pearls,
-        message: '🍀 Lucky Charm — the wheel likes you now' });
+        message: '🍀 Lucky Charm · the wheel likes you now' });
     }
 
     if (has(KIOSK_TITLES, item)) {
@@ -924,13 +937,13 @@ export const HANDLERS = {
      -------------------------------------------------------------------------- */
   spin: handler((state, body) => {
     const bet = String(body.bet || '');
-    if (!BET_KINDS.has(bet)) return err("Pick a bet — red, black, green, odd, even or high");
+    if (!BET_KINDS.has(bet)) return err("Pick a bet · red, black, green, odd, even or high");
 
     const idxRaw = intOrNull(body.stakeIdx);
     const coinRaw = intOrNull(body.coinStake);
     const wantsFish = idxRaw !== null && idxRaw >= 0;
     const wantsCoins = coinRaw !== null && coinRaw > 0;
-    if (wantsFish && wantsCoins) return err('Stake a fish or coins — not both');
+    if (wantsFish && wantsCoins) return err('Stake a fish or coins · not both');
 
     let fish = null, fishIdx = -1, stake = 0;
 
@@ -945,7 +958,7 @@ export const HANDLERS = {
          enforce it here too, or the gear requirement is pure decoration */
       const stakeCap = [250, 1000, 5000, 25000, 100000][clamp(Math.floor((state.rodLvl - 1) / 2), 0, 4)];
       if (coinRaw > stakeCap) {
-        return err(`Your rod only covers a ${stakeCap} chip — upgrade it to bet bigger`);
+        return err(`Your rod only covers a ${stakeCap} chip · upgrade it to bet bigger`);
       }
       if (!COIN_STAKES.includes(coinRaw)) {
         return err(`Coin stake must be one of ${COIN_STAKES.join(', ')}`);
@@ -954,7 +967,7 @@ export const HANDLERS = {
       if (state.coins < stake) return err('Not enough coins for that stake');
       state.coins -= stake;                    // committed the moment the ball rolls
     } else {
-      return err('Nothing staked — bet a fish or coins');
+      return err('Nothing staked · bet a fish or coins');
     }
 
     let winIdx = randomInt(0, NSEG);
@@ -1026,7 +1039,7 @@ export const HANDLERS = {
        and must be buyable/travellable, or the client's reload lands somewhere the
        server disagrees with and bounces the player straight back out. */
     if (!WORLD_ORDER.includes(k) && !(k === 'cave' && has(WORLDS, k))) {
-      return err(`Unknown island — expected one of ${WORLD_ORDER.join(', ')}`);
+      return err(`Unknown island · expected one of ${WORLD_ORDER.join(', ')}`);
     }
     const w = WORLDS[k];
 
@@ -1036,11 +1049,11 @@ export const HANDLERS = {
          agree on which voyages are legal. The shaft needs no boat. */
       const need = k === 'cave' ? 0 : (has(BOAT_REQ, k) ? BOAT_REQ[k] | 0 : 0);
       if (state.boatLvl < need) {
-        return err(`Your ${BOATS[state.boatLvl].name} can't make that voyage — `
+        return err(`Your ${BOATS[state.boatLvl].name} can't make that voyage · `
           + `build a ${BOATS[need].name} at the Harbor dock`);
       }
       const cost = int0(w.cost);
-      if (state.coins < cost) return err(`Not enough coins — ${w.name} costs ${cost}`);
+      if (state.coins < cost) return err(`Not enough coins · ${w.name} costs ${cost}`);
       state.coins -= cost;
       state.worlds.push(k);
       /* unlocking is not sailing: the player still has to press SAIL */

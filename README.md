@@ -21,6 +21,7 @@ python3 -m http.server 8000
 | **W A S D** / arrows | walk |
 | **E** | cast · hook a bite · interact (Trader / Casino / dig) |
 | **hold E** | reel in · mine ore · chop trees · dig treasure |
+| **F** | plant / pack up your **auto-rig** at the shore |
 | **I** / Tab | inventory (Bag · Fishdex · Stats) |
 | **scroll** | zoom |
 | **ESC** | close / cancel |
@@ -28,13 +29,14 @@ python3 -m http.server 8000
 ## 🔁 The loop
 
 1. **Fish** any shore — some species only bite at night 🌙, in rain 🌧 or storms ⛈; 1.8% are ✦ shiny (×5 value). Every catch logs weight records in the **Fishdex**.
-2. **Mine** the quarry (coal→diamond) and **chop** trees for wood — ore nodes sometimes drop **share certificates**.
-3. **Sell at the Trader** — every 3 minutes one category is **HOT ×1.6**, one **SURPLUS ×0.75**.
-4. **Craft** better gear (coins + ores): Rod, Pickaxe & Axe, each 10 tiers.
-5. **Invest** at the **Isle Exchange** — 5 fictional stocks with live charts and hourly dividends (paid even offline). EEL never pays a dividend; the eel eats the profits.
-6. **Spend Pearls ◉** (activity points — never convertible to coins) at the **Pearl Kiosk**: hero outfit colors, floating titles, Chum Jar, Deep Bucket, Insider Tips.
-7. **Gamble** at the Casino — walk up to the roulette table, the camera dives onto the felt, the ball rattles into a pocket. Win = fish worth double (re-spin to push ×4, ×8…). Lose = the eel eats it.
-8. **Unlock new islands** at the ⛵ Harbor and do it all again, richer.
+2. **Plant the auto-rig** (**F**) at any shore and walk away — it fishes on its own while you mine, trade or stand in the Casino. It only brings up the cheap end of the water though: rare-and-up runs ~3% against ~35% on a rod you hold, a legendary is ~75× rarer, catches sell for 30% less, it burns no bait, bottles no maps and scores nothing in the derby. Upgrade it at the Pearl Kiosk (Driftwood → Braced → Tidewatch) for a faster line and slightly better odds.
+3. **Mine** the quarry (coal→diamond) and **chop** trees for wood — ore nodes sometimes drop **share certificates**.
+4. **Sell at the Trader** — every 3 minutes one category is **HOT ×1.6**, one **SURPLUS ×0.75**.
+5. **Craft** better gear (coins + ores): Rod, Pickaxe & Axe, each 10 tiers.
+6. **Invest** at the **Isle Exchange** — 5 fictional stocks with live charts and hourly dividends (paid even offline). EEL never pays a dividend; the eel eats the profits.
+7. **Spend Pearls ◉** (activity points — never convertible to coins) at the **Pearl Kiosk**: hero outfit colors, floating titles, Chum Jar, Deep Bucket, auto-rig upgrades, Insider Tips.
+8. **Gamble** at the Casino — walk up to the roulette table, the camera dives onto the felt, the ball rattles into a pocket. Win = fish worth double (re-spin to push ×4, ×8…). Lose = the eel eats it.
+9. **Unlock new islands** at the ⛵ Harbor and do it all again, richer.
 
 Progress **auto-saves** in your browser. Achievements pay coin bounties. There's a **wipe save** link on the start screen.
 

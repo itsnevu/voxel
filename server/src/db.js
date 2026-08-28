@@ -1,6 +1,13 @@
 // SQLite persistence layer for Reel Fortune 3D.
 // Everything the server treats as truth lives here: accounts, saved game state,
 // sessions, an action log used for server-side rate limiting, and minted deeds.
+//
+// Production concerns handled in this module:
+//   - versioned, transactional migrations (schema_meta.version)
+//   - a tuned pragma set applied to every connection
+//   - a boot-time integrity check that refuses to serve a corrupt file
+//   - checkpoint / incremental-vacuum / stats helpers for the ops endpoints
+//   - a hard cap on concurrent sessions per account
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,15 +28,90 @@ fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
 export const db = new Database(DB_PATH);
 
-// WAL keeps readers from blocking the single writer; the busy timeout stops
-// spurious SQLITE_BUSY throws when several requests land at once.
-db.pragma('journal_mode = WAL');
-db.pragma('synchronous = NORMAL');
-db.pragma('foreign_keys = ON');
-db.pragma('busy_timeout = 5000');
+/* ============================================================================
+   LOGGING — optional, and deliberately loaded the awkward way.
 
+   log.js may not exist in this build, and if it does it is free to import
+   db.js. A static import would therefore be both a hard dependency and a
+   potential evaluation cycle; a top-level `await import()` would turn that
+   cycle into a deadlock (two modules each waiting on the other's evaluation
+   promise). So: fire the dynamic import and never await it. Until it lands —
+   and forever, if the file is absent — the built-in fallback below carries the
+   message, in log.js's own format, so no line is dropped and nothing downstream
+   can tell which of the two wrote it.
+   ========================================================================== */
+// Call shape matches log.js: a short constant message plus a fields object,
+// never string concatenation, so the lines stay greppable and machine-readable.
+//
+// The fallback mirrors log.js's own format decision (JSON unless LOG_PRETTY),
+// because the migration lines below are emitted at boot, before the dynamic
+// import can possibly have resolved. Without this they would be the one part
+// of the startup log a collector could not parse.
+const PRETTY_FALLBACK = /^(1|true|yes|on)$/i.test(String(process.env.LOG_PRETTY || ''));
+function fallbackEmit(level, msg, fields) {
+  const stream = level === 'error' ? process.stderr : process.stdout;
+  let line;
+  if (PRETTY_FALLBACK) {
+    line = `[db] ${msg}${fields ? ' ' + JSON.stringify(fields) : ''}`;
+  } else {
+    try {
+      line = JSON.stringify({
+        ts: new Date().toISOString(), level, msg, mod: 'db', ...(fields || {}),
+      });
+    } catch {
+      line = `{"level":"${level}","msg":${JSON.stringify(String(msg))},"mod":"db"}`;
+    }
+  }
+  try {
+    stream.write(`${line}\n`);
+  } catch {
+    /* a closed or full stdout must never throw into a migration */
+  }
+}
+let log = {
+  info: (m, f) => fallbackEmit('info', m, f),
+  warn: (m, f) => fallbackEmit('warn', m, f),
+  error: (m, f) => fallbackEmit('error', m, f),
+};
+
+// Only attempt the import when the file is actually there, so a genuine
+// failure (syntax error, bad export) surfaces instead of being mistaken for
+// "this build has no logger".
+if (fs.existsSync(path.join(HERE, 'log.js'))) {
+  import('./log.js')
+    .then((mod) => {
+      const base = (mod && (mod.log || mod.logger || mod.default)) || null;
+      if (!base || typeof base.info !== 'function') return;
+      // child() stamps { mod: 'db' } onto every line; without it, fall back to
+      // the plain logger and keep the tag in the message.
+      const s = typeof mod.child === 'function' ? mod.child({ mod: 'db' }) : null;
+      const via = (lvl) => {
+        const fn = (s && s[lvl]) || base[lvl] || base.info;
+        return s ? (m, f) => fn(m, f) : (m, f) => fn(`[db] ${m}`, f);
+      };
+      log = { info: via('info'), warn: via('warn'), error: via('error') };
+    })
+    .catch((e) => console.warn('[db] log.js present but failed to load:', e && e.message));
+}
+
+/* ------------------------------------------------------------------ knobs -- */
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const ACTION_LOG_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+const intEnv = (name, dflt) => {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : dflt;
+};
+
+// How many live sessions one account may hold. Ten covers phone + desktop +
+// a few stale tabs; past that the oldest token is evicted so a leaked or
+// looping client cannot grow the table without bound.
+const MAX_SESSIONS_PER_USER = intEnv('MAX_SESSIONS_PER_USER', 10);
+
+// Reclaim pages once the freelist passes this share of the file, so routine
+// calls to vacuumIfNeeded() are almost always a cheap no-op.
+const VACUUM_FREELIST_RATIO = 0.15;
+const VACUUM_MIN_PAGES = 512;
 
 // Statements are prepared lazily and memoised: the tables do not exist until
 // initSchema() runs, so preparing at module load would throw.
@@ -43,99 +125,442 @@ function q(sql) {
   return stmt;
 }
 
-export function initSchema() {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      username   TEXT UNIQUE COLLATE NOCASE,
-      pass_hash  TEXT,
-      created_at INTEGER
-    );
+/* ============================================================================
+   PRAGMAS — applied at module load so any consumer that touches the handle
+   before initSchema() still gets a correctly configured connection, and again
+   at the top of initSchema(). Every one of them is idempotent.
+   ========================================================================== */
+function applyPragmas() {
+  // auto_vacuum has to be set before the first table exists to take on a fresh
+  // file; on an established database it is inert until a full VACUUM runs.
+  // Setting it first is what later makes incremental_vacuum meaningful.
+  try { db.pragma('auto_vacuum = INCREMENTAL'); } catch { /* non-fatal */ }
 
-    CREATE TABLE IF NOT EXISTS saves (
-      user_id    INTEGER PRIMARY KEY,
-      state      TEXT,
-      updated_at INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS sessions (
-      token      TEXT PRIMARY KEY,
-      user_id    INTEGER,
-      created_at INTEGER,
-      expires_at INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS action_log (
-      id      INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      action  TEXT,
-      at      INTEGER
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_action_log_user_action_at
-      ON action_log (user_id, action, at);
-
-    CREATE TABLE IF NOT EXISTS deeds (
-      user_id    INTEGER,
-      deed_id    TEXT,
-      block_no   INTEGER,
-      hash       TEXT,
-      minted_at  INTEGER,
-      claim_addr TEXT,
-      claim_sig  TEXT,
-      PRIMARY KEY (user_id, deed_id)
-    );
-
-    -- CREW: who is riding on whose boat.
-    -- member_id is the PRIMARY KEY, so a player can be aboard exactly one boat
-    -- at a time — the "leave before you board another" rule is the schema.
-    CREATE TABLE IF NOT EXISTS crew_members (
-      member_id INTEGER PRIMARY KEY,
-      owner_id  INTEGER NOT NULL,
-      joined_at INTEGER
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_crew_members_owner ON crew_members (owner_id);
-
-    -- Boarding requests awaiting the captain's ADMIT/DENY. A player may knock on
-    -- several hulls at once; admitting one clears the rest.
-    CREATE TABLE IF NOT EXISTS crew_requests (
-      owner_id INTEGER NOT NULL,
-      user_id  INTEGER NOT NULL,
-      at       INTEGER,
-      PRIMARY KEY (owner_id, user_id)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_crew_requests_user ON crew_requests (user_id);
-
-    CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions (expires_at);
-
-    -- Player-filed reports (abuse, bugs, scam attempts). target is free text so
-    -- it can name a user, a chat line, or anything else the client sends.
-    CREATE TABLE IF NOT EXISTS reports (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      reporter_id INTEGER,
-      target      TEXT,
-      reason      TEXT,
-      detail      TEXT,
-      at          INTEGER
-    );
-  `);
-
-  // --- Idempotent migrations for columns added after the original schema ---
-  // ALTER TABLE ADD COLUMN throws when the column already exists; that error is
-  // the "already migrated" signal, so it is deliberately swallowed.
-  try {
-    db.exec('ALTER TABLE users ADD COLUMN wallet TEXT');
-  } catch {
-    /* column already present */
+  // WAL keeps readers from blocking the single writer; the busy timeout stops
+  // spurious SQLITE_BUSY throws when several requests land at once.
+  const mode = String(db.pragma('journal_mode = WAL', { simple: true }) || '').toLowerCase();
+  if (mode !== 'wal') {
+    // Network filesystems refuse WAL. Worth shouting about: the concurrency
+    // assumptions the rest of the server makes no longer hold.
+    log.warn('journal_mode is not WAL (is the file on a network mount?)',
+      { mode, path: DB_PATH });
   }
 
-  // Partial unique index: at most one account per wallet address, while every
-  // password-only account keeps wallet = NULL without colliding.
-  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_wallet
-             ON users (wallet) WHERE wallet IS NOT NULL`);
+  db.pragma('synchronous = NORMAL');   // safe under WAL; fsync only at checkpoints
+  db.pragma('foreign_keys = ON');
+  db.pragma('busy_timeout = 5000');
+  db.pragma('cache_size = -16000');    // negative = KiB, so 16 MB of page cache
+  db.pragma('temp_store = MEMORY');    // sorts and temp tables stay off disk
+
+  // Memory-mapped reads. 128 MB by default: generous for this workload, small
+  // enough to sit comfortably on a 1 GB VPS alongside Node's heap.
+  try { db.pragma(`mmap_size = ${intEnv('DB_MMAP_MB', 128) * 1024 * 1024}`); } catch { /* optional */ }
+
+  // Bound how much work `PRAGMA optimize` is allowed to do later on.
+  try { db.pragma('analysis_limit = 400'); } catch { /* older SQLite */ }
 }
+
+applyPragmas();
+
+/* ============================================================================
+   INTEGRITY — a corrupt page file must stop the boot, loudly. Serving from a
+   damaged database quietly writes bad data on top of bad data.
+   ========================================================================== */
+function integrityCheck() {
+  if (process.env.DB_SKIP_INTEGRITY_CHECK === '1') {
+    log.warn('integrity check skipped (DB_SKIP_INTEGRITY_CHECK=1)');
+    return;
+  }
+
+  let rows;
+  try {
+    rows = db.pragma('quick_check');
+  } catch (e) {
+    throw new Error(
+      `Database integrity check could not run on ${DB_PATH}: ${e && e.message}. ` +
+      'The file may be unreadable, truncated, or not a SQLite database.'
+    );
+  }
+
+  const problems = (Array.isArray(rows) ? rows : [])
+    .map((r) => String((r && r.quick_check) ?? r ?? ''))
+    .filter((v) => v && v.toLowerCase() !== 'ok');
+
+  if (problems.length) {
+    throw new Error(
+      `Database integrity check FAILED for ${DB_PATH}:\n  ` +
+      problems.slice(0, 10).join('\n  ') +
+      (problems.length > 10 ? `\n  ...and ${problems.length - 10} more` : '') +
+      '\nRefusing to start. Restore the newest good backup, or recover with:\n' +
+      `  sqlite3 "${DB_PATH}" ".recover" | sqlite3 recovered.db\n` +
+      'Set DB_SKIP_INTEGRITY_CHECK=1 only to inspect a known-bad file.'
+    );
+  }
+}
+
+/* ============================================================================
+   MIGRATIONS — an ordered list, each step run once inside its own transaction
+   and stamped into schema_meta. Anything already applied is skipped.
+
+   v1 is the schema as it stood before versioning existed, written to be fully
+   idempotent (IF NOT EXISTS / column probes) so a database created by the old
+   code adopts version 1 without a single row changing.
+   ========================================================================== */
+
+/** True when `table` already has a column named `col`. */
+function hasColumn(table, col) {
+  try {
+    return db.pragma(`table_info(${table})`).some((c) => c.name === col);
+  } catch {
+    return false;
+  }
+}
+
+const MIGRATIONS = [
+  {
+    v: 1,
+    name: 'baseline',
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS users (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          username   TEXT UNIQUE COLLATE NOCASE,
+          pass_hash  TEXT,
+          created_at INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS saves (
+          user_id    INTEGER PRIMARY KEY,
+          state      TEXT,
+          updated_at INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+          token      TEXT PRIMARY KEY,
+          user_id    INTEGER,
+          created_at INTEGER,
+          expires_at INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS action_log (
+          id      INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER,
+          action  TEXT,
+          at      INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_action_log_user_action_at
+          ON action_log (user_id, action, at);
+
+        CREATE TABLE IF NOT EXISTS deeds (
+          user_id    INTEGER,
+          deed_id    TEXT,
+          block_no   INTEGER,
+          hash       TEXT,
+          minted_at  INTEGER,
+          claim_addr TEXT,
+          claim_sig  TEXT,
+          PRIMARY KEY (user_id, deed_id)
+        );
+
+        -- CREW: who is riding on whose boat.
+        -- member_id is the PRIMARY KEY, so a player can be aboard exactly one boat
+        -- at a time — the "leave before you board another" rule is the schema.
+        CREATE TABLE IF NOT EXISTS crew_members (
+          member_id INTEGER PRIMARY KEY,
+          owner_id  INTEGER NOT NULL,
+          joined_at INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_crew_members_owner ON crew_members (owner_id);
+
+        -- Boarding requests awaiting the captain's ADMIT/DENY. A player may knock on
+        -- several hulls at once; admitting one clears the rest.
+        CREATE TABLE IF NOT EXISTS crew_requests (
+          owner_id INTEGER NOT NULL,
+          user_id  INTEGER NOT NULL,
+          at       INTEGER,
+          PRIMARY KEY (owner_id, user_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_crew_requests_user ON crew_requests (user_id);
+
+        CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions (expires_at);
+
+        -- Player-filed reports (abuse, bugs, scam attempts). target is free text so
+        -- it can name a user, a chat line, or anything else the client sends.
+        CREATE TABLE IF NOT EXISTS reports (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          reporter_id INTEGER,
+          target      TEXT,
+          reason      TEXT,
+          detail      TEXT,
+          at          INTEGER
+        );
+      `);
+
+      // Wallet support was bolted on after launch. Probe first — ALTER TABLE
+      // ADD COLUMN raises on a duplicate, and inside a migration transaction
+      // it is cleaner to ask than to catch.
+      if (!hasColumn('users', 'wallet')) {
+        try {
+          database.exec('ALTER TABLE users ADD COLUMN wallet TEXT');
+        } catch {
+          /* raced or already present */
+        }
+      }
+
+      // Partial unique index: at most one account per wallet address, while every
+      // password-only account keeps wallet = NULL without colliding.
+      database.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_wallet
+                       ON users (wallet) WHERE wallet IS NOT NULL`);
+    },
+  },
+
+  {
+    v: 2,
+    name: 'production-indexes',
+    up(database) {
+      database.exec(`
+        -- sessions.user_id had no index at all: the per-user session cap and
+        -- destroyAllForUser() both scan on it, as does every logout-everywhere.
+        CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
+
+        -- sessions.sweep() deletes the whole tail of action_log by timestamp;
+        -- the (user_id, action, at) index cannot serve a bare range on "at".
+        CREATE INDEX IF NOT EXISTS idx_action_log_at ON action_log (at);
+
+        -- reports.list() is ORDER BY at DESC, id DESC LIMIT ?; matching the
+        -- index to the sort turns the admin fetch into a bounded seek.
+        CREATE INDEX IF NOT EXISTS idx_reports_at ON reports (at DESC, id DESC);
+
+        -- saves.captains() sorts the leaderboard by recency.
+        CREATE INDEX IF NOT EXISTS idx_saves_updated ON saves (updated_at DESC);
+      `);
+
+      // Deliberately NOT created, because they would be pure write amplification:
+      //   saves(user_id) — user_id IS the rowid (INTEGER PRIMARY KEY), so lookups
+      //                    are already direct rowid seeks.
+      //   deeds(user_id) — covered as the leftmost prefix of the automatic index
+      //                    behind PRIMARY KEY (user_id, deed_id).
+      // Both access paths were confirmed against the queries in this file.
+    },
+  },
+];
+
+function readVersion() {
+  try {
+    const row = db.prepare('SELECT value FROM schema_meta WHERE key = ?').get('version');
+    const n = row ? Number(row.value) : 0;
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeVersion(v) {
+  db.prepare(`INSERT INTO schema_meta (key, value) VALUES ('version', ?)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(String(v));
+}
+
+function runMigrations() {
+  // The bookkeeping table has to exist before it can record anything, so it
+  // lives outside the migration list.
+  db.exec(`CREATE TABLE IF NOT EXISTS schema_meta (
+             key   TEXT PRIMARY KEY,
+             value TEXT
+           )`);
+
+  const from = readVersion();
+  const target = MIGRATIONS.length ? MIGRATIONS[MIGRATIONS.length - 1].v : 0;
+
+  if (from > target) {
+    // Someone rolled the code back under a newer database. Newer schemas are
+    // additive here, so this is a warning rather than a stop, but it should
+    // never pass unnoticed.
+    log.warn('schema is newer than this build understands', { found: from, supported: target });
+    return;
+  }
+  if (from === target) {
+    log.info('schema up to date', { version: from });
+    return;
+  }
+
+  for (const m of MIGRATIONS) {
+    if (m.v <= from) continue;
+    const t0 = Date.now();
+    // Each migration is all-or-nothing: a throw rolls the whole step back and
+    // leaves the recorded version untouched, so the next boot retries it.
+    db.transaction(() => {
+      m.up(db);
+      writeVersion(m.v);
+    })();
+    log.info('migration applied', { v: m.v, name: m.name, ms: Date.now() - t0 });
+  }
+
+  log.info('schema migrated', { from, to: readVersion() });
+}
+
+export function initSchema() {
+  applyPragmas();
+  integrityCheck();
+  runMigrations();
+
+  // Refresh the query planner's statistics once the schema is settled.
+  try { db.pragma('optimize'); } catch { /* advisory only */ }
+}
+
+/* ============================================================================
+   MAINTENANCE — safe to call on a timer and again during shutdown.
+   ========================================================================== */
+
+/**
+ * Fold the WAL back into the main file and truncate it. Without this a busy
+ * server's -wal file grows until the next natural checkpoint, which under
+ * continuous read traffic may be a very long time.
+ * Returns {busy, log, checkpointed} or null when the handle is closed.
+ */
+export function checkpoint() {
+  if (!db.open) return null;
+  try {
+    const rows = db.pragma('wal_checkpoint(TRUNCATE)');
+    const r = (Array.isArray(rows) ? rows[0] : rows) || {};
+    // busy = 1 means a reader held the WAL open; harmless, the next call gets it.
+    return {
+      busy: r.busy | 0,
+      log: r.log | 0,
+      checkpointed: r.checkpointed | 0,
+    };
+  } catch (e) {
+    log.error('checkpoint failed', { err: e && e.message });
+    return null;
+  }
+}
+
+/**
+ * Hand free pages back to the filesystem when enough have accumulated.
+ * Cheap and a no-op in the common case, so it is safe on a schedule.
+ * Returns {reclaimed, freelist, pages} — reclaimed is 0 when nothing ran.
+ */
+export function vacuumIfNeeded() {
+  const result = { reclaimed: 0, freelist: 0, pages: 0 };
+  if (!db.open) return result;
+
+  try {
+    const freelist = db.pragma('freelist_count', { simple: true }) | 0;
+    const pages = db.pragma('page_count', { simple: true }) | 0;
+    result.freelist = freelist;
+    result.pages = pages;
+
+    if (freelist < VACUUM_MIN_PAGES) return result;
+    if (pages > 0 && freelist / pages < VACUUM_FREELIST_RATIO) return result;
+
+    // incremental_vacuum only does work when auto_vacuum is INCREMENTAL (2).
+    // On a database created before that pragma was set it reports NONE, and
+    // switching it over needs a full VACUUM — a blocking rewrite that is an
+    // operator's decision, not something to spring on a live server.
+    const mode = db.pragma('auto_vacuum', { simple: true }) | 0;
+    if (mode !== 2) {
+      log.warn(
+        'free pages cannot be reclaimed: auto_vacuum is not INCREMENTAL. ' +
+        'Run a full VACUUM in a maintenance window to enable it.',
+        { freelist, pages, autoVacuum: mode }
+      );
+      return result;
+    }
+
+    db.pragma(`incremental_vacuum(${freelist})`);
+    const after = db.pragma('freelist_count', { simple: true }) | 0;
+    result.reclaimed = Math.max(0, freelist - after);
+    result.freelist = after;
+    if (result.reclaimed > 0) log.info('incremental vacuum', { reclaimedPages: result.reclaimed });
+    return result;
+  } catch (e) {
+    log.error('vacuumIfNeeded failed', { err: e && e.message });
+    return result;
+  }
+}
+
+/** Byte size of a path, or 0 when it does not exist. */
+function fileBytes(p) {
+  try {
+    return fs.statSync(p).size;
+  } catch {
+    return 0;
+  }
+}
+
+/** Row counts plus on-disk footprint, for the health/admin endpoints. */
+export function stats() {
+  const out = {
+    users: 0,
+    saves: 0,
+    sessions: 0,
+    reports: 0,
+    dbBytes: 0,
+    walBytes: 0,
+    // extras beyond the required shape — useful on a dashboard, cheap to read
+    sessionsActive: 0,
+    deeds: 0,
+    schemaVersion: 0,
+    freelistPages: 0,
+    pageCount: 0,
+  };
+  if (!db.open) return out;
+
+  const count = (table) => {
+    try {
+      const row = q(`SELECT COUNT(*) AS n FROM ${table}`).get();
+      return row ? row.n | 0 : 0;
+    } catch {
+      return 0; // table not created yet (stats() called before initSchema)
+    }
+  };
+
+  out.users = count('users');
+  out.saves = count('saves');
+  out.sessions = count('sessions');
+  out.reports = count('reports');
+  out.deeds = count('deeds');
+
+  try {
+    const row = q('SELECT COUNT(*) AS n FROM sessions WHERE expires_at > ?').get(Date.now());
+    out.sessionsActive = row ? row.n | 0 : 0;
+  } catch { /* pre-schema */ }
+
+  out.dbBytes = fileBytes(DB_PATH);
+  out.walBytes = fileBytes(`${DB_PATH}-wal`);
+
+  try {
+    out.schemaVersion = readVersion();
+    out.freelistPages = db.pragma('freelist_count', { simple: true }) | 0;
+    out.pageCount = db.pragma('page_count', { simple: true }) | 0;
+  } catch { /* advisory only */ }
+
+  return out;
+}
+
+let closed = false;
+
+/** Checkpoint, then close. Idempotent — safe from several shutdown paths. */
+export function close() {
+  if (closed) return;
+  closed = true;
+  if (!db.open) return;
+
+  try { db.pragma('optimize'); } catch { /* advisory */ }
+  checkpoint();
+  try {
+    db.close();
+    log.info('closed cleanly');
+  } catch (e) {
+    log.error('close failed', { err: e && e.message });
+  }
+}
+
+/* ============================================================================
+   REPOSITORIES
+   ========================================================================== */
 
 export const users = {
   /** Insert a new account. Throws on duplicate username (UNIQUE COLLATE NOCASE). */
@@ -327,12 +752,34 @@ export const crews = {
   },
 };
 
+/**
+ * Issue a token and evict everything past the per-user cap, atomically. Split
+ * out so create() stays readable; the transaction matters because two logins
+ * racing must not both decide a different row is the oldest.
+ */
+const issueSession = db.transaction((userId, token, now) => {
+  q('INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
+    .run(token, userId, now, now + SESSION_TTL_MS);
+
+  // Expired rows for this account are dead weight; clear them before counting
+  // so a pile of stale tokens cannot evict a live one.
+  q('DELETE FROM sessions WHERE user_id = ? AND expires_at <= ?').run(userId, now);
+
+  // Keep the newest N. rowid breaks ties when two tokens share a millisecond.
+  q(`DELETE FROM sessions
+      WHERE user_id = ?
+        AND token NOT IN (
+          SELECT token FROM sessions
+           WHERE user_id = ?
+           ORDER BY created_at DESC, rowid DESC
+           LIMIT ?
+        )`).run(userId, userId, MAX_SESSIONS_PER_USER);
+});
+
 export const sessions = {
   create(userId) {
     const token = randomBytes(32).toString('hex');
-    const now = Date.now();
-    q('INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
-      .run(token, userId, now, now + SESSION_TTL_MS);
+    issueSession(userId, token, Date.now());
     return token;
   },
 
@@ -360,6 +807,16 @@ export const sessions = {
     q('DELETE FROM action_log WHERE at < ?').run(now - ACTION_LOG_TTL_MS);
   },
 };
+
+/**
+ * Log out every device for one account — used by "sign out everywhere", by a
+ * password change, and by moderation when an account is banned.
+ * Returns the number of sessions revoked.
+ */
+export function destroyAllForUser(userId) {
+  if (userId == null) return 0;
+  return q('DELETE FROM sessions WHERE user_id = ?').run(userId).changes;
+}
 
 export const actions = {
   /** Epoch ms of the most recent occurrence, or 0 if never. */
