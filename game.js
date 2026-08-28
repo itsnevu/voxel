@@ -2076,6 +2076,7 @@ const SRV={
     this.busy=true;
     try{ const r=await RFNet.action(name,body||{});
       if(r&&r.state)this.apply(r.state);
+      if(r&&r.earned)applyEarned(r.earned);         // trophies the SERVER just awarded
       return r?r.result:null; }
     catch(e){
       // mods/notify.js claims this to render a richer card (with a Retry); if no
@@ -2382,15 +2383,30 @@ function deedHash(id){ let seed=0; for(let i=0;i<id.length;i++)seed+=id.charCode
   const mint=state.deeds[id]||0; let out='';
   for(let k=0;k<20;k++)out+=((hash(seed+mint,k*13.7)*16)|0).toString(16);
   return '0x'+out; }
-function checkDeeds(){ let minted=false;
+function checkDeeds(){ if(SRV.on)return;   // online the server mints deeds; see applyEarned()
+  let minted=false;
   for(const [id,name] of DEEDS){ if(state.deeds[id])continue;
     const d=DEEDS.find(x=>x[0]===id);
     if(!d[3](state))continue;
     state.deeds[id]=mktEpochNow(); minted=true;
     toast(`📜 Deed minted on the Isle Ledger: ${name}`,'gold'); addShake(0.12); sfx.ach(); }
   if(minted){ save(); if(invOpen)renderInv(); } }
+/* Online, the trophy case is the server's. It tells us what was just earned and
+   we throw exactly the same party the offline path would — no local guessing, so
+   the two can never disagree about who owns which deed. */
+function applyEarned(earned){
+  if(!earned)return;
+  for(const a of earned.ach||[]){
+    toast(`${pixSVG('trophy',13)} ${a.name}${a.reward?' · +◈'+fmt(a.reward):''}`,'gold');
+    if(a.reward)coinFly(a.reward);
+    sfx.ach(); RF.emit&&RF.emit('ach',a.id,a.name,a.reward); }
+  for(const d of earned.deeds||[]){
+    toast(`📜 Deed minted on the Isle Ledger: ${d.name}`,'gold'); addShake(0.12); sfx.ach(); }
+  if(invOpen)renderInv();
+}
 let achT=0;
-function checkAch(){ for(const [id,name,desc,rw,chk] of ACH){
+function checkAch(){ if(SRV.on)return;   // online the server pays the bounty; see applyEarned()
+  for(const [id,name,desc,rw,chk] of ACH){
   if(state.ach[id]||!chk(state))continue;
   state.ach[id]=1; state.coins+=rw;
   toast(`${pixSVG('trophy',13)} ${name} · +◈${fmt(rw)}`,'gold'); coinFly(rw); sfx.ach(); RF.emit('ach',id,name,rw);
@@ -4557,6 +4573,8 @@ function startRealtime(){
       else if(d.fish||d.lost)toast(`${pixSVG('wheel',13)} the eel ate ${d.name}'s ${d.lost||d.fish}`,'bad');
     } else if(d.kind==='wanted'){
       toast(`${pixSVG('trophy',13)} ${d.name} landed the WANTED ${d.fish} · ◈${fmt(d.bounty)}`,'gold');
+    } else if(d.kind==='deed'){
+      toast(`📜 ${d.name} was granted the ${d.deed}`,'gold');
     } else if(d.kind==='derby'){
       toast(`${pixSVG('trophy',13)} DERBY: ${d.name} won with ${d.kg} kg · +${d.pearls} ◉`,'gold');
       chatPush('',`· derby over: ${d.name} took it with ${d.kg} kg ·`,'sys');
