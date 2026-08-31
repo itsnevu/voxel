@@ -540,7 +540,37 @@ Jangan sampai tertukar antara "tidak ada datanya" dan "tidak ada masalahnya":
 - **`"kicked": false` pada jawaban `ban` bukan berarti gagal.** Layer realtime punya hook pemutus socket dan dipakai; `false` muncul begitu pemainnya memang sedang tidak terhubung — dan `note` yang menyertainya keliru menyebut hook-nya tidak ada. Yang menentukan ban berhasil adalah `"ok": true`.
 - **Tidak ada UI.** Semuanya `curl` (atau HTTPie/Postman). Tidak ada halaman yang bisa dibuka di browser.
 
-### 12.6 Kunci `/api/admin` di nginx
+### 12.6 Melihat apa yang rusak di browser pemain
+
+Selama ini server tidak pernah tahu error yang terjadi di sisi client. `RF.errors` cuma ring buffer 300 entry di dalam tab pemain, dan yang membacanya cuma drawer notifikasi pemain itu sendiri — bug yang hanya muncul di satu build Chrome Android tidak kelihatan sama sekali dari sini.
+
+Sekarang client yang **sudah sign-in** mengirim batch fault ke `POST /api/client-error` (maksimal 10 per kiriman, sekali per menit, dilewati kalau tab-nya tidak terlihat). Server menyimpannya di memori dan menulis satu baris log terstruktur per fault.
+
+```bash
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" \
+  https://game.example.com/api/admin/clienterrors | jq .
+```
+
+```json
+{
+  "faults": 3, "reports": 412, "cap": 200,
+  "entries": [
+    { "where": "atlas:draw", "level": "error", "msg": "ctx is null",
+      "name": "TypeError", "build": "9f2c1a7b40de",
+      "count": 380, "users": 2, "first": 1756..., "last": 1756... }
+  ]
+}
+```
+
+Yang perlu dibaca:
+
+- **`count` vs `users`.** `count` 380 dengan `users` 1 itu satu orang yang tab-nya stuck — menarik, tapi bukan kebakaran. `users` 40 itu build yang rusak.
+- **Fault yang identik digabung.** Satu pemain di dalam render loop rusak tampil sebagai satu baris dengan `count` besar, bukan 380 baris yang mendorong keluar bug lain dari jendela.
+- **Isinya hilang saat restart.** Sengaja: ini sinyal untuk dibaca langsung, bukan arsip. Salinan yang awet ada di log systemd (`journalctl -u reelfortune -g 'client fault'`).
+- **`ua` diambil dari header request**, bukan dari body — client yang bisa menyebut browser-nya sendiri bisa menyebut browser orang lain.
+- **Pemain bisa menolak ikut** dengan `localStorage['rf-noerr'] = '1'` di browser mereka.
+
+### 12.7 Kunci `/api/admin` di nginx
 
 `deploy/nginx.conf` **belum** punya location khusus untuk `/api/admin`, jadi console ikut `location /api/` yang umum dan token adalah satu-satunya pertahanannya dari internet. Kalau IP Anda tetap, tambahkan blok ini di `nginx.conf` — prefixnya lebih panjang dari `/api/` sehingga otomatis menang dalam pemilihan location nginx, di mana pun ia diletakkan:
 
@@ -834,7 +864,7 @@ Daftar periksa sebelum server dibuka untuk publik:
 - [ ] **ufw aktif, hanya 80/443/SSH.** Jangan pernah `ufw allow 8787`.
 - [ ] **`LEDGER_SECRET` sudah diganti** dengan hasil `openssl rand -hex 32`. Nilai contoh di repo bersifat publik — siapa pun bisa memalsukan deed kalau dipakai apa adanya.
 - [ ] **`ADMIN_TOKEN` sudah diisi** dengan hasil `openssl rand -hex 24`. Dibiarkan kosong bukan berarti aman — berarti tidak ada yang bisa membungkam atau memblokir pemain kasar, sementara chat sudah terbuka untuk publik. Cek: `journalctl -u reelfortune | grep adminConsole` harus `"enabled"`.
-- [ ] **`/api/admin` dibatasi per-IP di nginx** (lihat [12.6](#126-kunci-apiadmin-di-nginx)), supaya token yang bocor saja tidak cukup untuk membobol moderasi.
+- [ ] **`/api/admin` dibatasi per-IP di nginx** (lihat [12.7](#127-kunci-apiadmin-di-nginx)), supaya token yang bocor saja tidak cukup untuk membobol moderasi.
 - [ ] **`.env` mode 640, `root:reelfortune`.** Jangan pernah di-commit ke git. Pastikan ada di `.gitignore`.
 - [ ] **Service jalan sebagai `reelfortune`, bukan root.** Cek: `systemctl show reelfortune -p User`.
 - [ ] **Kode dimiliki root, hanya folder `data/` yang writable.** Service yang dibobol tetap tidak bisa mengubah aturan ekonominya sendiri.

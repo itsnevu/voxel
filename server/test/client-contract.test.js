@@ -195,7 +195,8 @@ describe('client · authoritative actions', () => {
     /* net.js is the only place allowed to name an /api path; this catches the
        half-wired feature — a route built on the server that nothing ever calls,
        or a call to a route that was renamed underneath it. */
-    for (const p of ['/api/state', '/api/save', '/api/report', '/api/derby', '/api/leaderboard']) {
+    for (const p of ['/api/state', '/api/save', '/api/report', '/api/derby',
+                     '/api/leaderboard', '/api/client-error']) {
       assert.ok(NET.includes(`'${p}'`), `net.js has no caller for ${p}`);
     }
   });

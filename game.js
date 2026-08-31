@@ -1910,9 +1910,19 @@ const fishCam=new THREE.PerspectiveCamera(30,170/110,0.1,20); fishCam.position.s
 fishScene.add(new THREE.HemisphereLight(0xffffff,0x223038,1.05));
 { const k=new THREE.DirectionalLight(0xfff2d8,0.95); k.position.set(2,3,2.5); fishScene.add(k);
   const r=new THREE.DirectionalLight(0x9fd8ff,0.5); r.position.set(-2.5,1,-2); fishScene.add(r); }
-let fishRenderer=null;
-try{ fishRenderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
-  fishRenderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2)); fishRenderer.setSize(170,110); }catch(e){}
+/* A WebGL context is not free and browsers hand out a small number of them —
+   mobile is the tightest. This one used to be built at boot for every player,
+   including the ones who never landed anything rare enough to see a reveal card.
+   Built on first use instead; kept once built, because a reveal fires on any
+   good catch and churning a context per fish would be worse than holding one. */
+let fishRenderer=null,fishGLTried=false;
+function fishGL(){
+  if(fishGLTried)return fishRenderer;
+  fishGLTried=true;
+  try{ fishRenderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+    fishRenderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2)); fishRenderer.setSize(170,110); }
+  catch(e){ fishRenderer=null; RF.err('preview:fish',e,'warn'); }
+  return fishRenderer; }
 let fishModel=null,fishAnim=null,fishT=0;
 function disposeFishModel(){ if(!fishModel)return;
   fishModel.traverse(o=>{if(o.geometry)o.geometry.dispose();if(o.material)o.material.dispose();});
@@ -2007,8 +2017,9 @@ function reveal(f,quiet){ if(RF.override.reveal&&RF.override.reveal(f,quiet)===t
   sfx.rare(f.rar,f.shiny);
   if(quiet&&RORDER[f.rar]<2&&!f.shiny){ toast(`${pixSVG('fish',13)} ${f.name} · ◈${fmt(f.val)}`); return; }
   const glow=f.shiny?'#ffd24f':RAR[f.rar];
-  revEl.innerHTML=`<div class="reveal-card" style="border-color:${glow};box-shadow:0 20px 60px rgba(0,0,0,.6),0 0 30px ${glow}55"><div class="r" style="color:${RAR[f.rar]}">${f.shiny?'✦ shiny ':''}${f.rar}</div><div class="f3d">${fishRenderer?'':fishSVG(f.rar)}</div><div class="nm">${f.name}</div><div class="v">◈ ${fmt(f.val)} · ${f.kg||'?'} kg</div></div>`;
-  if(fishRenderer){ revEl.querySelector('.f3d').appendChild(fishRenderer.domElement); buildFishModel(f); renderFishScene(0); }
+  const fr=fishGL();   // resolved before the markup: it decides whether the SVG fallback is drawn
+  revEl.innerHTML=`<div class="reveal-card" style="border-color:${glow};box-shadow:0 20px 60px rgba(0,0,0,.6),0 0 30px ${glow}55"><div class="r" style="color:${RAR[f.rar]}">${f.shiny?'✦ shiny ':''}${f.rar}</div><div class="f3d">${fr?'':fishSVG(f.rar)}</div><div class="nm">${f.name}</div><div class="v">◈ ${fmt(f.val)} · ${f.kg||'?'} kg</div></div>`;
+  if(fr){ revEl.querySelector('.f3d').appendChild(fr.domElement); buildFishModel(f); renderFishScene(0); }
   revEl.classList.add('on'); revT=2.5; }
 
 // ---- minimap ----
@@ -2877,10 +2888,24 @@ dockScene.add(new THREE.HemisphereLight(0xffffff,0x1c3038,1.0));
 { const sea=new THREE.Mesh(new THREE.CircleGeometry(3.6,26),
     new THREE.MeshLambertMaterial({color:0x2fc0e8,transparent:true,opacity:0.55}));
   sea.rotation.x=-Math.PI/2; sea.position.y=-0.03; dockScene.add(sea); }
+/* The harbor is the rarest panel in the game and this was the most expensive
+   thing built for it — a whole GL context, alive from boot to reload whether or
+   not anyone ever went to look at a boat. Built when the doors open and handed
+   straight back when they close: forceContextLoss() is what actually returns the
+   context to the browser, dispose() alone only frees our side of it. */
 let dockRenderer=null;
-try{ dockRenderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
-  dockRenderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2)); dockRenderer.setSize(320,180);
-  if(dockViewEl)dockViewEl.appendChild(dockRenderer.domElement); }catch(e){}
+function dockGL(){
+  if(dockRenderer)return dockRenderer;
+  try{ dockRenderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+    dockRenderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2)); dockRenderer.setSize(320,180);
+    if(dockViewEl)dockViewEl.appendChild(dockRenderer.domElement); }
+  catch(e){ dockRenderer=null; RF.err('preview:dock',e,'warn'); }
+  return dockRenderer; }
+function dockGLFree(){
+  if(!dockRenderer)return;
+  try{ dockRenderer.dispose(); dockRenderer.forceContextLoss(); }catch(e){}
+  try{ if(dockRenderer.domElement&&dockRenderer.domElement.parentNode)dockRenderer.domElement.remove(); }catch(e){}
+  dockRenderer=null; }
 let previewBoat=null,dockT=0;
 const BOAT_VIEW=[1.5,1.4,1.12,0.95,0.78]; // per-tier zoom so every hull fills the frame
 function buildPreview(lvl){ previewLvl=lvl;
@@ -3047,11 +3072,14 @@ function buyBoat(){ const nxt=state.boatLvl+1; if(nxt>=BOATS.length)return; cons
   rebuildDockBoat(); buildPreview(state.boatLvl); renderHarbor(); updateHUD(); save();
   if(crewOnline())crewRefresh(); }
 function openHarbor(){ if(marketOpen||casinoOpen||invOpen)return; RF.emit('panel','harbor',true);
-  harborOpen=true; sfx.open(); harborEl.classList.add('on'); buildPreview(state.boatLvl); renderHarbor();
+  harborOpen=true; sfx.open(); harborEl.classList.add('on');
+  dockGL();                       // the context this panel needs, made at the door
+  buildPreview(state.boatLvl); renderHarbor();
   // a knock can arrive while the captain is standing at the dock
   crewRefresh(); if(crewTimer)clearInterval(crewTimer);
   crewTimer=setInterval(()=>{ if(harborOpen&&!crewBusy)crewRefresh(); },6000); }
 function closeHarbor(){ harborOpen=false; RF.emit('panel','harbor',false); sfx.close(); harborEl.classList.remove('on');
+  dockGLFree();                   // and handed back at it
   if(crewTimer){ clearInterval(crewTimer); crewTimer=0; } save(); }
 if(harborEl){
   document.getElementById('harborX').onclick=closeHarbor;
@@ -4966,6 +4994,64 @@ function streamPos(dt){ if(!window.RFNet||!RFNet.wsReady)return;
     await RFNet.probe();
     if(RFNet.reachable&&await RFNet.resume()){ await adopt(); startRealtime(); }
     paint(); })();
+
+  /* A deploy under an open tab. The client cannot know it is stale on its own —
+     it has no idea what is current — so the box serving the files stamps what it
+     serves and /api/health reports it. Until now the first sign was a move
+     coming back UNKNOWN_ACTION, which is a lost spin and then the advice.
+     Five minutes: a deploy is rare, this is a spare-tyre check, and every call
+     costs the server a real SELECT 1. */
+  const STALE_EVERY=300000;
+  setInterval(()=>{ if(window.RFNet&&RFNet.base&&RFNet.reachable&&!document.hidden)RFNet.checkBuild(); },STALE_EVERY);
+  RFNet.on('stale',()=>{
+    const say='A newer isle is live on the server · reload to pick it up';
+    /* 00-notify renders this properly when it is loaded; the toast is what a
+       stripped build still gets. Both, deliberately: the notification can sit
+       in the drawer unread, and this one matters before the next move. */
+    try{ if(RF.api&&RF.api.notify)RF.api.notify({level:'warn',title:'New version',body:say,tag:'build',ttl:0}); }
+    catch(e){ RF.err('build:notify',e,'warn'); }
+    toast(say,'gold');
+    chatPush('','· '+say+' ·','sys'); });
+
+  /* ---- CLIENT FAULTS. RF.errors is a 300-entry ring buffer in this tab and
+     nothing has ever read it but this player's own notification drawer, so a
+     bug that only fires on one Android Chrome build has been invisible to the
+     people who could fix it. These rules are what keep the fix from becoming
+     its own incident:
+       · only while signed in — an offline tab has nowhere to send anyway, and
+         that is also what makes the server's rate limit meaningful
+       · deduped by level + call site + message, so a fault inside the render
+         loop reports once instead of sixty times a second
+       · at most 10 a flush, one flush a minute, never from a hidden tab
+       · fire-and-forget: a failed report must never raise a report
+       · opt out with localStorage 'rf-noerr' = '1' */
+  const ERR_EVERY=60000, ERR_BATCH=10, ERR_QCAP=ERR_BATCH*4;
+  let errQ=new Map();
+  const errOff=()=>{ try{ return localStorage.getItem('rf-noerr')==='1'; }catch(e){ return false; } };
+  function errPush(rec){
+    try{
+      if(!rec||errOff()||errQ.size>=ERR_QCAP)return;
+      const key=(rec.level||'')+'|'+(rec.where||'')+'|'+(rec.msg||'');
+      if(errQ.has(key))return;
+      errQ.set(key,{where:rec.where,level:rec.level,msg:rec.msg,name:rec.name,
+        stack:String(rec.stack||'').split('\n').slice(0,8).join('\n')});
+    }catch(e){}                                  // the funnel is not a place to throw
+  }
+  function errSend(){
+    try{
+      if(!errQ.size||errOff()||!(window.RFNet&&RFNet.online))return;
+      const batch=[...errQ.values()].slice(0,ERR_BATCH);
+      errQ=new Map();
+      RFNet.sendErrors(batch,RFNet.build);
+    }catch(e){}
+  }
+  RF.on('error',errPush);
+  (RF.errors||[]).forEach(errPush);              // whatever broke before this line ran
+  setInterval(()=>{ if(!document.hidden)errSend(); },ERR_EVERY);
+  /* The periodic flush skips a hidden tab, but the moment it BECOMES hidden is
+     the last one where a fetch still has a chance — and a tab being closed is
+     exactly when the fault nobody saw matters most. */
+  document.addEventListener('visibilitychange',()=>{ if(document.hidden)errSend(); });
 }
 
 
@@ -5093,6 +5179,21 @@ RF.audio = {
 };
 RF.fn.setMuted = setMuted;
 RF.fn.payDividends = payDividends;
+
+/* Keep the four overlays' aria-hidden honest. The markup declares them hidden
+   because that is what they are at boot, and a static lie is worse than no
+   attribute at all: a screen reader would either read a closed market as open
+   forever, or refuse to read the open one. Every panel already announces itself
+   on one bus, so one listener covers all four — and any panel a mod opens later
+   through the same event gets it for free. */
+(function(){
+  const EL = { market:'market', inventory:'inv', casino:'casino', harbor:'harbor' };
+  RF.on('panel', (name, open) => {
+    const el = document.getElementById(EL[name]); if(!el) return;
+    el.setAttribute('aria-hidden', open ? 'false' : 'true');
+  });
+})();
+
 RF._boot();
 
 // idle preview loop: the island is already alive behind the start menu

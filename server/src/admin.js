@@ -54,6 +54,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 // it exports is the same object index.js and realtime.js already share.
 import * as DB from './db.js';
 import { ipRateLimit } from './middleware.js';
+import * as CLIENT_ERRORS from './clienterrors.js';
 
 /* ------------------------------------------------------------- tuning ----- */
 const RL_WINDOW_MS = 60 * 1000;      // rate-limit window
@@ -1071,6 +1072,17 @@ export function mountAdmin(app, deps = {}) {
   });
 
   /* ---------------------------------------------------------------- stats -- */
+  /* What is breaking in players' browsers right now. Held in memory by
+     clienterrors.js, newest first, identical faults collapsed with a count — so
+     one player in a render loop reads as one row, not as the whole window. */
+  router.get('/clienterrors', (req, res) => {
+    const limit = Number.parseInt(req.query.limit, 10);
+    res.json({
+      ...CLIENT_ERRORS.stats(),
+      entries: CLIENT_ERRORS.recent(Number.isFinite(limit) ? limit : 100),
+    });
+  });
+
   router.get('/stats', (req, res) => {
     sweepSanctions();
 

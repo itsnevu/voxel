@@ -105,6 +105,7 @@ ReelFortune3D/
 │   ├── deploy/           ← nginx, systemd unit, backup script
 │   └── README.md         ← full VPS install guide (in Indonesian)
 ├── contracts/            ← IsleLedger.sol — the deed wall. A trophy, never a payment rail
+├── .github/workflows/    ← CI: every push runs the whole suite on Node 18 and 20
 ├── sw.js · manifest.webmanifest · icon*.svg/png · og-card.jpg  ← installable + share card
 └── README.md
 ```

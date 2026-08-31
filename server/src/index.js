@@ -21,6 +21,7 @@
        -> routes -> admin console -> notFoundJson -> static -> errorHandler
    ========================================================================== */
 
+import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +48,7 @@ import {
 } from './middleware.js';
 import { mountAdmin, isBanned } from './admin.js';
 import * as PROGRESS from './progress.js';
+import * as CLIENT_ERRORS from './clienterrors.js';
 
 const { initSchema, saves, sessions, actions: actionLog, deedsRepo, crews } = DB;
 
@@ -154,6 +156,56 @@ try {
 } catch (e) {
   log.error('could not read the schema version at boot', { err: e });
 }
+
+/* ----------------------------------------------------------------------------
+   BUILD_ID — which copy of the CLIENT this box is serving.
+
+   A tab left open across a deploy keeps running the JavaScript it loaded hours
+   ago. Today it finds out the hard way: a move comes back UNKNOWN_ACTION and
+   09-social tells the player a reload is the fix, one lost spin too late. The
+   client cannot answer "am I stale?" on its own — it has no idea what is
+   current — but the box serving the files does.
+
+   So: hash what we serve, once, at boot, and report it from /api/health. A
+   client that saw one value and later sees another knows to reload BEFORE it
+   loses a move. Content, not mtime — a redeploy that rewrites identical files
+   must not read as a new build and nag everyone for nothing.
+
+   Null when this box is API-only (nginx serving the static files itself, or a
+   test with an empty GAME_DIR); the field is then absent and the client simply
+   never runs the check.
+   -------------------------------------------------------------------------- */
+const BUILD_FILES = [
+  'index.html', 'game.js', 'net.js', 'sw.js',
+  ...Array.from({ length: 15 }, (_, i) => `mods/${String(i).padStart(2, '0')}-`),
+];
+
+function computeBuildId() {
+  try {
+    const h = crypto.createHash('sha256');
+    let seen = 0;
+    for (const entry of BUILD_FILES) {
+      /* The mod slots are listed by prefix: their short names are theirs to
+         change, and a rename is a new build either way. */
+      if (entry.endsWith('-')) {
+        const dir = path.join(GAME_DIR, 'mods');
+        let names = [];
+        try { names = fs.readdirSync(dir).filter((n) => n.startsWith(path.basename(entry))).sort(); }
+        catch { continue; }
+        for (const n of names) { h.update(n); h.update(fs.readFileSync(path.join(dir, n))); seen++; }
+        continue;
+      }
+      try { h.update(entry); h.update(fs.readFileSync(path.join(GAME_DIR, entry))); seen++; }
+      catch { /* not served from here; a missing file is not an error */ }
+    }
+    if (!seen) return null;                 // API-only box: nothing to stamp
+    return h.digest('hex').slice(0, 12);
+  } catch (e) {
+    log.warn('could not stamp the client build', { err: e });
+    return null;
+  }
+}
+const BUILD_ID = computeBuildId();
 
 /* One line an operator can paste into a bug report. Never a secret value —
    only whether one is configured. The admin field is deliberately NOT called
@@ -1375,6 +1427,62 @@ app.post('/api/report', requireAuth, requireNotBanned, (req, res) => {
 });
 
 /* ============================================================================
+   CLIENT ERRORS — POST /api/client-error
+
+   The one half of this game the server could never see. RF.err() funnels every
+   client fault into a 300-entry ring buffer inside somebody's tab, where the
+   only thing that reads it is that same player's notification drawer. A bug
+   that fires on one Android Chrome build and nowhere else has been invisible
+   from here since the day the game shipped.
+
+   requireAuth costs nothing it would otherwise catch: the client only posts
+   when RFNet.online is true, which already means signed in. It removes the
+   anonymous flood surface completely, and it is what makes "how many DIFFERENT
+   players hit this" answerable — the number that separates a broken build from
+   one person with a broken extension.
+
+   The user agent is read from the REQUEST HEADER, never from the body: a client
+   that can name its own browser can name someone else's.
+   ========================================================================== */
+const CLIENT_ERROR_BATCH = 10;          // faults accepted per post; the rest are dropped
+const clientErrorLimit = ipRateLimit({
+  max: 12, windowMs: 10 * 60 * 1000,
+  message: 'too many error reports, slow down',
+});
+
+app.post('/api/client-error', clientErrorLimit, requireAuth, requireNotBanned, (req, res) => {
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+  const list = Array.isArray(body.errors) ? body.errors.slice(0, CLIENT_ERROR_BATCH) : [];
+  if (!list.length) return httpErr(res, 400, 'MISSING_ERRORS', 'nothing to record');
+
+  const ua = String(req.get('user-agent') || '').slice(0, 200);
+  const build = body.build;
+  let kept = 0;
+
+  for (const raw of list) {
+    if (!raw || typeof raw !== 'object') continue;
+    try {
+      const rec = CLIENT_ERRORS.add({
+        where: raw.where, level: raw.level, msg: raw.msg, name: raw.name,
+        stack: raw.stack, build, ua, userId: req.userId,
+      });
+      kept++;
+      /* The durable copy. The ring buffer is what an operator reads live; this
+         is what is still there tomorrow. Logged once per POST per fault, not
+         once per occurrence — `count` carries the volume. */
+      log.warn('client fault', {
+        where: rec.where, level: rec.level, msg: rec.msg, name: rec.name,
+        build: rec.build, count: rec.count, userId: req.userId,
+      });
+    } catch (e) {
+      log.error('client fault record failed', { userId: req.userId, err: e });
+    }
+  }
+
+  res.json({ ok: true, kept });
+});
+
+/* ============================================================================
    HEALTH AND READINESS
    ----------------------------------------------------------------------------
    Two endpoints, because a proxy asks two different questions:
@@ -1431,6 +1539,10 @@ function healthFacts() {
     uptime: process.uptime(),
     epoch: mktEpochNow(),
     schemaVersion: SCHEMA_VERSION,
+    /* Absent, not null, on an API-only box: the client tests for the field's
+       presence and skips the whole staleness check when there is nothing to
+       compare against. */
+    ...(BUILD_ID ? { build: BUILD_ID } : {}),
     online,
     serverTime: nowMs()
   };

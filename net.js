@@ -38,6 +38,20 @@ const store=(k,v)=>{ try{ v==null?localStorage.removeItem(k):localStorage.setIte
    so it stops promising server rolls it can no longer get. */
 const FAIL_LIMIT=3, HEAL_MIN=5000, HEAL_MAX=60000;
 function setReachable(v){ if(reachable===v)return; reachable=v; Net._emit('reachable',v); }
+
+/* Which copy of the client this box is serving. The FIRST answer is what we are
+   running — we were loaded from it. Any later answer that differs means a deploy
+   landed underneath a tab still executing the old JavaScript, and the honest
+   thing is to say so before a move comes back UNKNOWN_ACTION and costs the
+   player a spin. Said once: someone who keeps playing anyway has decided, and a
+   nag every five minutes is its own bug. Absent field (an API-only box that
+   serves no game files) means there is nothing to compare and we never ask. */
+let buildSeen='', buildToldStale=false;
+function noteBuild(d){
+  const b=d&&d.build; if(!b)return;
+  if(!buildSeen){ buildSeen=b; return; }
+  if(b!==buildSeen&&!buildToldStale){ buildToldStale=true; Net._emit('stale',b); }
+}
 /* One answer to 'is the game server up', shared by probe() and healTick() so the
    two can never disagree about the same reply: a status proves something spoke,
    but 502-504 is the proxy apologising and 404 is a box with no /api/health on it
@@ -60,7 +74,7 @@ async function healTick(){ healTmr=null; healing=true;
   try{
     if(reachable||!base)return;
     let alive=false;
-    try{ await req('/api/health',{auth:false}); alive=true; }
+    try{ noteBuild(await req('/api/health',{auth:false})); alive=true; }
     catch(e){ lastError=e.message; alive=answered(e); }
     if(gen!==healGen||reachable)return;      // stopHeal() or a live request settled it while we waited
     if(alive){ netFails=0; healWait=0; setReachable(true); return; }
@@ -120,7 +134,7 @@ const Net={
      database, so timing it measures the server and not SQLite. */
   async probe(){
     if(!base){ stopHeal(); setReachable(false); return false; }
-    try{ await req('/api/health',{auth:false}); }
+    try{ noteBuild(await req('/api/health',{auth:false})); }
     catch(e){ lastError=e.message;
       /* A 500 still proves someone is home; a gateway code or a missing endpoint
          does not, and calling those reachable handed the economy to a box that
@@ -128,6 +142,18 @@ const Net={
       if(!answered(e)){ setReachable(false); startHeal(); return false; }
     }
     netFails=0; stopHeal(); setReachable(true); return true;
+  },
+
+  /* The build this box is serving, as of the last health answer we saw. '' when
+     nothing has answered yet, or when the box serves no game files to stamp. */
+  get build(){ return buildSeen; },
+  /* One cheap health call whose only job is the staleness compare. Swallows
+     everything: a failed check must never surface as a game error — probe() and
+     healTick() are what decide whether the server is up. */
+  async checkBuild(){
+    if(!base)return '';
+    try{ noteBuild(await req('/api/health',{auth:false})); }catch(e){}
+    return buildSeen;
   },
 
   async register(u,p){
@@ -195,6 +221,13 @@ const Net={
   /* Public clock for the hourly fishing derby · polled from the render loop, so
      it goes through req() for the 12s abort rather than a bare fetch. */
   derby(){ return req('/api/derby',{auth:false}); },
+
+  /* Client faults, batched. Fire-and-forget on purpose: a report that raises an
+     error would be reported, and that is a loop — so every failure here, network
+     or 4xx, dies right where it happened. */
+  sendErrors(errors,build){
+    return req('/api/client-error',{method:'POST',body:{build:build||'',errors:errors||[]}})
+      .catch(()=>null); },
 
   /* ---- Reporting someone. The socket route ({t:'report'}) only reaches a peer
      who is still standing in your room; the moment they sail off, the id is gone

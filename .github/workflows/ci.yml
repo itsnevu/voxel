@@ -1,0 +1,54 @@
+# The 142 tests in server/test/ only protected anything if somebody remembered to
+# type `npm test`. This is that somebody.
+#
+# It covers BOTH halves of the repo: the suite boots real servers for the API and
+# websocket tests, and client-contract.test.js reads game.js, index.html and the
+# fifteen mods off disk — so a renamed mod, a dropped script tag, an event nobody
+# emits or an action name that drifted from the server all fail here too.
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch makes the previous run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests · node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor declared in server/package.json engines, and the version the
+        # deploy actually runs. A break on either is worth knowing about.
+        node: ['18', '20']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      # better-sqlite3 is native. `npm ci` builds it against this exact Node, and
+      # is the only install that respects the lockfile.
+      - name: Install
+        working-directory: server
+        run: npm ci
+
+      # No pipe. `node --test | tail` returns tail's exit code, which is how a
+      # suite that never booted once read as a clean run on a laptop.
+      - name: Test
+        working-directory: server
+        run: npm test

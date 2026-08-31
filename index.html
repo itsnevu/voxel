@@ -760,13 +760,13 @@
 </div>
 <div id="emotebar"></div>
 <div id="capcard"></div>
-<div id="toasts"></div>
-<div id="reveal"></div>
+<div id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
+<div id="reveal" role="status" aria-live="polite"></div>
 <button id="mute" type="button">♪ SOUND</button>
 
-<div class="overlay" id="market">
+<div class="overlay" id="market" role="dialog" aria-modal="true" aria-labelledby="marketH" aria-hidden="true">
   <div class="card">
-    <div class="card-head"><div><div class="sub" style="color:var(--gold)">Fishmonger · sell &amp; upgrade</div><h2>THE MARKET</h2></div><button class="x" id="marketX" type="button">CLOSE · ESC</button></div>
+    <div class="card-head"><div><div class="sub" style="color:var(--gold)">Fishmonger · sell &amp; upgrade</div><h2 id="marketH">THE MARKET</h2></div><button class="x" id="marketX" type="button" aria-label="Close the market">CLOSE · ESC</button></div>
     <div id="mktBanner"></div>
     <div class="seclab">Bounty Board <span style="color:var(--faint);font-weight:400">· rerolls every rotation</span></div>
     <div id="bountyList"></div>
@@ -786,9 +786,9 @@
   </div>
 </div>
 
-<div class="overlay" id="inv">
+<div class="overlay" id="inv" role="dialog" aria-modal="true" aria-labelledby="invH" aria-hidden="true">
   <div class="card">
-    <div class="card-head"><div><div class="sub" style="color:var(--teal)">Your gear &amp; goods</div><h2>INVENTORY</h2></div><button class="x" id="invX" type="button">CLOSE · ESC</button></div>
+    <div class="card-head"><div><div class="sub" style="color:var(--teal)">Your gear &amp; goods</div><h2 id="invH">INVENTORY</h2></div><button class="x" id="invX" type="button" aria-label="Close the inventory">CLOSE · ESC</button></div>
     <div class="tabs">
       <button class="tabbtn sel" data-tab="bag" type="button">BAG</button>
       <button class="tabbtn" data-tab="dex" type="button">FISHDEX</button>
@@ -825,9 +825,9 @@
 
 <div id="winFlash"></div>
 
-<div id="casino">
+<div id="casino" role="dialog" aria-modal="true" aria-labelledby="casinoH" aria-hidden="true">
   <div class="card-c">
-    <div class="card-head"><div><div class="sub" style="color:var(--rose)">Gamble a fish · double or nothing</div><h2>THE SPINNING EEL</h2></div><button class="x" id="casinoX" type="button">ESC</button></div>
+    <div class="card-head"><div><div class="sub" style="color:var(--rose)">Gamble a fish · double or nothing</div><h2 id="casinoH">THE SPINNING EEL</h2></div><button class="x" id="casinoX" type="button" aria-label="Leave the roulette table">ESC</button></div>
     <div class="bet-lab">Stake</div>
     <div class="stake-list" id="stakeList"></div>
     <div class="bet-lab">Bet</div>
@@ -848,9 +848,9 @@
   </div>
 </div>
 
-<div class="overlay" id="harbor">
+<div class="overlay" id="harbor" role="dialog" aria-modal="true" aria-labelledby="harborH" aria-hidden="true">
   <div class="card">
-    <div class="card-head"><div><div class="sub" style="color:var(--teal)">Shipwright · build your boat &amp; set sail</div><h2>THE HARBOR</h2></div><button class="x" id="harborX" type="button">CLOSE · ESC</button></div>
+    <div class="card-head"><div><div class="sub" style="color:var(--teal)">Shipwright · build your boat &amp; set sail</div><h2 id="harborH">THE HARBOR</h2></div><button class="x" id="harborX" type="button" aria-label="Close the harbor">CLOSE · ESC</button></div>
     <div id="dockView"></div>
     <div id="dockCap"></div>
     <div class="seclab">Your vessel</div>
