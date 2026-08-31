@@ -4,6 +4,32 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Reel Fortune 3D · Voxel Fishing &amp; Mining Isle</title>
+<meta name="description" content="A voxel fishing, mining and gambling adventure across four themed islands. Fish the shores, work a living market, and gamble your best catch at a real 3D roulette table.">
+<meta name="theme-color" content="#0a1418">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Reel Fortune">
+<!-- The share card. These paths are relative so the game keeps working from
+     file:// and from any folder it is dropped into; the crawlers that matter
+     resolve them against the page URL. If you ever pin a real domain, make
+     og:image and twitter:image ABSOLUTE (https://your.domain/og-card.jpg) —
+     a few scrapers still refuse to resolve a relative one. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Reel Fortune 3D">
+<meta property="og:title" content="Reel Fortune 3D">
+<meta property="og:description" content="Fish four islands, work a living market, and gamble your best catch at a real 3D roulette table. Double your fish — or the eel eats it.">
+<meta property="og:image" content="og-card.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Reel Fortune 3D — a teal voxel fish beside the game's title.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Reel Fortune 3D">
+<meta name="twitter:description" content="Fish four islands, work a living market, and gamble your best catch at a real 3D roulette table. Double your fish — or the eel eats it.">
+<meta name="twitter:image" content="og-card.jpg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- from file:// this request never resolves, so it must never hold up first paint: the
@@ -121,6 +147,33 @@
     backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
     border:1px solid rgba(57,215,196,.55);border-radius:10px;padding:9px 12px;outline:none;
     box-shadow:0 0 14px rgba(57,215,196,.2);}
+  /* the mute / report card · z-index 22 sits above toasts (20) and stays clear of
+     the mod bands that start at 24, per mods/SPEC.md §3 */
+  #peercard{position:fixed;z-index:22;width:236px;opacity:0;pointer-events:none;
+    transform:translateY(6px) scale(.97);transform-origin:bottom left;
+    transition:opacity .16s ease,transform .16s cubic-bezier(.2,.8,.2,1);}
+  #peercard.on{opacity:1;pointer-events:auto;transform:translateY(0) scale(1);}
+  #peercard .pc{background:var(--glass-sheen),var(--glass-strong);backdrop-filter:blur(18px) saturate(1.7);
+    -webkit-backdrop-filter:blur(18px) saturate(1.7);border:1px solid var(--glass-bd);border-radius:14px;
+    padding:11px 12px;box-shadow:var(--glass-hi),0 12px 32px rgba(2,8,10,.45);}
+  #peercard .pcn{font-family:var(--f-disp);font-size:13.5px;font-weight:700;color:var(--ink);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  #peercard .pcs{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin:2px 0 9px;}
+  #peercard .pcb{display:flex;gap:6px;}
+  /* the row above is `#id .class`, which outranks the user agent's own
+     [hidden]{display:none} — without this the Mute/Report row stays on screen
+     underneath the report form it was supposed to be replaced by */
+  #peercard [hidden]{display:none!important;}
+  #peercard .pcx{flex:1;font-family:var(--f-mono);font-size:11.5px;font-weight:600;color:var(--ink);
+    background:var(--glass-row);border:1px solid var(--glass-bd-soft);border-radius:9px;padding:7px 6px;
+    cursor:pointer;transition:border-color .12s,color .12s,background .12s;}
+  #peercard .pcx:hover{border-color:rgba(57,215,196,.6);color:var(--teal);}
+  #peercard .pcx.warn:hover{border-color:var(--rose);color:var(--rose);}
+  #peercard .pcw{width:100%;font-family:var(--f-mono);font-size:11.5px;color:var(--ink);
+    background:var(--glass-hud);border:1px solid rgba(255,93,122,.45);border-radius:9px;
+    padding:7px 9px;outline:none;margin-bottom:6px;}
+  #peercard .pcw::placeholder{color:var(--faint);}
+  body.photo #peercard,body.capcam #peercard{opacity:0!important;pointer-events:none!important;}
   #area{top:14px;left:50%;transform:translateX(-50%);z-index:5;font-family:var(--f-disp);font-weight:600;font-size:15px;
     letter-spacing:.14em;color:#fff;text-shadow:0 2px 8px rgba(0,0,0,.7);opacity:0;transition:opacity .4s;text-transform:uppercase;position:fixed;}
   #area.on{opacity:.95;}
@@ -870,5 +923,19 @@
 <script src="mods/12-boot.js"></script>
 <script src="mods/13-audio.js"></script>
 <script src="mods/14-npc.js"></script>
+<script>
+/* The offline rescue (sw.js) — strictly an add-on. A service worker needs a
+   secure context, so a file:// or plain-http page simply never asks for one and
+   plays exactly as it always has. Any failure is swallowed on purpose: nothing
+   about this game may depend on it. */
+if ('serviceWorker' in navigator &&
+    (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+  addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js').catch(function (e) {
+      if (window.RF && RF.err) RF.err('sw:register', e, 'warn');
+    });
+  });
+}
+</script>
 </body>
 </html>

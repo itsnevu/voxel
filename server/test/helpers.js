@@ -43,9 +43,19 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const SERVER_ROOT = path.resolve(HERE, '..');
 const ENTRY = path.join(SERVER_ROOT, 'src', 'index.js');
 
+/* `node --test` runs the suite files in parallel, one per core, and each of them
+   spawns its own Node + better-sqlite3 + ws. On a loaded laptop eight cold V8
+   starts at once genuinely take longer than a warm one, and a fixed 20s ceiling
+   turned that into a whole suite reported as "0 fail, 59 cancelled". So the
+   ceiling widens with each retry: a real breakage still fails fast on attempt 1,
+   while a box that is merely busy gets the extra seconds it actually needed. */
 const BOOT_TIMEOUT_MS = 20_000;
+const BOOT_TIMEOUT_STEP_MS = 15_000;
 const BOOT_POLL_MS = 50;
 const BOOT_ATTEMPTS = 4;
+/* Retrying into the same contention that just lost is how four attempts burn in
+   the time of one. Wait a beat, and a widening one. */
+const BOOT_BACKOFF_MS = 750;
 
 /** Every server this process started, so the exit hooks can still reap them. */
 const live = new Set();
@@ -107,7 +117,7 @@ function nextIp() {
 
 /* ---------------------------------------------------------------- boot ---- */
 
-async function bootOnce() {
+async function bootOnce(budgetMs = BOOT_TIMEOUT_MS) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reelfortune-test-'));
   const dbPath = path.join(dir, 'test.db');
   /* An empty static root: express.static must not be handed the real project
@@ -148,7 +158,7 @@ async function bootOnce() {
   live.add(handle);
 
   const startedAt = Date.now();
-  const deadline = startedAt + BOOT_TIMEOUT_MS;
+  const deadline = startedAt + budgetMs;
   let healthy = false;
   while (Date.now() < deadline) {
     if (exited) break;
@@ -202,10 +212,11 @@ export async function startServer() {
   let lastErr;
   for (let attempt = 1; attempt <= BOOT_ATTEMPTS; attempt++) {
     try {
-      const { handle, output } = await bootOnce();
+      const { handle, output } = await bootOnce(BOOT_TIMEOUT_MS + (attempt - 1) * BOOT_TIMEOUT_STEP_MS);
       return makeServer(handle, output);
     } catch (err) {
       lastErr = err;
+      if (attempt < BOOT_ATTEMPTS) await sleep(BOOT_BACKOFF_MS * attempt);
       /* Printed as it happens, not merely rethrown at the end. A suite that
          dies in before() is reported by node --test as "0 fail, N cancelled":
          the throw below never reaches a TAP diagnostic, so without this the
@@ -214,8 +225,13 @@ export async function startServer() {
       console.error(`[helpers] boot attempt ${attempt}/${BOOT_ATTEMPTS} failed: ${err.message}`);
     }
   }
+  /* The last attempt's reason is INLINE, not merely a `cause`. A throw from a
+     before() hook reaches node --test as "0 fail, N cancelled" with only this
+     message rendered — a pointer to logs "above" is worth nothing in a CI page
+     that shows the summary and little else. */
   throw new Error(
-    `no server booted in ${BOOT_ATTEMPTS} attempts — see the attempt logs above`,
+    `no server booted in ${BOOT_ATTEMPTS} attempts · last failure: ` +
+    `${lastErr ? lastErr.message : 'unknown'}`,
     { cause: lastErr });
 }
 

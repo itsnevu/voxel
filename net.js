@@ -196,6 +196,15 @@ const Net={
      it goes through req() for the 12s abort rather than a bare fetch. */
   derby(){ return req('/api/derby',{auth:false}); },
 
+  /* ---- Reporting someone. The socket route ({t:'report'}) only reaches a peer
+     who is still standing in your room; the moment they sail off, the id is gone
+     and there is nobody left to name. This is the door that stays open: it takes
+     the NAME, needs no socket, and lands in the same moderation queue. Requires a
+     session — an anonymous report is a free way to flood that queue. ---- */
+  report(target,reason){
+    return req('/api/report',{method:'POST',
+      body:{target:String(target||'').slice(0,20),reason:String(reason||'').slice(0,120)}}); },
+
   /* ---- CREW: a berth on someone's boat is granted by its captain, never
      taken. request() only knocks; admit()/deny() are the captain's call. ---- */
   crew(){ return req('/api/crew'); },

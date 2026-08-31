@@ -4710,7 +4710,7 @@ function chatPush(name,msg,cls,peerId){ if(!chatLog)return;
   const d=document.createElement('div'); d.className='cmsg '+(cls||'');
   if(name){ const who=document.createElement('b'); who.textContent=name+': ';
     who.title='click to mute / report '+name; who.style.cursor='pointer';
-    who.onclick=()=>chatMenu(name,peerId); d.appendChild(who); }
+    who.onclick=()=>chatMenu(name,peerId,who); d.appendChild(who); }
   d.appendChild(document.createTextNode(msg));  // textContent → no HTML injection
   chatLog.appendChild(d); RF.emit('chat',{name:name||'',msg:msg,cls:cls||'',peerId:peerId,el:d});
   while(chatLog.children.length>60)chatLog.removeChild(chatLog.firstChild);
@@ -4722,20 +4722,79 @@ function openChat(){ if(!chatIn||!RFNet||!RFNet.wsReady)return;
   chatOpen=true; sfx.click(); chatBox.classList.add('show','open'); chatIn.style.display='block'; chatIn.focus(); }
 function closeChat(){ chatOpen=false; if(chatIn){chatIn.blur();chatIn.style.display='none';chatIn.value='';}
   if(chatBox)chatBox.classList.remove('open'); }
+/* One report, two doors. The socket carries an id and only reaches someone still
+   standing in this room; the moment they sail off that id names nobody, and the
+   old code silently dropped the report on the floor (RFNet.report did not exist).
+   The HTTP route takes the NAME instead and lands in the same moderation queue,
+   so "they said it and left" is finally reportable. */
+function sendReport(name,peerId,why){
+  const said=()=>chatPush('','· reported '+name+'. Thanks for keeping the isle friendly. ·','sys');
+  if(peerId!=null&&window.RFNet&&RFNet.wsReady){ RFNet.send({t:'report',id:peerId,reason:why}); said(); return; }
+  if(window.RFNet&&RFNet.online&&RFNet.report){
+    RFNet.report(name,why).then(said).catch(e=>chatPush('','· report not sent · '+
+      ((e&&e.data&&e.data.error)||e.message||'try again in a moment')+' ·','sys'));
+    return; }
+  chatPush('','· sign in to report someone · muting them still works ·','sys'); }
+
+/* Click a name -> a small card. This used to be two `prompt()` boxes that asked
+   the player to "Type m or r" — the browser's own grey modal, which drops pointer
+   lock, cannot be styled, and is banned for every mod by mods/SPEC.md §11. Same
+   two choices, same one click to undo a mute, rendered like the rest of the isle. */
+const peerCard=(function(){
+  let root=null,inp=null,nameEl=null,subEl=null,cur=null,curId=null;
+  const hide=()=>{ if(root)root.classList.remove('on'); cur=null; };
+  function build(){
+    root=document.createElement('div'); root.id='peercard';
+    root.innerHTML='<div class="pc"><div class="pcn"></div><div class="pcs"></div>'
+      +'<div class="pcb" data-v="pick"><button class="pcx" data-a="mute">Mute</button>'
+      +'<button class="pcx warn" data-a="ask">Report</button></div>'
+      +'<div data-v="why" hidden><input class="pcw" maxlength="120" placeholder="what happened? (optional)">'
+      +'<div class="pcb"><button class="pcx warn" data-a="send">Send report</button>'
+      +'<button class="pcx" data-a="back">Back</button></div></div></div>';
+    document.body.appendChild(root);
+    nameEl=root.querySelector('.pcn'); subEl=root.querySelector('.pcs'); inp=root.querySelector('.pcw');
+    const view=v=>{ root.querySelector('[data-v="pick"]').hidden=(v!=='pick');
+                    root.querySelector('[data-v="why"]').hidden=(v!=='why'); };
+    root.addEventListener('click',e=>{
+      const a=e.target&&e.target.getAttribute&&e.target.getAttribute('data-a'); if(!a||!cur)return;
+      e.stopPropagation(); sfx.click();
+      if(a==='mute'){ mutedNames.add(cur); saveMuted();
+        if(curId!=null&&window.RFNet)RFNet.send({t:'mute',id:curId});
+        chatPush('','· muted '+cur+' · click their name again to undo ·','sys'); hide(); }
+      else if(a==='ask'){ view('why'); inp.value=''; inp.focus(); }
+      else if(a==='back'){ view('pick'); }
+      else if(a==='send'){ sendReport(cur,curId,inp.value.trim().slice(0,120)); hide(); } });
+    /* The card owns the keyboard while it is up: without this every letter typed
+       into the reason also walks the hero, because movement reads the same
+       document-level keydown that chatIn already has to stop. */
+    inp.addEventListener('keydown',e=>{ e.stopPropagation();
+      if(e.code==='Escape'){ hide(); return; }
+      if(e.code==='Enter'){ sendReport(cur,curId,inp.value.trim().slice(0,120)); hide(); } });
+    addEventListener('pointerdown',e=>{ if(root.classList.contains('on')&&!root.contains(e.target))hide(); });
+    addEventListener('keydown',e=>{ if(e.code==='Escape'&&root.classList.contains('on')){ hide(); e.stopPropagation(); } },true);
+    return root; }
+  return { hide, open(name,peerId,anchor){
+    if(!root)build();
+    cur=name; curId=peerId;
+    nameEl.textContent=name;
+    subEl.textContent=(peerId!=null&&window.RFNet&&RFNet.wsReady)?'on this isle right now':'no longer in the room';
+    root.querySelector('[data-v="pick"]').hidden=false; root.querySelector('[data-v="why"]').hidden=true;
+    root.classList.add('on');
+    /* Anchored to the name that was clicked, then pulled back inside the viewport:
+       the chat log grows upward from the bottom-left, so a card hung off the last
+       line would otherwise hang off the bottom of the screen. */
+    const r=anchor&&anchor.getBoundingClientRect?anchor.getBoundingClientRect():null;
+    const w=root.offsetWidth||236, h=root.offsetHeight||150;
+    const x=r?Math.min(Math.max(8,r.left-6),innerWidth-w-8):12;
+    const y=r?Math.min(Math.max(8,r.top-h-8),innerHeight-h-8):innerHeight-h-90;
+    root.style.left=x+'px'; root.style.top=y+'px'; } };
+})();
 /* click a name -> mute, unmute or report. Deliberately tiny and reversible. */
-function chatMenu(name,peerId){
+function chatMenu(name,peerId,anchor){
   if(mutedNames.has(name)){ mutedNames.delete(name); saveMuted();
     if(peerId!=null&&RFNet)RFNet.send({t:'unmute',id:peerId});
     chatPush('','· unmuted '+name+' ·','sys'); return; }
-  const act=prompt('“'+name+'”\n\n  m = mute (only you stop seeing them)\n  r = report to the server\n\nType m or r:','m');
-  if(!act)return;
-  if(act.toLowerCase().startsWith('m')){ mutedNames.add(name); saveMuted();
-    if(peerId!=null&&RFNet)RFNet.send({t:'mute',id:peerId});
-    chatPush('','· muted '+name+' · click their name again to undo ·','sys'); }
-  else if(act.toLowerCase().startsWith('r')){ const why=(prompt('What happened? (short)','')||'').slice(0,120);
-    if(peerId!=null&&RFNet)RFNet.send({t:'report',id:peerId,reason:why});
-    else if(RFNet&&RFNet.report)RFNet.report(name,why);
-    chatPush('','· reported '+name+'. Thanks for keeping the isle friendly. ·','sys'); } }
+  peerCard.open(name,peerId,anchor); }
 const CHAT_HELP='commands:  /mute NAME   /unmute NAME   /report NAME reason   /help';
 function chatCommand(m){
   const [cmd,...rest]=m.slice(1).split(/\s+/), who=rest[0]||'';
@@ -4745,9 +4804,11 @@ function chatCommand(m){
   if(c==='help'){ chatPush('',CHAT_HELP,'sys'); return true; }
   if(c==='mute'&&who){ mutedNames.add(who); saveMuted(); chatPush('','· muted '+who+' ·','sys'); return true; }
   if(c==='unmute'&&who){ mutedNames.delete(who); saveMuted(); chatPush('','· unmuted '+who+' ·','sys'); return true; }
+  /* Reporting by name from the command line has to work for someone who has
+     already left — that is most of why anyone types it instead of clicking. No
+     peer id found is not a failure here, it just means the HTTP door. */
   if(c==='report'&&who){ const q=peers&&[...peers.entries()].find(([,p])=>p.name===who);
-    if(q&&RFNet)RFNet.send({t:'report',id:q[0],reason:rest.slice(1).join(' ').slice(0,120)});
-    chatPush('','· reported '+who+' ·','sys'); return true; }
+    sendReport(who,q?q[0]:null,rest.slice(1).join(' ').slice(0,120)); return true; }
   if(c){ chatPush('','unknown command. '+CHAT_HELP,'sys'); return true; }
   return false; }
 if(chatIn)chatIn.addEventListener('keydown',e=>{ e.stopPropagation();

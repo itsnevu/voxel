@@ -91,11 +91,29 @@ Shares drop from play (mining is the main source; a diamond guarantees one). Buy
 
 ```
 ReelFortune3D/
-├── index.html       ← page, HUD, minimap, menus, styling  (open this)
-├── game.js          ← all game code (world, fishing, mining, market, exchange, roulette)
-├── lib/three.min.js ← the Three.js engine (r128)
+├── index.html            ← page, HUD, minimap, menus, styling  (open this)
+├── game.js               ← the engine: world, fishing, mining, market, exchange, roulette
+├── net.js                ← RFNet — the optional bridge to the server (absent = offline play)
+├── lib/three.min.js      ← the Three.js engine (r128)
+├── mods/                 ← 15 self-contained feature slots layered on top of game.js
+│   ├── 00-notify.js … 14-npc.js
+│   ├── SPEC.md           ← the mod contract: slots, keys, z-index bands, error codes
+│   └── RF-API.txt        ← every engine handle a mod may touch (generated from game.js)
+├── server/               ← optional authoritative Node + SQLite backend
+│   ├── src/              ← auth, realtime (WebSocket), economy rules, moderation console
+│   ├── test/             ← the test suite  (`cd server && npm test`)
+│   ├── deploy/           ← nginx, systemd unit, backup script
+│   └── README.md         ← full VPS install guide (in Indonesian)
+├── contracts/            ← IsleLedger.sol — the deed wall. A trophy, never a payment rail
+├── sw.js · manifest.webmanifest · icon*.svg/png · og-card.jpg  ← installable + share card
 └── README.md
 ```
+
+Two of those are genuinely optional. **`mods/`** is a layer: every file hangs itself off the
+`RF` host `game.js` publishes, never edits the engine, and a mod that throws while loading is
+caught and reported instead of taking the game down. **`server/`** is a separate program — the
+game never needs it, but when it is there and you are signed in, it becomes the authority on
+every roll and every coin, and the console can no longer mint anything.
 
 ## 🛠️ Editing
 
@@ -108,8 +126,22 @@ Plain JavaScript — no build step. Open `game.js` and tweak:
 
 Save, refresh, play.
 
+Adding a **feature** rather than tuning one? It goes in a `mods/` slot, not in `game.js` —
+read [`mods/SPEC.md`](mods/SPEC.md) first. Changing anything the economy pays out means
+changing it **twice**, in `game.js` and in `server/src/game/rules.js`; `server/test/parity.test.js`
+fails the build if the two ever disagree, and `client-contract.test.js` fails it if a mod slot,
+an event or an action name drifts.
+
 ## ✨ Everything inside
 
 96×96 procedural islands · BFS-carved dirt paths · entrance monument gate · day/night cycle with dusk palettes · rain & thunderstorms · swaying grass, cherry trees, flowers, mushrooms · signature hero with a real pixel face, straw hat & swaying scarf (recolorable) · animated tool props (rod/pick/axe in hand) · fishing line & bobber · voxel particle bursts, screen shake & hit-stop · coin-fly & pearl toasts · glassmorphism UI with pixel-art icons · minimap with POIs & treasure X · hotbar + tabbed inventory · Fishdex with ??? silhouettes · treasure maps · achievements · procedural music & sfx (♪ to mute) · a physical 3D roulette table the camera flies onto · title screen with an orbiting camera and live map previews of all four worlds.
 
-Built with [Three.js](https://threejs.org) r128. Pure client-side, MIT-spirited — no wallet, no server, no blockchain: just fortune.
+Built with [Three.js](https://threejs.org) r128, no build step, no dependencies past the engine itself.
+
+Opened from a folder it is **pure client-side** and stays that way: your island lives in this
+browser and nothing leaves it. Point it at a `server/` and you get sign-in, multiplayer, chat,
+crews, the leaderboard and cloud saves — and the server takes over every roll, so the economy
+stops being editable from the console. The wallet sign-in is an **identity** only: it signs a
+plain-text message to prove an address is yours. No transaction is ever built, no chain is read,
+no funds are touched, and the deed wall in `contracts/` is a trophy shelf with hash cosplay —
+no value, ever. Just fortune.
