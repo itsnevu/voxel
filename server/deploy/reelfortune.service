@@ -4,12 +4,46 @@ Documentation=https://github.com/itsnevu/voxel
 After=network-online.target
 Wants=network-online.target
 
-# Kalau proses crash-loop terus, systemd menyerah setelah 5x gagal dalam 60 detik.
+# Kalau proses crash-loop terus, systemd menyerah setelah 5x gagal.
 # Kedua opsi ini HARUS berada di section [Unit] (systemd >= 230), bukan [Service].
 # Ubuntu 22.04 memakai systemd 249 dan 24.04 memakai 255, jadi kalau ditaruh di
 # [Service] systemd hanya mencatat "Unknown lvalue" dan diam-diam mengabaikannya.
-StartLimitIntervalSec=60
+#
+# Jendelanya dilebarkan dari 60 ke 300 detik dengan sengaja. Dengan RestartSec=5
+# jendela 60 detik hanya menangkap crash-loop yang rapat: proses yang mati sekali
+# tiap semenit akan restart selamanya dan tidak pernah masuk state "failed", jadi
+# tidak pernah memicu OnFailure. 300 detik membuat pola lambat itu ikut jatuh.
+StartLimitIntervalSec=300
 StartLimitBurst=5
+
+# Satu-satunya jalan keluar dari journal. Unit masuk state "failed" - dan baris
+# ini berbunyi - pada dua kejadian: exit 78 (lihat kontrak di [Service]) dan
+# start-limit habis. %n mengembang jadi "reelfortune.service", jadi satu template
+# melayani semua unit.
+#
+# HARUS DIPASANG OPERATOR. Tanpa filenya OnFailure gagal senyap dan kita kembali
+# ke keadaan sekarang: pesan .recover yang susah payah ditulis db.js terkubur di
+# journal yang tidak dibaca siapa pun. Buat dua file ini:
+#
+#   /etc/systemd/system/reelfortune-alert@.service
+#     [Unit]
+#     Description=Alert for %i
+#     [Service]
+#     Type=oneshot
+#     ExecStart=/usr/local/bin/reelfortune-alert %i
+#
+#   /usr/local/bin/reelfortune-alert  (chmod 755, root)
+#     kumpulkan `systemctl status --full --no-pager "$1"` plus
+#     `journalctl -u "$1" -n 40 --no-pager` lalu kirim ke tempat yang benar-benar
+#     dilihat manusia - pilih satu dan pastikan kredensialnya ada di mesin:
+#       ntfy    curl -sS -H 'Title: reelfortune DOWN' -d "$body" https://ntfy.sh/<topik-rahasia>
+#       webhook curl -sS -X POST -H 'Content-Type: application/json' -d "$json" <url>
+#       mail    printf '%s' "$body" | mail -s 'reelfortune DOWN' ops@example.com
+#               (butuh MTA yang sungguh terkonfigurasi: msmtp atau postfix, bukan
+#                sendmail bawaan yang diam-diam membuang surat)
+# Uji sekali dengan `systemctl start reelfortune-alert@reelfortune.service`
+# sebelum percaya, karena kegagalan unit alert sendiri tidak akan diberitahukan.
+OnFailure=reelfortune-alert@%n.service
 
 [Service]
 Type=simple
@@ -20,12 +54,55 @@ WorkingDirectory=/opt/reelfortune/server
 EnvironmentFile=/opt/reelfortune/server/.env
 ExecStart=/usr/bin/node src/index.js
 
-Restart=always
-RestartSec=3
+# ---------------------------------------------------------------------------
+# KONTRAK EXIT CODE - dipegang bersama src/index.js, jangan diubah sepihak
+# ---------------------------------------------------------------------------
+#    0  shutdown bersih lewat SIGTERM: WAL sudah di-checkpoint, DB ditutup rapi.
+#    1  kegagalan generik yang mungkin sementara -> RESTART. Termasuk
+#       uncaughtException dan EADDRINUSE; proses lama sering baru melepas port
+#       sedetik kemudian, jadi 1 memang jawaban yang benar untuk kasus itu.
+#   78  PENOLAKAN: mesinnya yang salah, restart tidak akan memperbaiki apa pun
+#       -> JANGAN RESTART. 78 = EX_CONFIG dari sysexits.h. Node tidak pernah
+#       memakainya sendiri (kode fatal internalnya di rentang 1-12) dan systemd
+#       memakai 200+ untuk kegagalan spawn miliknya, jadi 78 bebas tabrakan.
+#       Yang HARUS keluar dengan 78:
+#         - integrityCheck() di db.js menolak file DB yang korup
+#         - LEDGER_SECRET kosong atau masih nilai contoh saat IS_PROD
+#         - folder data SQLite tidak bisa ditulis (lihat ExecStartPre)
+#       Ketiganya butuh tangan manusia. Restart cuma membakar jatah start-limit.
+#
+# CATATAN JUJUR: per hari ini src/index.js masih exit(1) untuk ketiga kasus itu,
+# jadi baris di bawah belum menggigit. Sampai kode itu diganti 78, penolakan
+# tetap membakar start-limit lalu memicu OnFailure - sekitar 25 detik lebih
+# lambat, tapi tetap sampai ke manusia. Yang hilang cuma kecepatannya.
+RestartPreventExitStatus=78
 
-# Beri waktu SQLite menutup koneksi & flush WAL dengan rapi sebelum SIGKILL.
+# Gagal cepat dengan pesan yang bisa dibaca kalau folder SQLite tidak bisa
+# ditulis. Tanpa ini better-sqlite3 melempar SQLITE_CANTOPEN yang terlihat
+# persis seperti crash biasa dan ikut antre di crash-loop. Penyebabnya selalu
+# permanen (chown salah, ReadWritePaths tidak sinkron dengan DB_PATH), jadi
+# keluarnya 78. Perhatikan: RestartPreventExitStatus resminya hanya mengikat
+# proses utama, jadi untuk ExecStartPre jaminannya lebih lemah - yang pasti
+# pesannya jelas dan unit tetap berakhir failed lalu memicu OnFailure.
+ExecStartPre=/bin/sh -c 'test -w /opt/reelfortune/server/data || { echo "data dir tidak bisa ditulis oleh %u - cek chown dan ReadWritePaths"; exit 78; }'
+
+Restart=always
+# 3 detik terlalu rapat: kalau port lama belum dilepas, percobaan berikutnya
+# kena EADDRINUSE lagi dan jatah start-limit habis sebelum masalahnya reda.
+RestartSec=5
+
+# shutdown() di index.js punya deadline keras 8 detik (SHUTDOWN_GRACE_MS) untuk
+# menutup WebSocket dengan close code 1001, melipat WAL kembali ke file .db,
+# lalu menutup handle-nya. 20 detik memberi margin lebar tanpa membuat
+# `systemctl restart` terasa menggantung. Naikkan bersamaan kalau
+# SHUTDOWN_GRACE_MS pernah dinaikkan, jangan salah satu saja.
 KillSignal=SIGTERM
 TimeoutStopSec=20
+
+# WatchdogSec sengaja tidak dipasang: watchdog menuntut sd_notify berkala dan
+# Type=notify, sementara server ini polos tanpa dependensi. Penggantinya yang
+# jujur adalah probe eksternal ke GET /api/health - satu probe itu menutupi
+# korupsi DB, disk penuh, dan proses mati sekaligus.
 
 StandardOutput=journal
 StandardError=journal
@@ -70,6 +147,9 @@ UMask=0077
 # JANGAN set MemoryDenyWriteExecute=yes: JIT V8 milik Node butuh halaman
 # memori write+execute, dan service tidak akan mau start kalau diaktifkan.
 MemoryDenyWriteExecute=no
+
+# ProcSubset=pid juga sengaja dilewat walau berpasangan dengan ProtectProc:
+# ia ikut menyembunyikan /proc/cpuinfo, dan libuv membacanya untuk os.cpus().
 
 [Install]
 WantedBy=multi-user.target

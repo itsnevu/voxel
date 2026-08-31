@@ -32,7 +32,7 @@ import { requireAuth, mountAuth } from './auth.js';
 import { mountWalletAuth } from './wallet.js';
 import * as EV from './events.js';
 import { HANDLERS, RATE } from './game/actions.js';
-import { newState, normalizeState, BOATS, boatSeats, crewSlots, MAX_BOAT } from './game/rules.js';
+import { newState, normalizeState, int0, BOATS, boatSeats, crewSlots, MAX_BOAT } from './game/rules.js';
 import { payDividends, mktEpochNow } from './game/economy.js';
 // Both forms of the same module: the named imports are what the routes call,
 // the namespace is what admin.js feature-detects against (it looks for a kick
@@ -43,7 +43,7 @@ import { attach, onlineTotal, roomCount, broadcast, announceAll, closeAllSockets
 import { log, child, logLevel } from './log.js';
 import {
   requestId, securityHeaders, accessLog, notFoundJson, errorHandler,
-  installProcessGuards, onFatal
+  installProcessGuards, onFatal, ipRateLimit
 } from './middleware.js';
 import { mountAdmin, isBanned } from './admin.js';
 import * as PROGRESS from './progress.js';
@@ -432,20 +432,24 @@ function syncDeeds(userId, state) {
 /* ----------------------------------------------------------------------------
    Fields the server tracks nowhere and must therefore never echo back.
 
-   `ach` (achievements) and `deeds` (Isle Ledger trophies) are still evaluated
-   entirely in game.js. newState() seeds both empty and no handler in
-   game/actions.js ever writes to them, so what the server holds is always {}.
-   game.js's SRV.apply() copies every key of the reply over its own state — so
-   shipping those two empty objects wiped the player's achievements and deeds on
-   every single action. Saying nothing about them leaves the client holding the
-   only real copy, which is the safe answer while the evaluation lives there.
+   Empty, and that is the point. `ach` and `deeds` used to be listed here,
+   back when game.js was the only thing that evaluated them and the server held
+   a permanently empty {} that SRV.apply() would have copied straight over the
+   player's real trophy case. progress.js now owns both tables: they are paid
+   and stamped on the server after every action, mirrored into the ledger by
+   syncDeeds(), and so they belong in the reply.
 
-   NEXT PIECE OF WORK: move achievement and deed evaluation into the server
-   (rules for both, awarded inside the action handlers), then make these fields
-   authoritative and send them again — at which point syncDeeds() below finally
-   has something to mirror into the ledger table.
+   Withholding them was quietly lossy. The `earned` field next to the state is
+   a one-shot delta — it names what was won by THAT request — so a player who
+   signed in on a second device, or cleared local storage, had nothing to
+   rebuild from and saw an empty trophy case forever.
+
+   Both fields are additive for a client that does not read them: game.js copies
+   unknown keys onto its state and renders from its own copy, so an old build
+   sees its own values replaced by the server's authoritative ones and a build
+   that never looks at them is unaffected.
    -------------------------------------------------------------------------- */
-const CLIENT_OWNED_FIELDS = ['ach', 'deeds'];
+const CLIENT_OWNED_FIELDS = [];
 
 /** The state as the client may see it: everything the server actually owns. */
 function clientState(state) {
@@ -475,19 +479,21 @@ function stateEnvelope(state, extra) {
    than a bare "unauthorized".
 
    Reads and cosmetics stay open on purpose: a suspended player should still be
-   able to load the isle and read WHY they cannot act. Only the two doors that
-   move value are closed.
+   able to load the isle, see their crew and read WHY they cannot act. Every
+   door that MOVES something is closed: actions, saves, the ledger claim, every
+   crew mutation, and filing a report (a banned account reporting the people who
+   reported it is a retaliation channel, not a moderation one).
 
    isBanned() is fail-open by design (see admin.js): a broken sanctions table
    must never lock the whole playerbase out of their own accounts. The try/catch
    below says the same thing a second time, because a throw inside a gate is
    precisely how an authoritative server locks itself out of production.
 
-   TODO(realtime): the WebSocket authenticates once at connect, so an open
-   socket outlives the session a ban revokes. Refusing the upgrade for a banned
-   account, cutting a mid-session ban on the next heartbeat, and gagging a muted
-   player in chat all belong in realtime.js and are wired separately — see
-   "ENFORCEMENT WIRING" (4a–4d) in admin.js for the exact call sites.
+   The socket is covered too, in realtime.js: the handshake refuses a banned
+   account, the heartbeat cuts one banned mid-session within PING_MS, kick()
+   drops it the instant /api/admin/ban lands, and isMuted() gags chat. The
+   front doors are in auth.js and wallet.js, after the credential check so
+   neither becomes an oracle for who is suspended.
    ========================================================================== */
 function requireNotBanned(req, res, next) {
   let ban = null;
@@ -542,6 +548,12 @@ app.get('/api/state', requireAuth, (req, res) => {
 const ANTI_MACRO_WINDOW = 60 * 1000;   // look back one minute…
 const ANTI_MACRO_MAX = 60;             // …and allow at most this many of one action
 
+/* The handful of refusals a correct client can still collect through no fault
+   of its own: two players racing for the same node, and the auto-rig's own
+   cadence floor. actions.js owns the wording (mine/chop/catch); it is matched
+   here rather than exported because a refusal carries nothing but its message. */
+const CONTENDED_REFUSAL = /vein is already stripped|already felled that tree|resetting the line/i;
+
 app.post('/api/action/:name', requireAuth, requireNotBanned, (req, res) => {
   const name = String(req.params.name || '');
 
@@ -552,6 +564,28 @@ app.post('/api/action/:name', requireAuth, requireNotBanned, (req, res) => {
 
   const userId = req.userId;
   const t = nowMs();
+
+  /* Stamping the log is what the cooldown and the anti-macro window read back,
+     so it has to happen on EVERY attempt that got past those gates, not only on
+     the ones that succeeded. Marking only the success path made a rejected body
+     free: a client could hammer this route with an intent the handler refuses
+     and still pay for a full state load and dividend pass each time, at
+     whatever rate it liked, because nothing it did ever moved `last`.
+
+     But not every refusal is the caller's doing. A stripped vein, a felled tree
+     and a rig still resetting the line are decided by the world and by the
+     server clock, not by the body that was sent: charging them the per-action
+     cooldown lets whoever reached the node first spend YOUR next 500ms, and lets
+     a hair of auto-rig drift eat a manual 2500ms cast. Those go to a second lane
+     that the anti-macro window still sums — so hammering a stripped vein stays
+     bounded exactly as before — while `last`, and with it the cooldown, only
+     moves for an attempt the caller could have avoided making. */
+  const contendedLane = name + ':contended';
+  const markAttempt = (refusal) => {
+    const lane = (refusal && CONTENDED_REFUSAL.test(refusal)) ? contendedLane : name;
+    try { actionLog.mark(userId, lane); }
+    catch (e) { log.error('action log write failed', { userId, action: lane, err: e }); }
+  };
 
   // --- cooldown: one action may not fire faster than its RATE ---------------
   const minGap = RATE[name] || 0;
@@ -568,7 +602,10 @@ app.post('/api/action/:name', requireAuth, requireNotBanned, (req, res) => {
 
   // --- anti-macro: a human cannot sustain 60 of the same action per minute --
   try {
-    if (actionLog.countSince(userId, name, t - ANTI_MACRO_WINDOW) > ANTI_MACRO_MAX) {
+    const since = t - ANTI_MACRO_WINDOW;
+    const tries = actionLog.countSince(userId, name, since)
+                + actionLog.countSince(userId, contendedLane, since);
+    if (tries > ANTI_MACRO_MAX) {
       res.set('Retry-After', '60');
       return httpErr(res, 429, 'RATE_LIMIT', 'too fast', { retryAfter: ANTI_MACRO_WINDOW });
     }
@@ -587,6 +624,7 @@ app.post('/api/action/:name', requireAuth, requireNotBanned, (req, res) => {
     out = HANDLERS[name](state, req.body && typeof req.body === 'object' ? req.body : {});
   } catch (e) {
     log.error('action handler threw', { userId, action: name, err: e });
+    markAttempt();
     return httpErr(res, 500, 'ACTION_FAILED', 'action failed');
   }
 
@@ -594,6 +632,7 @@ app.post('/api/action/:name', requireAuth, requireNotBanned, (req, res) => {
     const msg = (out && out.error) ? String(out.error) : 'invalid action';
     // A rejected action still persists any dividends we just credited.
     if (dividends > 0) saves.put(userId, state);
+    markAttempt(msg);
     return httpErr(res, 400, 'ACTION_REJECTED', msg);
   }
 
@@ -672,8 +711,7 @@ app.post('/api/action/:name', requireAuth, requireNotBanned, (req, res) => {
   } catch (e) { log.error('progress evaluate failed', { userId, err: e }); }
 
   saves.put(userId, state);
-  try { actionLog.mark(userId, name); }
-  catch (e) { log.error('action log write failed', { userId, action: name, err: e }); }
+  markAttempt();
   syncDeeds(userId, state);
 
   res.json(stateEnvelope(state, {
@@ -719,30 +757,26 @@ app.post('/api/save', requireAuth, requireNotBanned, (req, res) => {
   //     sanitising here rather than a strict membership test.
   if (typeof body.titleId === 'string') {
     const ownsAny = state.ownedT && Object.keys(state.ownedT).length > 0;
-    const clean = body.titleId.replace(/[ -]/g, '').trim().slice(0, TITLE_MAX_LEN);
+    const clean = body.titleId.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, TITLE_MAX_LEN);
     const next = ownsAny ? clean : '';
     if (state.titleId !== next) { state.titleId = next; touched = true; }
   }
 
-  // --- ach / deeds: progress.js now evaluates both on the server, so these are
-  //     accepted APPEND-ONLY (a key may appear and a block number may rise,
-  //     never fall) purely so a save written by an older client is not lost.
-  //     Nothing here pays a coin: the reward lives in PROGRESS.evaluate().
-  for (const field of ['ach', 'deeds']) {
-    const incoming = body[field];
-    if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) continue;
-    if (!state[field] || typeof state[field] !== 'object') state[field] = {};
-    let n = 0;
-    for (const key of Object.keys(incoming)) {
-      if (n++ > 200) break;                              // no unbounded growth
-      if (!/^[a-zA-Z0-9_]{1,32}$/.test(key)) continue;
-      const v = Number(incoming[key]);
-      if (!Number.isFinite(v) || v < 0) continue;
-      const cur = Number(state[field][key]) || 0;
-      const next = Math.trunc(v);
-      if (next > cur) { state[field][key] = next; touched = true; }
-    }
-  }
+  /* --- ach / deeds: NOT accepted. body.ach and body.deeds are read and dropped.
+     Restricting the merge to ids progress.js defines closed the smaller hole and
+     left the larger one open: membership says an id is real, never that it was
+     earned. The predicates in progress.js are the only thing that knows, and
+     they run in PROGRESS.evaluate() on the action route, so a merge here stamped
+     genuine deeds onto accounts that had done nothing — syncDeeds() mirrored them
+     into the ledger table and /api/ledger/claim HMAC-signed them for real.
+     Worse for honest players: evaluate() skips any id already stamped, so a
+     pre-stamped ach map burned every bounty behind it — the full table is 16,575
+     coins, destroyed on the first save after sign-in by a client that had played
+     offline. Nothing the client posts can prove either kind of progress anyway:
+     no route lets a body write stats, dex, worlds or tool levels, so the server's
+     own state is the only evidence there is. evaluate() re-derives both tables
+     from it after every action and pays what is owed, which is exactly the
+     migration a legacy save needs. */
 
   // --- tipEpoch: the kiosk sells a peek at the NEXT epoch's market mods for
   //     30 pearls, so accepting an arbitrary value would hand out the tip for
@@ -921,7 +955,7 @@ app.get('/api/ledger', requireAuth, (req, res) => {
   res.json({ deeds: rows, epoch: mktEpochNow(), serverTime: nowMs() });
 });
 
-app.post('/api/ledger/claim', requireAuth, (req, res) => {
+app.post('/api/ledger/claim', requireAuth, requireNotBanned, (req, res) => {
   if (!LEDGER_SECRET) {
     return httpErr(res, 503, 'LEDGER_DISABLED', 'ledger signing is not configured');
   }
@@ -1083,13 +1117,34 @@ app.get('/api/crew', requireAuth, (req, res) => {
   res.json(crewView(req.userId, me ? me.username : ''));
 });
 
-/* ---- GET /api/crew/captains — hulls with a free berth, most recent first -- */
-app.get('/api/crew/captains', requireAuth, (req, res) => {
-  let rows = [];
-  try { rows = saves.captains(CREW_LIST_LIMIT * 2, 1) || []; }
-  catch (e) {
-    log.error('captain listing failed', { userId: req.userId, err: e });
-    return httpErr(res, 500, 'UNAVAILABLE', 'unavailable');
+/* ---- GET /api/crew/captains — hulls with a free berth, most recent first --
+   The listing query is the most expensive read in the file: two json_extract
+   calls and a correlated COUNT per row, over every save, run synchronously by
+   better-sqlite3 on the only thread there is. One client polling it in a loop
+   used to stall the 10Hz tick for everybody, so it gets two ceilings — a shared
+   cache so the query runs at most once per CAPTAINS_TTL however many people
+   ask, and a per-account budget so nobody can spin the rest of the handler
+   (which is per-user and cannot be cached) at line rate. */
+const CAPTAINS_TTL = 5 * 1000;
+const CAPTAINS_MAX_PER_MIN = 30;
+let captainsCache = { at: 0, rows: null };
+
+const captainsLimit = ipRateLimit({
+  max: CAPTAINS_MAX_PER_MIN, windowMs: 60 * 1000, message: 'too fast',
+  // Per account, not per IP: a shared NAT must not throttle a whole household.
+  key: (req) => 'u' + (req.userId != null ? req.userId
+    : (req.ip || (req.socket && req.socket.remoteAddress) || 'unknown'))
+});
+
+app.get('/api/crew/captains', requireAuth, captainsLimit, (req, res) => {
+  let rows = captainsCache.rows;
+  if (!rows || nowMs() - captainsCache.at > CAPTAINS_TTL) {
+    try { rows = saves.captains(CREW_LIST_LIMIT * 2, 1) || []; }
+    catch (e) {
+      log.error('captain listing failed', { userId: req.userId, err: e });
+      return httpErr(res, 500, 'UNAVAILABLE', 'unavailable');
+    }
+    captainsCache = { at: nowMs(), rows };
   }
 
   const mine = new Set(crews.requestsBy(req.userId).map(r => r.ownerId));
@@ -1117,7 +1172,7 @@ app.get('/api/crew/captains', requireAuth, (req, res) => {
 });
 
 /* ---- POST /api/crew/request { captain } — knock on a hull ----------------- */
-app.post('/api/crew/request', requireAuth, (req, res) => {
+app.post('/api/crew/request', requireAuth, requireNotBanned, (req, res) => {
   if (crewRateLimited(req.userId, res)) return;
 
   const target = lookupUser(req.body, 'captain');
@@ -1152,7 +1207,7 @@ app.post('/api/crew/request', requireAuth, (req, res) => {
 });
 
 /* ---- POST /api/crew/cancel { captain } — withdraw your own knock ---------- */
-app.post('/api/crew/cancel', requireAuth, (req, res) => {
+app.post('/api/crew/cancel', requireAuth, requireNotBanned, (req, res) => {
   if (crewRateLimited(req.userId, res)) return;
   const target = lookupUser(req.body, 'captain');
   if (!target) return httpErr(res, 404, 'NO_SUCH_CAPTAIN', 'no such captain');
@@ -1164,7 +1219,7 @@ app.post('/api/crew/cancel', requireAuth, (req, res) => {
 });
 
 /* ---- POST /api/crew/admit { user } — the captain's yes -------------------- */
-app.post('/api/crew/admit', requireAuth, (req, res) => {
+app.post('/api/crew/admit', requireAuth, requireNotBanned, (req, res) => {
   if (crewRateLimited(req.userId, res)) return;
 
   const target = lookupUser(req.body, 'user');
@@ -1199,7 +1254,7 @@ app.post('/api/crew/admit', requireAuth, (req, res) => {
 });
 
 /* ---- POST /api/crew/deny { user } — the captain's no ---------------------- */
-app.post('/api/crew/deny', requireAuth, (req, res) => {
+app.post('/api/crew/deny', requireAuth, requireNotBanned, (req, res) => {
   if (crewRateLimited(req.userId, res)) return;
   const target = lookupUser(req.body, 'user');
   if (!target) return httpErr(res, 404, 'NO_SUCH_SAILOR', 'no such sailor');
@@ -1213,7 +1268,7 @@ app.post('/api/crew/deny', requireAuth, (req, res) => {
 });
 
 /* ---- POST /api/crew/kick { user } — put a shipmate ashore ----------------- */
-app.post('/api/crew/kick', requireAuth, (req, res) => {
+app.post('/api/crew/kick', requireAuth, requireNotBanned, (req, res) => {
   if (crewRateLimited(req.userId, res)) return;
   const target = lookupUser(req.body, 'user');
   if (!target) return httpErr(res, 404, 'NO_SUCH_SAILOR', 'no such sailor');
@@ -1227,7 +1282,7 @@ app.post('/api/crew/kick', requireAuth, (req, res) => {
 });
 
 /* ---- POST /api/crew/leave — step ashore under your own steam ------------- */
-app.post('/api/crew/leave', requireAuth, (req, res) => {
+app.post('/api/crew/leave', requireAuth, requireNotBanned, (req, res) => {
   if (crewRateLimited(req.userId, res)) return;
   const left = crews.leave(req.userId);
   markCrew(req.userId);
@@ -1263,8 +1318,10 @@ every(DERBY_EVERY, () => {
         return;
       }
       if (!st) return;
-      st.pearls = (st.pearls | 0) + w.pearls;
-      st.pearlsLife = (st.pearlsLife | 0) + w.pearls;
+      // int0, not `| 0`: ToInt32 wraps at 2^31, so a long-lived pearlsLife
+      // could take a derby prize and come back negative (see rules.js).
+      st.pearls = int0(st.pearls) + int0(w.pearls);
+      st.pearlsLife = int0(st.pearlsLife) + int0(w.pearls);
       saves.put(w.userId, st);
       announceAll({
         t: 'drama', kind: 'derby', name: w.username, world: w.world,
@@ -1285,12 +1342,12 @@ const REPORT_REASON_MAX = 120;
 
 /** Control chars out, whitespace collapsed, cut to `max`. */
 const cleanReportField = (v, max) => String(v ?? '')
-  .replace(/[ --]/g, ' ')
+  .replace(/[\x00-\x1f\x7f-\x9f]/g, ' ')
   .replace(/\s+/g, ' ')
   .trim()
   .slice(0, max);
 
-app.post('/api/report', requireAuth, (req, res) => {
+app.post('/api/report', requireAuth, requireNotBanned, (req, res) => {
   const body = (req.body && typeof req.body === 'object') ? req.body : {};
   const target = cleanReportField(body.target, REPORT_TARGET_MAX);
   const reason = cleanReportField(body.reason, REPORT_REASON_MAX);

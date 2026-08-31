@@ -7,8 +7,11 @@
    server is expected to answer with its own numbers, a 400, or a 429 — never
    with the numbers it was handed.
 
-   Note on ordering inside a test: a REJECTED action never marks the action log,
-   so a run of 400s costs no cooldown. The successful call therefore goes last.
+   Note on ordering inside a test: a rejected action DOES mark the action log —
+   hammering the route with a body the handler refuses used to be free, so the
+   400 path now costs the same cooldown as the 200 path. A loop of malformed
+   bodies therefore needs one fresh account per attempt, or the second one comes
+   back 429 and proves nothing about the body it sent.
    ========================================================================== */
 
 import { describe, it, before, after } from 'node:test';
@@ -16,6 +19,8 @@ import assert from 'node:assert/strict';
 
 import { startServer, registerUser } from './helpers.js';
 import { WORLDS, RAR_ORDER, oreTypeFor } from '../src/game/rules.js';
+import { mktEpochNow } from '../src/game/economy.js';
+import { ACH, DEEDS } from '../src/progress.js';
 
 /** Every species Fortune Isle can produce, shiny prefix stripped. */
 const ISLE_SPECIES = new Set(WORLDS.isle.fish.map((entry) => entry[0].name));
@@ -110,27 +115,88 @@ describe('anti-cheat', () => {
       assert.deepEqual(res.body.state.worlds, ['isle']);
     });
 
-    it('accepts achievements and deeds APPEND-ONLY', async () => {
+    it('ignores ach and deeds from the body — real ids included', async () => {
       const user = await registerUser(server);
       const save = (body) => server.post('/api/save', { token: user.token, body });
 
-      /* a first sighting is a real change */
-      assert.equal((await save({ ach: { firstFish: 5 } })).body.saved, true);
-      /* the same value again changes nothing */
-      assert.equal((await save({ ach: { firstFish: 5 } })).body.saved, false);
-      /* and it may never go BACKWARDS — that is how a reward gets re-claimed */
-      assert.equal((await save({ ach: { firstFish: 1 } })).body.saved, false);
-      /* forwards is fine */
-      assert.equal((await save({ ach: { firstFish: 9 } })).body.saved, true);
+      /* REAL ids, so this cannot pass merely because the id was unrecognised —
+         the forged-id case is the test underneath. Membership only says an id
+         exists; nothing a client posts can show it was EARNED, and progress.js's
+         predicates are the only thing that knows. */
+      const ACH_ID = ACH[0][0];               // fish1
+      const DEED_ID = DEEDS[0][0];            // d_arrive
 
-      /* junk keys and negative values are refused outright */
-      assert.equal((await save({ ach: { 'not a key!': 1 } })).body.saved, false);
-      assert.equal((await save({ ach: { deed_x: -4 } })).body.saved, false);
+      for (const body of [
+        { ach: { [ACH_ID]: 1 } },
+        { ach: { [ACH_ID]: 9 } },
+        { deeds: { [DEED_ID]: 12 } },
+        { deeds: { [DEED_ID]: mktEpochNow() } },
+        { ach: { [ACH_ID]: 1 }, deeds: { [DEED_ID]: 12 } },
+      ]) {
+        const res = await save(body);
+        assert.equal(res.body.saved, false, `${JSON.stringify(body)} counted as a change`);
+        assert.equal(res.body.state.ach[ACH_ID], undefined);
+        assert.equal(res.body.state.deeds[DEED_ID], undefined);
+      }
+
+      /* malformed shapes are dropped by the same rule, not a different path */
       assert.equal((await save({ ach: 'all of them' })).body.saved, false);
+      assert.equal((await save({ deeds: [DEED_ID] })).body.saved, false);
 
-      /* deeds ratchet the same way */
-      assert.equal((await save({ deeds: { plot_a: 12 } })).body.saved, true);
-      assert.equal((await save({ deeds: { plot_a: 3 } })).body.saved, false);
+      const reloaded = await server.get('/api/state', { token: user.token });
+      assert.equal(reloaded.body.state.ach[ACH_ID], undefined);
+      assert.equal(reloaded.body.state.deeds[DEED_ID], undefined);
+    });
+
+    it('still awards a trophy the player actually earns', async () => {
+      /* The refusal above is only safe because the server pays trophies itself.
+         A suite that asserted the refusal alone would pass just as happily with
+         achievements broken outright, so this is the other half of the contract. */
+      const user = await registerUser(server);
+      const ACH_ID = ACH[0][0];               // fish1 · one landed fish earns it
+
+      const before = await server.get('/api/state', { token: user.token });
+      assert.equal(before.body.state.ach[ACH_ID], undefined);
+
+      const res = await server.post('/api/action/catch', { token: user.token, body: {} });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.ok, true);
+
+      const after = await server.get('/api/state', { token: user.token });
+      assert.ok(after.body.state.ach[ACH_ID],
+        `${ACH_ID} was not stamped by the server after a real catch`);
+    });
+
+    it('will not mint a trophy id that progress.js does not define', async () => {
+      const user = await registerUser(server);
+      /* well-formed enough to pass DEED_ID_RE and to look real in a save file —
+         which is exactly why a charset test was never enough */
+      const FORGED = 'plot_a';
+
+      const res = await server.post('/api/save', {
+        token: user.token,
+        body: { ach: { firstFish: 1 }, deeds: { [FORGED]: 12, d_atlantis: 7 } },
+      });
+      assert.equal(res.body.saved, false, 'an invented id is not a change');
+      assert.equal(res.body.state.ach.firstFish, undefined);
+      assert.equal(res.body.state.deeds[FORGED], undefined);
+      assert.equal(res.body.state.deeds.d_atlantis, undefined);
+
+      /* and it never reached the ledger table behind the reply. /api/ledger
+         mirrors state.deeds into `deeds`, and /api/ledger/claim HMAC-signs
+         whatever it finds there — a forged id used to come back as a genuine
+         signature over a deed that does not exist. */
+      const ledger = await server.get('/api/ledger', { token: user.token });
+      assert.equal(ledger.status, 200);
+      assert.deepEqual(ledger.body.deeds.map((row) => row.deed_id), []);
+
+      const claim = await server.post('/api/ledger/claim', {
+        token: user.token,
+        body: { deedId: FORGED, address: '0x' + '1'.repeat(40) },
+      });
+      assert.equal(claim.status, 400);
+      assert.equal(claim.body.code, 'DEED_NOT_MINTED');
+      assert.equal(claim.body.signature, undefined);
     });
 
     it('will not let a client award itself the paid market tip', async () => {
@@ -173,6 +239,21 @@ describe('anti-cheat', () => {
      ====================================================================== */
 
   describe('action outcomes are the server\'s to decide', () => {
+    /**
+     * One rejected attempt, on an account that has never acted before.
+     *
+     * A refusal marks the action log exactly like a success, so a test that
+     * posts two bad bodies of the SAME action from one player gets a 429 for
+     * the second and learns nothing about the body it sent. Registering is
+     * ~25ms of scrypt; a fresh account per attempt is the cheap way to keep
+     * each assertion about the thing it claims to be about.
+     */
+    async function attempt(name, body) {
+      const user = await registerUser(server);
+      const res = await server.post(`/api/action/${name}`, { token: user.token, body });
+      return { user, res };
+    }
+
     it('ignores a claimed catch and rolls its own fish', async () => {
       const user = await registerUser(server);
 
@@ -201,9 +282,13 @@ describe('anti-cheat', () => {
       const s = res.body.state;
       /* The fish itself pays nothing until it is sold — but a FIRST catch also
          earns the "First Catch" achievement, and that bounty is real coin the
-         server pays. So the only coins here must be exactly that bounty. */
+         server pays. So are the events.js wanted-poster winnings, on the roll
+         in fifteen or so where the species drawn happens to be the one the
+         world is hunting this epoch. Nothing ELSE may add a coin. */
       const bounty = (res.body.earned && res.body.earned.coins) || 0;
-      assert.equal(s.coins, bounty, 'a catch pays nothing beyond the achievement bounty');
+      const wanted = res.body.result.wanted || 0;
+      assert.equal(s.coins, bounty + wanted,
+        'a catch pays nothing beyond the achievement bounty and the wanted poster');
       assert.ok(bounty === 0 || res.body.earned.ach.some(a => a.id === 'fish1'),
         'any coins on a first catch must come from the First Catch achievement');
       assert.equal(s.bucket.length, 1);
@@ -230,50 +315,65 @@ describe('anti-cheat', () => {
     });
 
     it('rejects ore node ids outside the range the client could have', async () => {
-      const user = await registerUser(server);
       /* Fortune Isle has no quarry (oreN 0) — only the four grass starters,
          so ids 0..3 exist and nothing else does. */
       /* NaN is deliberately spelled as a string: JSON.stringify turns a real
-         NaN into null, which the handler reads as "no id given" instead. */
-      const bad = [-1, -100, 4, 90, 1e9, 2.5, 'NaN', 'diamond', {}];
+         NaN into null, which the handler reads as "no id given" instead.
+         The first two bodies ARE that "no id given" — the widest version of
+         this hole, because an absent node fell through to a blind ore roll
+         that skipped both the starter-node table and the depletion write. */
+      const bad = [{}, { node: null }, { type: 'diamond' },
+        { node: -1 }, { node: -100 }, { node: 4 }, { node: 90 }, { node: 1e9 },
+        { node: 2.5 }, { node: 'NaN' }, { node: 'diamond' }, { node: {} }];
 
-      for (const node of bad) {
-        const res = await server.post('/api/action/mine', { token: user.token, body: { node } });
-        assert.equal(res.status, 400, `node ${JSON.stringify(node)} should be refused`);
+      for (const body of bad) {
+        const { user, res } = await attempt('mine', body);
+        assert.equal(res.status, 400, `body ${JSON.stringify(body)} should be refused`);
         assert.match(res.body.error, /ore node/i);
+
+        /* and it banked nothing on the way out */
+        const state = await server.get('/api/state', { token: user.token });
+        assert.deepEqual(state.body.state.ores,
+          { wood: 0, coal: 0, iron: 0, gold: 0, diamond: 0 },
+          `body ${JSON.stringify(body)} still produced ore`);
       }
 
-      /* nothing was mined by any of that */
-      const state = await server.get('/api/state', { token: user.token });
-      assert.deepEqual(state.body.state.ores, { wood: 0, coal: 0, iron: 0, gold: 0, diamond: 0 });
-
       /* an id the client really could hold still works */
-      const good = await server.post('/api/action/mine', { token: user.token, body: { node: 3 } });
+      const miner = await registerUser(server);
+      const good = await server.post('/api/action/mine', { token: miner.token, body: { node: 3 } });
       assert.equal(good.status, 200);
     });
 
     it('rejects tree ids outside the world\'s tree count', async () => {
-      const user = await registerUser(server);
       const treeMax = WORLDS.isle.treeMax;                 // 90
 
-      for (const tree of [-1, treeMax, treeMax + 500, 1.5, 'oak']) {
-        const res = await server.post('/api/action/chop', { token: user.token, body: { tree } });
-        assert.equal(res.status, 400, `tree ${tree} should be refused`);
+      /* {} and null again first: a chop at no tree in particular used to skip
+         the felled check and the depletion write the same way. */
+      for (const body of [{}, { tree: null }, { tree: -1 }, { tree: treeMax },
+        { tree: treeMax + 500 }, { tree: 1.5 }, { tree: 'oak' }]) {
+        const { user, res } = await attempt('chop', body);
+        assert.equal(res.status, 400, `body ${JSON.stringify(body)} should be refused`);
         assert.match(res.body.error, /tree/i);
+
+        const state = await server.get('/api/state', { token: user.token });
+        assert.equal(state.body.state.ores.wood, 0,
+          `body ${JSON.stringify(body)} still produced wood`);
       }
 
-      const good = await server.post('/api/action/chop', { token: user.token, body: { tree: 0 } });
+      const { res: good } = await attempt('chop', { tree: 0 });
       assert.equal(good.status, 200);
       assert.ok(good.body.state.ores.wood >= 1);
     });
 
     it('answers 429 when one action is repeated faster than its cooldown', async () => {
-      const user = await registerUser(server);
-
-      const first = await server.post('/api/action/chop', { token: user.token, body: {} });
+      /* tree 7, not tree 0: a felled tree stays felled for 35 seconds for
+         EVERYONE in the world, so two tests that both want a successful chop
+         cannot want the same one. */
+      const { user, res: first } = await attempt('chop', { tree: 7 });
       assert.equal(first.status, 200);
 
-      const second = await server.post('/api/action/chop', { token: user.token, body: {} });
+      /* a DIFFERENT tree, so only the cooldown can be what refuses it */
+      const second = await server.post('/api/action/chop', { token: user.token, body: { tree: 8 } });
       assert.equal(second.status, 429);
       assert.match(second.body.error, /too fast/i);
       assert.ok(second.body.retryAfter > 0);
@@ -282,90 +382,95 @@ describe('anti-cheat', () => {
       /* the refused call banked nothing */
       const after = await server.get('/api/state', { token: user.token });
       assert.equal(after.body.state.ores.wood, first.body.state.ores.wood);
+
+      /* and a REFUSED body pays the same cooldown as an accepted one: hammering
+         the route with an intent the handler rejects used to be free */
+      const { user: macro, res: junk } = await attempt('chop', { tree: -1 });
+      assert.equal(junk.status, 400);
+      const next = await server.post('/api/action/chop', { token: macro.token, body: { tree: 9 } });
+      assert.equal(next.status, 429, 'a rejected action must still mark the log');
     });
 
     it('will not accept a wager the rod does not cover', async () => {
-      const user = await registerUser(server);
-      const spin = (body) => server.post('/api/action/spin', { token: user.token, body });
-
       /* a level 1 rod covers a 250 chip and no more */
       for (const coinStake of [1000, 5000, 25_000, 100_000]) {
-        const res = await spin({ bet: 'red', coinStake });
+        const { res } = await attempt('spin', { bet: 'red', coinStake });
         assert.equal(res.status, 400);
         assert.match(res.body.error, /rod only covers a 250 chip/i);
       }
 
       /* inside the cap but off the fixed ladder is still refused */
-      const offLadder = await spin({ bet: 'red', coinStake: 100 });
-      assert.equal(offLadder.status, 400);
-      assert.match(offLadder.body.error, /must be one of/i);
+      const offLadder = await attempt('spin', { bet: 'red', coinStake: 100 });
+      assert.equal(offLadder.res.status, 400);
+      assert.match(offLadder.res.body.error, /must be one of/i);
 
       /* on the ladder and inside the cap — refused only for lack of coins,
          which proves the cap check let it through */
-      const broke = await spin({ bet: 'red', coinStake: 250 });
-      assert.equal(broke.status, 400);
-      assert.match(broke.body.error, /not enough coins/i);
+      const broke = await attempt('spin', { bet: 'red', coinStake: 250 });
+      assert.equal(broke.res.status, 400);
+      assert.match(broke.res.body.error, /not enough coins/i);
 
       /* other ways to stake nothing */
-      assert.equal((await spin({ bet: 'red' })).status, 400);
-      assert.equal((await spin({ bet: 'purple', coinStake: 50 })).status, 400);
-      assert.equal((await spin({ bet: 'red', stakeIdx: 0 })).status, 400);
-      assert.equal((await spin({ bet: 'red', coinStake: 250, stakeIdx: 0 })).status, 400);
+      for (const body of [{ bet: 'red' }, { bet: 'purple', coinStake: 50 },
+        { bet: 'red', stakeIdx: 0 }, { bet: 'red', coinStake: 250, stakeIdx: 0 }]) {
+        const { res } = await attempt('spin', body);
+        assert.equal(res.status, 400, `${JSON.stringify(body)} was not refused`);
+      }
 
-      const state = await server.get('/api/state', { token: user.token });
+      const state = await server.get('/api/state', { token: broke.user.token });
       assert.equal(state.body.state.coins, 0, 'a refused spin may not move coins');
       assert.equal(state.body.state.stats.spins, 0);
     });
 
     it('will not sell, craft, trade or sail on credit', async () => {
-      const user = await registerUser(server);
-      const post = (name, body) => server.post(`/api/action/${name}`, { token: user.token, body });
+      const broke = [
+        ['sell',  { kind: 'fish', index: 0 }],
+        ['sell',  { kind: 'fish', index: -1 }],
+        ['sell',  { kind: 'ore', oreKey: 'diamond' }],
+        ['sell',  { kind: 'ore', oreKey: '__proto__' }],
+        ['sell',  { kind: 'allfish' }],
+        ['craft', { tool: 'rod' }],
+        ['craft', { tool: '__proto__' }],
+        ['boat',  {}],
+        ['stock', { op: 'buy', ticker: 'REEL' }],
+        ['stock', { op: 'sell', ticker: 'REEL' }],
+        ['stock', { op: 'buy', ticker: 'BOGUS' }],
+        ['kiosk', { item: 'bucket' }],
+        ['bait',  { op: 'buy', id: 'siren', packs: 20 }],
+      ];
 
-      assert.equal((await post('sell', { kind: 'fish', index: 0 })).status, 400);
-      assert.equal((await post('sell', { kind: 'fish', index: -1 })).status, 400);
-      assert.equal((await post('sell', { kind: 'ore', oreKey: 'diamond' })).status, 400);
-      assert.equal((await post('sell', { kind: 'ore', oreKey: '__proto__' })).status, 400);
-      assert.equal((await post('sell', { kind: 'allfish' })).status, 400);
-      assert.equal((await post('craft', { tool: 'rod' })).status, 400);
-      assert.equal((await post('craft', { tool: '__proto__' })).status, 400);
-      assert.equal((await post('boat', {})).status, 400);
-      assert.equal((await post('stock', { op: 'buy', ticker: 'REEL' })).status, 400);
-      assert.equal((await post('stock', { op: 'sell', ticker: 'REEL' })).status, 400);
-      assert.equal((await post('stock', { op: 'buy', ticker: 'BOGUS' })).status, 400);
-      assert.equal((await post('kiosk', { item: 'bucket' })).status, 400);
-      assert.equal((await post('bait', { op: 'buy', id: 'siren', packs: 20 })).status, 400);
+      for (const [name, body] of broke) {
+        const { user, res } = await attempt(name, body);
+        assert.equal(res.status, 400, `${name} ${JSON.stringify(body)} was not refused`);
 
-      const state = await server.get('/api/state', { token: user.token });
-      const s = state.body.state;
-      assert.equal(s.coins, 0);
-      assert.equal(s.pearls, 0);
-      assert.equal(s.rodLvl, 1);
-      assert.equal(s.boatLvl, 0);
-      assert.deepEqual(s.stocks.own, {});
+        const s = (await server.get('/api/state', { token: user.token })).body.state;
+        assert.equal(s.coins, 0);
+        assert.equal(s.pearls, 0);
+        assert.equal(s.rodLvl, 1);
+        assert.equal(s.boatLvl, 0);
+        assert.deepEqual(s.stocks.own, {});
+        assert.deepEqual(s.bucket, []);
+      }
     });
 
     it('gates travel on the hull and the purse', async () => {
-      const user = await registerUser(server);
-      const travel = (world) => server.post('/api/action/travel', { token: user.token, body: { world } });
-
       /* a raft cannot make the long crossings */
       for (const world of ['mine', 'volcano', 'frost']) {
-        const res = await travel(world);
+        const { res } = await attempt('travel', { world });
         assert.equal(res.status, 400);
         assert.match(res.body.error, /voyage/i);
       }
 
       /* the cave needs no boat, but it still costs 750 coins */
-      const cave = await travel('cave');
-      assert.equal(cave.status, 400);
-      assert.match(cave.body.error, /not enough coins/i);
+      const cave = await attempt('travel', { world: 'cave' });
+      assert.equal(cave.res.status, 400);
+      assert.match(cave.res.body.error, /not enough coins/i);
 
       /* and there is no such place as Atlantis */
-      const nowhere = await travel('atlantis');
-      assert.equal(nowhere.status, 400);
-      assert.equal((await travel('__proto__')).status, 400);
+      assert.equal((await attempt('travel', { world: 'atlantis' })).res.status, 400);
+      assert.equal((await attempt('travel', { world: '__proto__' })).res.status, 400);
 
-      const state = await server.get('/api/state', { token: user.token });
+      const state = await server.get('/api/state', { token: cave.user.token });
       assert.equal(state.body.state.world, 'isle');
       assert.deepEqual(state.body.state.worlds, ['isle']);
     });

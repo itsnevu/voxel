@@ -54,7 +54,7 @@ RF.mod('08-fortune', function (RF) {
 
   /* ---- persistence: mine, never RF.state ---- */
   const KEY = '08-fortune';
-  const db = { v: 1, hist: [], chips: 0, potRec: 0, limit: 0, tab: 'board', xtab: '',
+  const db = { v: 1, hist: [], chips: 0, potRec: 0, limit: 0, tab: 'board', xtab: '', deep: 0,
     rail: null, div: [], rot: [], watch: {},
     life: { spins: 0, staked: 0, ret: 0, fishRisk: 0, fishLost: 0, fishGain: 0, best: 0, worst: 0, pot: 0, fed: 0 },
     call: { n: 0, hit: 0, nb: 0, run: 0, best: 0, streak: 0 } };
@@ -65,6 +65,7 @@ RF.mod('08-fortune', function (RF) {
       for (const k of ['chips', 'potRec', 'limit']) if (isFinite(raw[k])) db[k] = Math.max(0, raw[k] | 0);
       if (typeof raw.tab === 'string') db.tab = raw.tab;
       if (typeof raw.xtab === 'string') db.xtab = raw.xtab;
+      if (raw.deep === 0 || raw.deep === 1) db.deep = raw.deep;
       if (raw.rail === 0 || raw.rail === 1) db.rail = raw.rail;
       if (Array.isArray(raw.div)) db.div = raw.div.slice(0, 60);
       if (Array.isArray(raw.rot)) db.rot = raw.rot.slice(0, 24);
@@ -139,6 +140,25 @@ RF.mod('08-fortune', function (RF) {
     background:var(--glass-row);color:var(--muted);box-shadow:inset 0 1px 0 rgba(255,255,255,.07);}
   .ef-tabs button.sel{color:var(--teal);border-color:rgba(57,215,196,.55);box-shadow:inset 0 0 0 1px rgba(57,215,196,.28);}
   .ef-pane{font-size:11px;color:var(--muted);line-height:1.55;}
+
+  /* ---- lean by default -------------------------------------------------
+     Only the arithmetic folds: the expected value, the true odds and the pot
+     read-out are commentary, and a player who never wants them asks once.
+     Core's own markup is never folded — #jackpotBar carries the real stake cap
+     and .eelnote the double-or-nothing rule, and a mod that hid those would be
+     hiding game.js from the player. The ring stays open for the same reason from
+     the other side: it is where a free call is placed and where the bet core is
+     holding is read back. The tab strip folds only with the pane it drives — a
+     strip of buttons over nothing is a dead control. */
+  .ef-more{display:block;width:100%;margin:8px 0 0;padding:8px 0;border-radius:11px;cursor:pointer;
+    font-family:"IBM Plex Mono",monospace;font-weight:600;font-size:9.5px;letter-spacing:.2em;
+    text-transform:uppercase;color:var(--faint);background:rgba(255,255,255,.04);
+    border:1px solid var(--glass-bd-soft);transition:color .12s,border-color .12s;}
+  .ef-more:hover{color:var(--ink);border-color:var(--glass-bd);}
+  #casino .card-c:not(.ef-deep) .ef-pot,
+  #casino .card-c:not(.ef-deep) .ef-tabs,
+  #casino .card-c:not(.ef-deep) .ef-pane,
+  #casino .card-c:not(.ef-deep) .ef-slip .r.adv{display:none!important;}
   .ef-pane .lab{font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:#6f8f8a;margin:9px 0 5px;}
   .ef-tape{display:flex;gap:3px;flex-wrap:wrap;margin-bottom:6px;}
   .ef-tape i{width:13px;height:15px;border-radius:3px;display:flex;align-items:center;justify-content:center;
@@ -190,8 +210,11 @@ RF.mod('08-fortune', function (RF) {
   .ef-star.on{color:var(--gold);}
   /* ---------- the rail ---------- */
   /* bottom-right: the top-right column is already four HUD chips deep and the
-     notification stack grows down through it — this corner stays quiet. */
-  .ef-rail{position:fixed;bottom:92px;right:12px;z-index:5;width:184px;padding:8px 10px 7px;
+     notification stack grows down through it — this corner stays quiet. It is
+     not empty, though: the what-next nudge is anchored at 86px there and runs to
+     two lines, so the rail starts above that band rather than winning the paint
+     order over a panel the player is meant to read. */
+  .ef-rail{position:fixed;bottom:158px;right:12px;z-index:28;width:184px;padding:8px 10px 7px;
     background:var(--glass-hud);backdrop-filter:blur(14px) saturate(1.6);-webkit-backdrop-filter:blur(14px) saturate(1.6);
     border:1px solid var(--glass-bd);border-radius:11px;box-shadow:var(--glass-hi),0 8px 24px rgba(2,8,10,.35);
     font-size:10.5px;color:var(--muted);display:none;}
@@ -207,6 +230,7 @@ RF.mod('08-fortune', function (RF) {
   .ef-rr.flash{animation:efflash .9s ease-out;}
   .ef-rail .ft{margin-top:5px;padding-top:5px;border-top:1px solid var(--glass-bd-soft);font-size:9.5px;line-height:1.5;}
   @keyframes efflash{0%{background:rgba(57,215,196,.28);}100%{background:transparent;}}
+  body.photo .ef-rail{display:none!important;}
   body.capcam .ef-rail{opacity:0;pointer-events:none;}
   @media (max-width:860px){ .ef-rail{display:none!important;} }
   body:has(#start.on) .ef-rail{opacity:0;pointer-events:none;}
@@ -243,7 +267,7 @@ RF.mod('08-fortune', function (RF) {
      ====================================================================== */
   const casEl = $('casino'), casCard = casEl ? casEl.querySelector('.card-c') : null;
   const spinBtn = $('spinBtn'), jackBar = $('jackpotBar');
-  let ringEl = null, slipEl = null, stopEl = null, potEl = null, tabsEl = null, paneEl = null;
+  let ringEl = null, slipEl = null, stopEl = null, potEl = null, tabsEl = null, paneEl = null, moreEl = null;
 
   if (casCard && spinBtn) {
     ringEl = RF.el(`<div class="ef-ring">${ringSVG}<div class="ef-rside" id="efRside"></div></div>`, null);
@@ -255,6 +279,8 @@ RF.mod('08-fortune', function (RF) {
     casCard.insertBefore(ringEl, spinBtn);
     casCard.insertBefore(slipEl, spinBtn);
     casCard.insertBefore(stopEl, spinBtn);
+    moreEl = RF.el('<button class="ef-more" data-ef="deep" type="button"></button>', null);
+    casCard.insertBefore(moreEl, spinBtn);
 
     potEl = RF.el('<div class="ef-pot" id="efPot"></div>', null);
     tabsEl = RF.el(`<div class="ef-tabs">
@@ -338,16 +364,16 @@ RF.mod('08-fortune', function (RF) {
       return;
     }
     const edgeCls = m.edge >= 0 ? 'eg' : 'ed';
-    const potLine = m.pot ? `<div class="r"><span>plus the pot on GREEN</span><b class="ef-gold">◈ ${fmt(m.pot)}</b></div>` : '';
+    const potLine = m.pot ? `<div class="r adv"><span>plus the pot on GREEN</span><b class="ef-gold">◈ ${fmt(m.pot)}</b></div>` : '';
     const gross = m.stake * m.pay;
     slipEl.innerHTML = `<div class="hd"><span>${BETLBL[m.bet]} · ${m.isFish ? 'FISH' : 'COIN'}</span>
       <button class="ef-mini" data-ef="rebet" ${lastBet ? '' : 'disabled'}>REBET</button></div>
       <div class="r"><span>at risk</span><b>${m.isFish ? esc(sel.fish.name) + ' · ' : ''}◈ ${fmt(m.stake)}</b></div>
       <div class="r"><span>${m.isFish ? 'fish becomes' : 'pays back'}</span><b class="ef-gold">◈ ${fmt(gross)}</b></div>
-      <div class="r"><span>true odds</span><b>${m.n} in ${NSEG} · ${(m.p * 100).toFixed(1)}%</b></div>
+      <div class="r adv"><span>true odds</span><b>${m.n} in ${NSEG} · ${(m.p * 100).toFixed(1)}%</b></div>
       ${potLine}
-      <div class="r"><span>expected on this spin</span><b class="${edgeCls}">${m.ev >= 0 ? '+' : '−'}◈ ${fmt(Math.abs(m.ev))} · ${pct(m.edge)}</b></div>
-      <div class="r"><span>tonight so far</span><b class="${netS >= 0 ? 'eg' : 'ed'}">${netS >= 0 ? '+' : '−'}◈ ${fmt(Math.abs(netS))}</b></div>
+      <div class="r adv"><span>expected on this spin</span><b class="${edgeCls}">${m.ev >= 0 ? '+' : '−'}◈ ${fmt(Math.abs(m.ev))} · ${pct(m.edge)}</b></div>
+      <div class="r adv"><span>tonight so far</span><b class="${netS >= 0 ? 'eg' : 'ed'}">${netS >= 0 ? '+' : '−'}◈ ${fmt(Math.abs(netS))}</b></div>
       <div class="note">${m.bet === 'green' && !RF.online
         ? 'green is a donation until the pot clears your chip · at ◈' + fmt(m.stake) + ' staked it turns even at a pot of ◈' + fmt(m.stake) + '.'
         : m.isFish ? 'a lost fish is gone from the bucket, not sold. the eel does not pay scrap.'
@@ -491,7 +517,12 @@ RF.mod('08-fortune', function (RF) {
   }
 
   let lastBet = null;   // {bet, coins, fishIdx} — what REBET replays
-  const paintCasino = () => { paintRing(); paintSlip(); paintPot(); paintPane(); };
+  function paintMore() {
+    if (!moreEl || !casCard) return;
+    casCard.classList.toggle('ef-deep', !!db.deep);
+    moreEl.textContent = db.deep ? '× hide the numbers' : '⋯ odds, pot & board';
+  }
+  const paintCasino = () => { paintRing(); paintSlip(); paintPot(); paintPane(); paintMore(); };
 
   /* ---- casino interaction: one delegated listener, bubble phase, so core's
      own handlers have already finished and the DOM tells the truth ---- */
@@ -511,6 +542,7 @@ RF.mod('08-fortune', function (RF) {
     const act = t && t.closest ? t.closest('[data-ef]') : null;
     if (!act) { paintCasino(); return; }               // a core click (bet / stake) changed the slip
     const a = act.getAttribute('data-ef');
+    if (a === 'deep') { db.deep = db.deep ? 0 : 1; save(); if (sfx && sfx.tab) sfx.tab(); paintMore(); return; }
     if (a === 'rebet' && lastBet) {
       const bb = casEl.querySelector('.betbtn[data-bet="' + lastBet.bet + '"]');
       if (lastBet.coins) { const cb = casEl.querySelector('[data-cstake="' + lastBet.coins + '"]'); if (cb) cb.click(); }

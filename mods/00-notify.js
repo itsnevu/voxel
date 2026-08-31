@@ -68,6 +68,8 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
     border-radius:7px;padding:4px 9px;transition:color .12s,border-color .12s;}
   .rf-notify-b:hover{color:var(--ink);border-color:var(--glass-bd);}
   .rf-notify-b.key{color:var(--rf-c);border-color:var(--rf-c);}
+  .rf-notify-b:disabled,.rf-notify-b:disabled:hover{color:var(--faint);border-color:var(--glass-bd-soft);
+    cursor:default;opacity:.55;}
   .rf-notify-pre{display:none;margin-top:7px;padding:7px 8px;max-height:132px;overflow:auto;
     background:rgba(2,8,10,.42);border:1px solid var(--glass-bd-soft);border-radius:8px;
     font-family:"IBM Plex Mono",monospace;font-size:.76em;line-height:1.5;color:var(--lab);
@@ -82,13 +84,8 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
     font-variant-numeric:tabular-nums;}
   #rf-notify-more.on{display:block;}
 
-  #rf-notify-pill{position:fixed;right:12px;bottom:48px;z-index:30;display:none;align-items:center;gap:7px;
-    cursor:pointer;font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:12px;letter-spacing:.06em;
-    color:var(--ink);background:var(--glass-hud);backdrop-filter:blur(12px) saturate(1.5);
-    -webkit-backdrop-filter:blur(12px) saturate(1.5);border:1px solid var(--glass-bd-soft);
-    border-radius:9px;padding:6px 11px;box-shadow:var(--glass-hi),0 5px 16px rgba(2,8,10,.3);
-    font-variant-numeric:tabular-nums;transition:border-color .15s;}
-  #rf-notify-pill.on{display:flex;}
+  #rf-notify-pill{display:none!important;}
+  #rf-notify-pill.on{display:none!important;}
   #rf-notify-pill:hover{border-color:var(--rf-c,var(--teal));}
   #rf-notify-pill .pd{width:8px;height:8px;border-radius:50%;background:var(--rf-c,var(--teal));
     box-shadow:0 0 9px var(--rf-c,var(--teal));animation:rf-notify-pulse 2.2s ease-in-out infinite;}
@@ -310,6 +307,7 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
       tag: o.tag ? String(o.tag).slice(0, 40) : '',
       ttl: (typeof o.ttl === 'number' && isFinite(o.ttl)) ? Math.max(0, o.ttl | 0) : TTL[lv],
       icon: (o.icon && RF.PIX && RF.PIX[o.icon]) ? o.icon : '',
+      cool: (typeof o.cool === 'number' && isFinite(o.cool)) ? Math.max(0, o.cool) : 0,
       retry: typeof o.retry === 'function' ? o.retry : null, actions: acts };
   }
 
@@ -325,15 +323,36 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
     n.ico.innerHTML = c.icon ? pix(c.icon, 15) : '';
     n.pre.textContent = detailText(c);
     n.bar.style.display = c.ttl ? '' : 'none';   // a sticky card has nothing to count down
-    n.acts.innerHTML = '';
+    n.acts.innerHTML = ''; c.retryB = null; c.cools = -1;
     const btn = (label, key, fn) => { const b = document.createElement('button');
       b.type = 'button'; b.className = 'rf-notify-b' + (key ? ' key' : ''); b.textContent = label;
       b.onclick = ev => { ev.stopPropagation(); try { fn(); } catch (e) { soft('notify:action', e); } };
       n.acts.appendChild(b); return b; };
     for (const a of c.actions) btn(a.label, a.key, () => { a.fn(c.handle); });
-    if (c.retry) btn('Retry', true, () => doRetry(c));
+    if (c.retry) c.retryB = btn('Retry', true, () => doRetry(c));
     btn('Copy', false, () => copyCard(c));
     if (n.pre.textContent) btn(c.open ? 'Hide' : 'Details', false, () => { c.open = !c.open; paint(c); });
+    paintCool(c);
+  }
+
+  /* Feature-detected at CALL time: a parallel build of net.js publishes the
+     absolute stamp, an older one does not and we lean on the 429's own retryAfter. */
+  function coolLeft(c) {
+    let until = 0;
+    try { const n = window.RFNet;
+      until = (n && typeof n.cooldownUntil === 'number' && isFinite(n.cooldownUntil)) ? n.cooldownUntil : (c.cool || 0);
+    } catch (e) { until = c.cool || 0; }
+    return Math.max(0, until - Date.now());
+  }
+
+  /* Retry stays dead until the limiter forgets us, and the card says how long. */
+  function paintCool(c) {
+    const n = c.el && c.el._n; if (!n) return;
+    const s = c.retry ? Math.ceil(coolLeft(c) / 1000) : 0;
+    if (s === c.cools) return;               // nothing moved since the last beat
+    c.cools = s;
+    if (c.retryB) c.retryB.disabled = s > 0;
+    n.body.textContent = s > 0 ? (c.body ? c.body + ' · ' : '') + 'retry in ' + s + 's' : c.body;
   }
 
   function detailText(c) {
@@ -403,7 +422,7 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
       if (c.rec) c.rec.count = c.count;
       c.level = o.level; c.title = o.title; c.body = o.body; c.where = o.where;
       c.details = o.details; c.icon = o.icon; c.ttl = o.ttl; c.life = o.ttl;
-      c.retry = o.retry; c.actions = o.actions; c.t = now;
+      c.retry = o.retry; c.actions = o.actions; c.cool = o.cool; c.t = now;
       if (c.rec) { c.rec.level = o.level; c.rec.title = o.title; c.rec.body = o.body;
         c.rec.details = o.details; c.rec.t = now; }
       if (c.el) paint(c);
@@ -419,7 +438,8 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
 
     const c = { id: ++seq, t: now, level: o.level, title: o.title, body: o.body, where: o.where,
       details: o.details, icon: o.icon, tag: o.tag, ttl: o.ttl, life: o.ttl, count: 1,
-      retry: o.retry, actions: o.actions, el: null, hover: false, open: false, dead: false };
+      retry: o.retry, actions: o.actions, cool: o.cool, retryB: null, cools: -1,
+      el: null, hover: false, open: false, dead: false };
     c.rec = { id: c.id, t: now, level: c.level, title: c.title, body: c.body, where: c.where,
       details: c.details, count: 1 };
     log.push(c.rec); if (log.length > LOGCAP) log.shift();
@@ -428,9 +448,9 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
     c.handle = { id: c.id,
       update(patch) { try { if (c.dead) return c.handle;
           const p = normalize(Object.assign({ level: c.level, title: c.title, body: c.body,
-            where: c.where, details: c.details, ttl: c.ttl, icon: c.icon }, patch || {}));
+            where: c.where, details: c.details, ttl: c.ttl, icon: c.icon, cool: c.cool }, patch || {}));
           c.level = p.level; c.title = p.title; c.body = p.body; c.where = p.where;
-          c.details = p.details; c.icon = p.icon; c.ttl = p.ttl; c.life = p.ttl;
+          c.details = p.details; c.icon = p.icon; c.ttl = p.ttl; c.life = p.ttl; c.cool = p.cool;
           if (patch && 'retry' in patch) c.retry = p.retry;
           if (patch && 'actions' in patch) c.actions = p.actions;
           Object.assign(c.rec, { level: c.level, title: c.title, body: c.body, where: c.where, details: c.details });
@@ -472,6 +492,7 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
       for (let i = live.length - 1; i >= 0; i--) {
         const c = live[i];
         if (c.el) c.el._n.time.textContent = ago(c.t);
+        if (c.retry || c.cools > 0) paintCool(c);
         if (!c.ttl || c.hover || c.dead) continue;   // hovering freezes the bar where it stands
         c.life -= 250;
         if (c.el) c.el._n.bar.style.transform = 'scaleX(' + Math.max(0, c.life / c.ttl).toFixed(3) + ')';
@@ -797,7 +818,7 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
     401: ['Session expired', 'The server no longer recognises this sign-in · reload and sign in again.', false, 'error'],
     403: ['Action refused', 'The server would not allow that · it may have changed while you were away.', false, 'error'],
     404: ['Unknown action', 'The server does not know that action · this client may be out of date.', false, 'error'],
-    409: ['Out of step', 'The server had a different idea of your state · it has been resynced.', true, 'warn'],
+    409: ['Out of step', 'The server had a different idea of your state · it has been resynced.', false, 'warn'],
     413: ['Too much at once', 'That request was larger than the server accepts.', false, 'error'],
     429: ['Too fast', 'The server is rate-limiting you · wait a beat and try again.', true, 'warn'],
     500: ['Server trouble', 'The server hit an error on its side · it usually clears in a moment.', true, 'error'],
@@ -820,20 +841,26 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
       const info = httpInfo(st);
       lastFail = { name: String(ev.action || ''), t: Date.now() };
       const msg = (ev.error && ev.error.message) || '';
+      const wait = st === 429 ? retryAfterMs(ev.error) : 0;
       const o = { level: info[3], title: info[0], tag: 'rf-act-' + ev.action,
         body: info[1], where: 'action:' + ev.action + (st ? ' · HTTP ' + st : ' · no reply'),
         details: 'action  ' + ev.action + '\nstatus  ' + (st || 'network') + '\nserver  ' + (msg || '(none)') +
           '\nbody    ' + safeJSON(ev.body),
-        ttl: info[3] === 'warn' ? 9000 : 0 };
+        ttl: info[3] === 'warn' ? Math.max(9000, wait + 4000) : 0 };
+      if (wait) o.cool = Date.now() + wait;   // the card outlives the limiter, then unlocks
       if (info[2] && RF.SRV) o.retry = () => RF.SRV.act(ev.action, ev.body);
       notify(o);
     } catch (e) {}
   });
 
+  /* net.js hands the whole error body through, so a 429 tells us exactly how long. */
+  const retryAfterMs = e => { try { const v = e && e.data && e.data.retryAfter;
+    return (typeof v === 'number' && isFinite(v) && v > 0) ? Math.min(v | 0, 120000) : 0; } catch (_) { return 0; } };
+
   function safeJSON(v) { try { return clip(JSON.stringify(v), 180) || '{}'; } catch (e) { return '(unserialisable)'; } }
 
   function doRetry(c) {
-    if (!c.retry) return;
+    if (!c.retry || coolLeft(c) > 0) return;
     const fn = c.retry; c.retry = null;
     c.handle.update({ body: 'Retrying…' });
     let p; try { p = fn(); } catch (e) { c.handle.update({ level: 'error', body: 'Retry could not start · ' + errMsg(e) }); return; }

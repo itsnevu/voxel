@@ -30,10 +30,17 @@
 
    Nothing in `body` is ever trusted for value: indices are range-checked,
    prices are recomputed from economy.js, and stake amounts must match the
-   fixed ladder. The only client-supplied facts we accept are the ambient ones
-   the server has no view of (night / weather) and the ID of the thing being
-   worked (which ore node, which tree) — and those can only shift WHICH table
-   is rolled, never how much anything is worth.
+   fixed ladder. The ambient facts are NOT the exception this comment used to
+   claim they were: a body asserting night AND storm lifted the starter isle's
+   weighted mean catch from 40.3 to 54.7 coins — a permanent +36% — and helped
+   itself to rules.js's rain best-of-two rarity reroll on the way past, which
+   is also the only way anyone was ever going to finish the Fishdex. So the
+   clock decides now: night and weather come from rules.js dayPhaseAt() /
+   weatherAt(), both pure functions of wall-clock ms, and `body.night`,
+   `body.wet` and `body.storm` are read by nothing at all.
+   The one client-supplied fact left is the ID of the thing being worked (which
+   ore node, which tree). It is REQUIRED, range-checked, and only ever selects
+   WHICH node — never what the node is worth.
 
    Ported 1:1 from game.js; the line references below point at the original.
    ESM, Node 18+. No express, no db — pure state transitions.
@@ -50,7 +57,7 @@ import {
   BOATS, BOAT_REQ, MAX_BOAT, haveOres,
   upCost, axeCost,
   cap, rollFish, pearlsForFish, dexNameOf, AUTO, RIGS, MAX_RIG, rigOf,
-  rollOreType, oreTypeFor,
+  oreTypeFor, dayPhaseAt, weatherAt,
   rand, clamp
 } from './rules.js';
 /* realtime.js never imports this module, so this stays a one-way dependency */
@@ -111,9 +118,26 @@ function betWins(bet, idx) {
 }
 const GREEN_MULT = 14, COLOR_MULT = 2;        // game.js:2354
 const betPay = (bet) => (bet === 'green' ? GREEN_MULT : COLOR_MULT);
-/* The Lucky Charm re-rolls ONE losing spin in five (game.js:2412). It nudges
-   the odds; it does not rig them — the second pocket can lose again. */
-const CHARM_REROLL_IN = 5;
+/* The Lucky Charm re-rolls ONE losing spin in twenty (game.js:3009). It nudges
+   the odds; it does not rig them — the second pocket can lose again.
+
+   It used to be one in FIVE, which handed the table to the player. Every bet
+   on this wheel pays back 14/15 of the stake: the outside bets win 7 pockets
+   of 15 at 2x, green wins 1 of 15 at 14x, so both sit at a flat -6.67% house
+   edge. A re-roll at rate q lifts the win chance from p to p + (1-p)*q*p, and
+   at q = 1/5 that was
+       colours  2 * (7/15 + 8/15 * 1/5 * 7/15) - 1 = +3.29%
+       green   14 * (1/15 + 14/15 * 1/5 * 1/15) - 1 = +10.76%
+   i.e. a 600-pearl purchase that prints coins forever. Two rules put the house
+   back in front of EVERY bet kind:
+     - green never re-rolls. At 14x its edge flips positive at almost any q, so
+       the jackpot pocket keeps its bare -6.67% and nothing else will do.
+     - q = 1/20. Break-even for a 2x bet is q = (1/30) / (8/15 * 7/15)
+       = 225/1680 = 0.1339, so 0.05 leaves real daylight:
+       2 * (7/15 + 8/15 * 1/20 * 7/15) - 1 = -4.18%.
+   The charm still cuts the house edge by more than a third — it just no longer
+   inverts it. */
+const CHARM_REROLL_IN = 20;
 
 /* Pearl kiosk (game.js:1806-1842) — every price here is PEARLS, never coins. */
 const BUCKET_COST = [150, 300, 600, 1000];    // game.js:1807
@@ -202,22 +226,21 @@ function attachShare(result, share) {
 }
 
 /**
- * Ambient weather out of an untrusted body, in the { wet, storm } shape that
- * envOf() in rules.js reads.
+ * The sky over `world` right now, in the { night, wet, storm } shape envOf()
+ * in rules.js reads. Read from the CLOCK, never from the request: see the
+ * header — a body that claimed night plus storm was buying a +36% raise on
+ * every catch it ever made.
  *
- * The client sends `wet` as the weather STATE ('clear' | 'rain' | 'storm' |
- * 'snow' | 'ash'); older builds sent a bare boolean, so both are accepted.
- * Collapsing it into one boolean is what kept every storm-gated species
- * (Thunder Eel, Storm Marlin, Blizzard Eel, ...) permanently unspawnable:
- * envOf only sees a storm through an explicit `storm` flag or the literal
- * string 'storm'. Snow and ash are weather of their own — they are NOT rain,
- * and the client's condOK() agrees (game.js:1713).
+ * `wet` stays the client's weather STATE string ('clear'|'rain'|'storm'|
+ * 'snow'|'ash') rather than a boolean, because collapsing it is what kept
+ * every storm-gated species (Thunder Eel, Storm Marlin, Blizzard Eel, ...)
+ * permanently unspawnable: envOf only sees a storm through an explicit `storm`
+ * flag or the literal string 'storm'. Snow and ash are weather of their own —
+ * they are NOT rain, and the client's condOK() agrees (game.js:2184).
  */
-function weatherOf(body) {
-  const w = body.wet;
-  const storm = !!body.storm || (typeof w === 'string' && w.trim().toLowerCase() === 'storm');
-  if (typeof w === 'string') return { wet: storm || w.trim().toLowerCase() === 'rain', storm };
-  return { wet: storm || !!w, storm };
+function skyNow(world) {
+  const wet = weatherAt(world);
+  return { night: dayPhaseAt(Date.now()).night, wet, storm: wet === 'storm' };
 }
 
 /**
@@ -325,15 +348,15 @@ function tryShare(state, ticker) {
  * (the buried one in a treasure chest) — no hook, no bait bonus, no bait spent.
  * `auto: true` swaps in the lazy line's crushed table (rules.js AUTO).
  */
-function rollFor(state, body, { useBait: withBait = true, auto = false } = {}) {
-  const { wet, storm } = weatherOf(body);
+function rollFor(state, { useBait: withBait = true, auto = false } = {}) {
+  const { night, wet, storm } = skyNow(state.world);
   return rollFish({
     world: state.world,
     rodLvl: state.rodLvl,
     bait: withBait ? state.baitId : null,
     boatLvl: state.boatLvl,
     fishMul: worldOf(state).fishMul,
-    night: !!body.night,
+    night,
     wet,
     storm,
     auto,
@@ -402,9 +425,10 @@ export const HANDLERS = {
 
   /* --------------------------------------------------------------------------
      catch — the client reports that the reel minigame finished; the SERVER
-     decides what was on the hook. body: { night, wet, storm? }
-     `wet` is the client's weather state ('clear'|'rain'|'storm'|'snow'|'ash');
-     a bare boolean from an older build still reads as rain.
+     decides what was on the hook. body: { auto? } — and nothing else. Night
+     and weather are the clock's, not the client's (skyNow / rules.js
+     dayPhaseAt + weatherAt), so an old build's { night, wet, storm } is read
+     by nobody.
      -------------------------------------------------------------------------- */
   catch: handler((state, body) => {
     const limit = cap(state);
@@ -428,7 +452,7 @@ export const HANDLERS = {
       }
     }
 
-    const fish = rollFor(state, body, { useBait: !auto, auto });
+    const fish = rollFor(state, { useBait: !auto, auto });
     if (!fish) return err('Nothing is biting here');
 
     if (auto) state.autoAt = now;
@@ -456,25 +480,30 @@ export const HANDLERS = {
     /* The client may NOT choose what it digs up. A node's ore is a pure function
        of (world, node id), so the server derives it and every client agrees —
        otherwise a script would simply mine diamond (70c) every time instead of
-       coal (5c). `body.type` is never read at all; an older client that sends
-       no node id gets a blind roll on the same odds instead. */
+       coal (5c). `body.type` is never read at all. */
     /* The id must be one the client could actually have: 0 .. quarry+3 (the four
        grass starters sit past the quarry count). Without this a negative id slips
        past the starter-node gate — opening the full table on a coal-only isle —
        and past realtime's id check, so the vein never records as depleted:
-       unlimited diamonds at the rate limit. */
+       unlimited diamonds at the rate limit.
+       An ABSENT id is the same hole, only wider: it used to fall through to a
+       blind roll, which opened the full ore table on a coal-only isle, skipped
+       the already-stripped check and skipped depletion — ~11x throughput, with
+       every diamond rolling a share certificate. There is no such thing as a
+       swing at no node in particular, so the id is required. */
     const rawId = body.node;
     const nodeMax = (worldOf(state).oreN | 0) + 4;
     const idNum = +rawId;
-    const hasId = rawId !== undefined && rawId !== null
-      && Number.isInteger(idNum) && idNum >= 0 && idNum < nodeMax;
-    if (rawId !== undefined && rawId !== null && !hasId) return err('No such ore node');
-    const type = hasId ? oreTypeFor(state.world, idNum) : rollOreType();
+    if (rawId === undefined || rawId === null
+      || !Number.isInteger(idNum) || idNum < 0 || idNum >= nodeMax) {
+      return err('No such ore node');
+    }
+    const type = oreTypeFor(state.world, idNum);
     if (!MINE_TYPES.includes(type)) {
       return err(`Unknown ore node · expected one of ${MINE_TYPES.join(', ')}`);
     }
     /* shared world: a vein someone already stripped stays stripped for everyone */
-    if (hasId && sharedNodes.isDown(state.world, 'node', idNum)) {
+    if (sharedNodes.isDown(state.world, 'node', idNum)) {
       return err('that vein is already stripped');
     }
 
@@ -496,7 +525,7 @@ export const HANDLERS = {
       if (Math.random() < chance) share = tryShare(state, Math.random() < 0.5 ? 'HARB' : 'EEL');
     } else if (Math.random() < chance) share = tryShare(state, 'DIGG');
 
-    if (hasId) sharedNodes.deplete(state.world, 'node', idNum, Date.now() + 45000);
+    sharedNodes.deplete(state.world, 'node', idNum, Date.now() + 45000);
 
     const result = { type, got, pearls, ores: state.ores[type],
       message: `+${got} ${oreName(type)}` };
@@ -508,13 +537,16 @@ export const HANDLERS = {
      chop — one completed axe swing on a tree. game.js:2142-2145
      -------------------------------------------------------------------------- */
   chop: handler((state, body) => {
+    /* required, exactly like the ore node above: a chop at no tree in particular
+       used to skip both the felled check and the depletion write */
     const rawTree = body && body.tree;
     const treeNum = +rawTree;
     const treeMax = (worldOf(state).treeMax | 0) || 200;   // client caps tree count per world
-    const hasTree = rawTree !== undefined && rawTree !== null
-      && Number.isInteger(treeNum) && treeNum >= 0 && treeNum < treeMax;
-    if (rawTree !== undefined && rawTree !== null && !hasTree) return err('No such tree');
-    if (hasTree && sharedNodes.isDown(state.world, 'tree', treeNum)) {
+    if (rawTree === undefined || rawTree === null
+      || !Number.isInteger(treeNum) || treeNum < 0 || treeNum >= treeMax) {
+      return err('No such tree');
+    }
+    if (sharedNodes.isDown(state.world, 'tree', treeNum)) {
       return err('someone already felled that tree');
     }
     const lvl = state.axeLvl;
@@ -524,12 +556,12 @@ export const HANDLERS = {
 
     state.ores.wood += got;
     state.stats.mined += got;
-    state.stats.wood = (state.stats.wood | 0) + got;   // wood bounties read this
+    state.stats.wood = int0(state.stats.wood) + got;   // wood bounties read this
     const pearls = addPearls(state, 1);
 
     const share = Math.random() < 0.04 ? tryShare(state, 'LUMB') : null;
 
-    if (hasTree) sharedNodes.deplete(state.world, 'tree', treeNum, Date.now() + 35000);
+    sharedNodes.deplete(state.world, 'tree', treeNum, Date.now() + 35000);
 
     const result = { got, pearls, ores: state.ores.wood, message: `+${got} Wood` };
     attachShare(result, share);
@@ -577,7 +609,7 @@ export const HANDLERS = {
     if (state.bucket.length < cap(state)) {
       let fish = null;
       for (let i = 0; i < 25; i++) {
-        const f = rollFor(state, body, { useBait: false });
+        const f = rollFor(state, { useBait: false });
         if (!f) break;
         fish = f;
         if ((RORDER[f.rar] | 0) >= 2) break;    // rare+ or give up after 25
@@ -971,9 +1003,12 @@ export const HANDLERS = {
     }
 
     let winIdx = randomInt(0, NSEG);
-    /* the Lucky Charm re-rolls a single losing spin in five — the second pocket
-       is drawn just as blind as the first, so it can lose again */
-    if (state.charm && !betWins(bet, winIdx) && randomInt(0, CHARM_REROLL_IN) === 0) {
+    /* the Lucky Charm re-rolls a single losing spin in twenty — the second
+       pocket is drawn just as blind as the first, so it can lose again. Green
+       is excluded outright: a 14x pocket that gets a second look is the one
+       bet a re-roll turns profitable at any rate worth owning. */
+    if (state.charm && bet !== 'green' && !betWins(bet, winIdx)
+        && randomInt(0, CHARM_REROLL_IN) === 0) {
       winIdx = randomInt(0, NSEG);
     }
     const color = SEG[winIdx];

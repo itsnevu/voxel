@@ -936,8 +936,8 @@ RF.mod('07-juice', function (RF) {
     /* the UI bus is the one that cannot ride a fader: it deliberately sits downstream of the
        muffle and the duck so a press always cuts through, which puts it past master too —
        so this one value, and only this one, is mirrored by hand */
-    let sailing = false, bedLevel = 1;
-    const MIX = { world: 1, ui: 1, bed: 1 };   // last targets, readable so a settings UI can show them
+    let sailing = false, ambLevel = 1;
+    const MIX = { world: 1, ui: 1, bed: 1, amb: 1 };   // last targets, readable so a settings UI can show them
     function followMixer() {
       if (!BUS) return;
       const M = RF.audio || {};
@@ -946,12 +946,18 @@ RF.mod('07-juice', function (RF) {
       const mv = typeof M.music === 'number' ? M.music : 1;
       const gate = (RF.muted || sailing) ? 0 : 1, t = anow();
       MIX.ui = m * sv * gate;
-      MIX.world = attached ? m * sv * gate : gate;      // attached: the fader is upstream of us
-      MIX.bed = (attached ? 1 : m * mv) * gate * bedLevel;
+      // MIX is the loudness a listener ends up with, and it is the same in both states:
+      // attached the fader is upstream of us, un-attached we mirror it into the node below
+      MIX.world = m * sv * gate;
+      MIX.bed = m * mv * gate;
+      MIX.amb = MIX.bed * ambLevel;
       try {
         BUS.ui.gain.setTargetAtTime(MIX.ui, t, 0.12);
-        BUS.world.gain.setTargetAtTime(gate, t, 0.12);
-        BUS.bed.gain.setTargetAtTime(gate * bedLevel, t, 0.5);
+        BUS.world.gain.setTargetAtTime(attached ? gate : MIX.world, t, 0.12);
+        // bed is the PARENT of both amb and mus, so the cede rides on amb alone: hand the
+        // island over to 13-audio and the adaptive layer still has a bus to speak through
+        BUS.bed.gain.setTargetAtTime(attached ? gate : MIX.bed, t, 0.5);
+        BUS.amb.gain.setTargetAtTime(gate * ambLevel, t, 0.5);
       } catch (e) {}
     }
 
@@ -1679,10 +1685,11 @@ RF.mod('07-juice', function (RF) {
         if ((slowT -= rdt) <= 0) {
           slowT = 0.2;
           cedeAmbience();
-          bedLevel = ambOn ? (RF.running ? 1 : 0.5) : 0;    // the title screen keeps a quieter isle
+          ambLevel = ambOn ? (RF.running ? 1 : 0.5) : 0;    // the title screen keeps a quieter isle
+          attachSliders();   // initAudio() can build master/music/sfx at any gesture, so keep asking
           followMixer();
           if (ambOn) ambTick();
-          skyVoices();
+          if (ambOn) skyVoices();     // one-shots ride the sfx bus, so the cede has to gate them by hand
           if (RF.running) {
             const mode = pickMode();
             if (mode !== mMode) { mMode = mode; mStep = 0; mNext = 0; }
@@ -1701,7 +1708,7 @@ RF.mod('07-juice', function (RF) {
           }
         }
         if (!RF.running) return;
-        ambEvents(rdt);
+        if (ambOn) ambEvents(rdt);
         fishWatch();
         if (nudgeT > 0 && (nudgeT -= rdt) <= 0) {
           nudgeT = -1;

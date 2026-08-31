@@ -28,6 +28,9 @@
                {t:"chat", id, name, m, at}   {t:"chat_err", m}
                {t:"mute_ok", id}  {t:"unmute_ok", id}  {t:"report_ok"}
                {t:"node", i, until}   {t:"tree", i, until}   {t:"pong"}
+               {t:"suspended", until, why}   {t:"signed_out"}
+   The last two are sent immediately before the socket is closed with 4403/4401,
+   because a close code alone reaches no client that ignores the close event.
    ========================================================================== */
 
 import { WebSocketServer } from 'ws';
@@ -36,6 +39,7 @@ import { WebSocketServer } from 'ws';
 // and the report handler guards for that instead of crashing.
 import * as DB from './db.js';
 import { sessions, users } from './db.js';
+import { isBanned, isMuted } from './admin.js';
 import { WORLDS } from './game/rules.js';
 
 /* ------------------------------------------------------------- tuning ----- */
@@ -80,7 +84,13 @@ const OPEN = 1;                        // ws.readyState === WebSocket.OPEN
 const CLOSE_AUTH = 4401;               // bad or expired session token
 const CLOSE_REPLACED = 4409;           // same account opened a newer socket
 const CLOSE_SILENT = 4408;             // never said hello
+const CLOSE_BANNED = 4403;             // the account is under a standing ban
 const CLOSE_TOO_BIG = 1009;            // frame over MAX_FRAME
+
+/* The session token may ride in the handshake's subprotocol list instead of the
+   query string. Same secret, but a header never lands in nginx's access log the
+   way `/ws?token=…` does. */
+const BEARER_PROTO = 'rf.bearer.';
 
 /* --------------------------------------------------------------- state ---- */
 /** world -> Set<peer>. A peer appears here only once it has said hello. */
@@ -260,6 +270,51 @@ function rawSend(peer, raw) {
 }
 
 const send = (peer, obj) => rawSend(peer, JSON.stringify(obj));
+
+/* A 4xxx close code is a message only if someone reads it, and the browser half
+   of the client hands its close handler no event at all: every code lands in the
+   same reconnect ladder, so a suspended account re-knocks every 30s forever and
+   sees nothing but presence and chat quietly not working. These two send a typed
+   frame first — ws flushes queued data before the close frame — so the reason
+   survives even where only the code would not, and the close reason string
+   carries the end date for a handler that reads `ev.reason` instead. */
+function sayThenClose(ws, obj, code, reason) {
+  try {
+    if (ws && ws.readyState === OPEN) ws.send(JSON.stringify(obj));
+  } catch { /* the close still has to happen */ }
+  try { ws.close(code, String(reason).slice(0, 60)); } catch { /* already gone */ }
+}
+
+/** Ban expiry as something a banner can print without a date library. */
+function banUntilText(until) {
+  if (!until) return '';
+  const d = new Date(until);
+  return Number.isFinite(d.getTime()) ? `${d.toISOString().slice(0, 16).replace('T', ' ')} UTC` : '';
+}
+
+/**
+ * Close one socket for a standing ban, telling it why. `until`/`why` come from
+ * the sanction row rather than the caller so every door reports the same thing;
+ * `fallback` only names the close when there is no row to read (kick() is
+ * exported and may be cutting a socket for some other reason entirely).
+ */
+function closeBanned(ws, userId, fallback = 'suspended') {
+  // A sanction lookup that throws must not leave the socket open: cutting it
+  // with a vaguer reason is the safe half of the failure.
+  let ban = { banned: false, until: 0, reason: '' };
+  try { ban = isBanned(userId); } catch (e) { console.error('[rt.ban]', e); }
+  if (!ban.banned) {
+    try { ws.close(CLOSE_BANNED, String(fallback).slice(0, 60)); } catch { /* already gone */ }
+    return;
+  }
+  const stamp = banUntilText(ban.until);
+  sayThenClose(
+    ws,
+    { t: 'suspended', until: ban.until || 0, why: ban.reason || '' },
+    CLOSE_BANNED,
+    stamp ? `suspended until ${stamp}` : 'suspended',
+  );
+}
 
 /** Serialise once, deliver many. `exceptId` skips the peer that caused the event. */
 function roomSend(world, obj, exceptId) {
@@ -450,6 +505,19 @@ export function closeAllSockets(code = 1001, reason = 'server restarting') {
   return n;
 }
 
+/**
+ * Cut one account's socket now. admin.js feature-detects this so /api/admin/ban
+ * lands instantly instead of waiting for the next heartbeat to notice.
+ * Returns false when the account has no live socket, which is not an error.
+ */
+export function kick(userId, reason = 'kicked') {
+  const peer = byUser.get(Number(userId));
+  if (!peer) return false;
+  dropPeer(peer);
+  closeBanned(peer.ws, peer.userId, reason);
+  return true;
+}
+
 function joinRoom(peer, world) {
   let room = rooms.get(world);
   if (!room) rooms.set(world, (room = new Set()));
@@ -562,6 +630,16 @@ function onChat(peer, msg, t) {
   if (t < peer.mod.chatCoolUntil) {
     peer.chatAt = t;
     send(peer, { t: 'chat_err', m: 'cooldown' });
+    return;
+  }
+
+  /* A moderator mute outranks every layer below. Checked after the CHAT_GAP
+     throttle so the answer cannot be used as a free rate-limit probe, and the
+     stamp is refreshed so a muted player spamming the box still pays the gap. */
+  const gag = isMuted(peer.userId);
+  if (gag.muted) {
+    peer.chatAt = t;
+    send(peer, { t: 'chat_err', m: 'muted', until: gag.until });
     return;
   }
 
@@ -755,6 +833,11 @@ function heartbeat() {
       // A backlog that survived a whole heartbeat is never going to drain.
       if (ws.bufferedAmount > MAX_BUFFER) { ws.terminate(); continue; }
 
+      // A ban landing mid-session revokes the sessions row, but this socket
+      // authenticated once at connect and would otherwise outlive it. kick()
+      // usually gets here first; this is the backstop, within one PING_MS.
+      if (isBanned(peer.userId).banned) { closeBanned(ws, peer.userId); continue; }
+
       ws.ping();
     } catch (e) {
       console.error('[rt.heartbeat]', e);
@@ -768,8 +851,33 @@ function heartbeat() {
    ATTACH
    ========================================================================== */
 
-/** Pull the session token out of `/ws?token=…`. */
+/** Every subprotocol the client offered, in the order it offered them. */
+function offeredProtocols(req) {
+  const raw = req && req.headers && req.headers['sec-websocket-protocol'];
+  if (typeof raw !== 'string' || !raw) return [];
+  return raw.split(',').map((p) => p.trim()).filter(Boolean);
+}
+
+/** The `rf.bearer.<token>` subprotocol the client offered, verbatim, or null. */
+function bearerProtocol(req) {
+  for (const p of offeredProtocols(req)) {
+    if (p.length > BEARER_PROTO.length && p.startsWith(BEARER_PROTO)) return p;
+  }
+  return null;
+}
+
+/**
+ * Pull the session token out of the handshake.
+ *
+ * The subprotocol wins when it is offered: `Sec-WebSocket-Protocol` is a header,
+ * and a header stays out of nginx's access log, out of a Referer and out of
+ * browser history — all of which `/ws?token=…` walks straight into. The query
+ * string stays supported because a client that predates the subprotocol (or a
+ * curl one-liner) must keep connecting; net.js sends both during the changeover.
+ */
 function tokenFrom(req) {
+  const proto = bearerProtocol(req);
+  if (proto) return proto.slice(BEARER_PROTO.length);
   try {
     const url = new URL(req.url || '/', 'http://localhost');
     const token = url.searchParams.get('token');
@@ -777,6 +885,19 @@ function tokenFrom(req) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Subprotocol negotiation. RFC 6455 lets the server answer with no
+ * Sec-WebSocket-Protocol at all, but a browser that offered one and hears
+ * nothing back reports `ws.protocol === ''` and some proxies get unhappy, so the
+ * bearer protocol is echoed verbatim whenever it was offered. Returning false
+ * for anything else means we never echo an unrecognised protocol back.
+ */
+function selectProtocol(protocols, req) {
+  const proto = bearerProtocol(req);
+  if (proto && (!protocols || protocols.has(proto))) return proto;
+  return false;
 }
 
 function onConnection(ws, req) {
@@ -789,7 +910,16 @@ function onConnection(ws, req) {
     console.error('[rt.verify]', e);
   }
   if (!userId) {
-    try { ws.close(CLOSE_AUTH, 'unauthorised'); } catch { /* already gone */ }
+    // Same blind spot as the ban close: an expired token otherwise reads as a
+    // network blip and the ladder retries a session that will never verify.
+    sayThenClose(ws, { t: 'signed_out' }, CLOSE_AUTH, 'unauthorised');
+    return;
+  }
+
+  // The front door, before any shared state is touched: a suspended account
+  // gets no presence, no chat and no room membership at all.
+  if (isBanned(userId).banned) {
+    closeBanned(ws, userId);
     return;
   }
 
@@ -856,6 +986,7 @@ export function attach(httpServer) {
     maxPayload: MAX_FRAME,     // an oversized frame closes the socket for us
     perMessageDeflate: false,  // frames are tiny; compression would cost more
     clientTracking: false,     // `conns` is the authoritative set
+    handleProtocols: selectProtocol,
   });
 
   wss.on('connection', onConnection);

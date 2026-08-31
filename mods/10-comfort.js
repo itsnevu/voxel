@@ -33,7 +33,7 @@ RF.mod('10-comfort', function (RF) {
 
   /* ---------------------------------------------------------------- state */
   const DEF = {
-    quality: 'high', autoQ: true, rscale: 1, shadows: 1, shadowRes: 2048,
+    quality: 'high', autoQ: true, rscale: 1, shadows: 1, shadowRes: 2048, glass: true,
     volMaster: 1, volMusic: 1, volSfx: 1, volAmb: 0.9, mute: false,
     hudScale: 1, hudOpacity: 1, uiScale: 1, bigText: false,
     motion: 'auto', shake: 1, freeze: 1, flash: 1,
@@ -54,9 +54,27 @@ RF.mod('10-comfort', function (RF) {
     low: { rscale: 0.7, shadows: 0, shadowRes: 1024, tag: 'low', lab: 'low' },
     med: { rscale: 0.85, shadows: 1, shadowRes: 1024, tag: 'med', lab: 'medium' },
     high: { rscale: 1, shadows: 1, shadowRes: 2048, tag: 'high', lab: 'high' },
-    ultra: { rscale: 1.3, shadows: 1, shadowRes: 4096, tag: 'ultra', lab: 'ultra' }
+    ultra: { rscale: 1.3, shadows: 1, shadowRes: 4096, tag: 'ultra', lab: 'ultra' },
+    /* Opt-in only. Twice the render scale is four times the pixels of high, so
+       the watchdog is forbidden from ever choosing it (optIn) — it may only
+       leave. dpr is the ceiling this tier asks game.js for; every other tier
+       asks for the 2 the engine shipped with. */
+    '4k': { rscale: 2, shadows: 1, shadowRes: 4096, tag: '4k', lab: '4K', dpr: 4, optIn: true }
   };
-  const QORDER = ['potato', 'low', 'med', 'high', 'ultra'];
+  const QORDER = ['potato', 'low', 'med', 'high', 'ultra', '4k'];
+  /* the highest rung the frame-budget watchdog may climb to on its own */
+  const AUTO_TOP = QORDER.reduce((m, k, i) => QUAL[k].optIn ? m : i, 0);
+
+  /* The backing-store ceiling, in pixels, for the whole ladder: 3840 x 2160.
+     A 4K panel at rscale 2.0 would otherwise ask for 7680 x 4320 — 33 M pixels,
+     four times what the mid-range card this ladder is written for (GTX 1650,
+     RX 6500, M1, Iris Xe) can shade at 60 fps with the shadow pass on. 8.3 M is
+     where that class of GPU still holds the frame, and it is a number the tier
+     can be honest about: on a 1080p window 4K really does draw 3840 x 2160 and
+     hand the extra to the downsample. The cap is on the ladder, not on its top
+     rung — cap only 4k and ultra on a retina panel would quietly allocate more
+     than the tier above it. */
+  const PIXBUDGET = 3840 * 2160;
 
   const RARK = ['common', 'uncommon', 'rare', 'epic', 'legendary'];
   const RAR0 = RARK.map(k => (RF.RAR && RF.RAR[k]) || '#b9c6c4');
@@ -167,6 +185,15 @@ RF.mod('10-comfort', function (RF) {
   .rfc-seg button.on{color:var(--teal-ink);background:var(--teal);font-weight:600;}
   .rfc-note{font-size:10.5px;color:var(--muted);line-height:1.55;padding:2px 3px 6px;}
   .rfc-note b{color:var(--gold);font-weight:600;}
+  /* a div, not a span: index.html's restyle hides every span inside .rfc-lab,
+     and this one is the only line in a row that has to stay readable */
+  .rfc-res{display:block;margin-top:3px;font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:11px;
+    letter-spacing:.08em;color:var(--teal);font-variant-numeric:tabular-nums;}
+  .rfc-note.rfc-4k{border-left:2px solid var(--gold);padding-left:9px;margin:0 0 7px;color:var(--lab);}
+  /* six rungs where there were five: on a narrow card the segment drops to its
+     own line instead of crushing the label it sits next to */
+  .rfc-seg{flex-wrap:wrap;}
+  @media (max-width:600px){ .rfc-row{flex-wrap:wrap;} .rfc-ctl{margin-left:auto;} }
   .rfc-warn{border-color:rgba(255,93,122,.5)!important;}
   .rfc-warn .rfc-lab b{color:var(--rose);}
   .rfc-kb{font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:11.5px;letter-spacing:.06em;min-width:72px;
@@ -205,13 +232,46 @@ RF.mod('10-comfort', function (RF) {
     box-shadow:0 2px 0 rgba(2,8,10,.7);color:var(--teal);}
   .rfc-key span{font-size:11px;color:var(--muted);}
 
+  /* --- glass ------------------------------------------------------------
+     A hundred-odd blur declarations sit between the player and a canvas that
+     redraws every frame, and every one of them is a compositor readback that
+     can never be cached. The bottom tier already halves the resolution and
+     drops the shadows; it must not then pay full price for frosting. The
+     switch offers the same win to anyone who would rather keep the pixels. */
+  body[data-rf-quality="low"],body[data-rf-quality="low"] *,
+  body[data-rf-quality="low"] *::before,body[data-rf-quality="low"] *::after,
+  body.rfc-flat,body.rfc-flat *,body.rfc-flat *::before,body.rfc-flat *::after{
+    backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
+
+  /* --- touch geometry ----------------------------------------------------
+     11-touch dresses ".overlay .card" and this panel is its own card, so the
+     one screen that exists to make the game fit the player is the one screen
+     touch never reached: 22px switches and 4px slider tracks under a finger. */
+  body.rf-touch .rfc-sw{width:60px;height:34px;border-radius:17px;}
+  body.rf-touch .rfc-sw i{top:3px;left:3px;width:26px;height:26px;}
+  body.rf-touch .rfc-sw.on i{transform:translateX(26px);}
+  body.rf-touch .rfc-rg{height:36px;background:none;}
+  body.rf-touch .rfc-rg::-webkit-slider-runnable-track{height:6px;border-radius:3px;background:rgba(255,255,255,.16);}
+  body.rf-touch .rfc-rg::-webkit-slider-thumb{width:26px;height:26px;margin-top:-10px;}
+  body.rf-touch .rfc-rg::-moz-range-track{height:6px;border-radius:3px;background:rgba(255,255,255,.16);}
+  body.rf-touch .rfc-rg::-moz-range-thumb{width:26px;height:26px;}
+  body.rf-touch .rfc-seg button{padding:12px 15px;min-height:44px;font-size:11.5px;}
+
   /* --- the shared accessibility signals other mods read off the body ------ */
   body.rf-reduced .mark,body.rf-reduced .mark::before,body.rf-reduced .mark::after,
   body.rf-reduced #reveal.on,body.rf-reduced #spinResult.pop .win{animation:none!important;}
   body.rf-reduced .coinfly{display:none!important;}
   body.rf-reduced .rfc-kb.cap{animation:none!important;opacity:1;}
+  /* two perpetual loops nobody guarded: the sail button breathes on the first
+     screen a player ever sees, and the wheel's arm pulses for as long as a bet
+     is live — the two longest-lived animations in the game */
+  body.rf-reduced .cta,body.rf-reduced #spinBtn:not(:disabled){animation:none!important;}
   body.rf-noflash #winFlash{display:none!important;}
-  @media (prefers-reduced-motion:reduce){ #rf-comfort-ov,#rf-comfort-card,#rf-comfort-pause{transition:none;} }
+  @media (prefers-reduced-motion:reduce){ #rf-comfort-ov,#rf-comfort-card,#rf-comfort-pause{transition:none;}
+    /* the class arrives a frame after the system query does, and a player who
+       set motion to off has overruled the OS on purpose — leave them alone */
+    body:not(.rfc-motion-keep) .cta,
+    body:not(.rfc-motion-keep) #spinBtn:not(:disabled){animation:none!important;} }
   `, 'rf-comfort-css');
 
   /* live sheet — rewritten whenever scale/opacity/text settings change */
@@ -244,7 +304,44 @@ RF.mod('10-comfort', function (RF) {
   }
 
   /* ------------------------------------------------------------- rendering */
-  let repaintWanted = false;
+  let repaintWanted = false, lastRatio = 0;
+
+  /* game.js publishes its device-pixel-ratio ceiling as RF.maxDPR — a live
+     accessor it clamps to 1..4 — so the ladder can raise it for a 4K panel and
+     put it back afterwards. Read and write it at call time; on a build that
+     does not have it yet, fall back to the 2 that used to be hard-coded here. */
+  let dprWarned = false;
+  function dprCap() {
+    let cap = 2;
+    try {
+      if ('maxDPR' in RF) {
+        RF.maxDPR = (QUAL[S.quality] && QUAL[S.quality].dpr) || 2;
+        const c = +RF.maxDPR; if (isFinite(c) && c >= 1) cap = c;
+      }
+    } catch (e) { /* this runs once a second with the readout open — say it once */
+      if (!dprWarned) { dprWarned = true; RF.err('comfort:dpr', e, 'warn'); } }
+    return clamp(cap, 1, 4);
+  }
+  const maxTexSize = () => {
+    try { const r = RF.renderer; return (r.capabilities && r.capabilities.maxTextureSize) || 4096; }
+    catch (e) { return 4096; }
+  };
+  function viewCSS() {
+    const c = RF.renderer && RF.renderer.domElement;
+    return { w: (c && c.clientWidth) || window.innerWidth || 1, h: (c && c.clientHeight) || window.innerHeight || 1 };
+  }
+  /* what setPixelRatio should actually be handed: what the tier asked for, then
+     whatever PIXBUDGET leaves of it. Reports the frame that will really be drawn
+     — three floors the buffer the same way, so these are the true dimensions. */
+  function frameTarget() {
+    const v = viewCSS();
+    const want = Math.min(window.devicePixelRatio || 1, dprCap()) * (+S.rscale || 1);
+    const fit = Math.sqrt(PIXBUDGET / Math.max(1, v.w * v.h));
+    const r = clamp(Math.min(want, fit), 0.35, 4);
+    return { r: r, w: Math.floor(v.w * r), h: Math.floor(v.h * r), capped: fit < want - 0.005 };
+  }
+  const resText = () => { const t = frameTarget(); return t.w + ' x ' + t.h + (t.capped ? ' · held at the budget' : ''); };
+  function paintRes() { const el = $('rf-comfort-res'); if (el) el.textContent = resText(); }
   function repaint() {
     /* a paused world never draws again on its own, so any change that resizes
        the drawing buffer has to put a picture back on it by hand */
@@ -258,12 +355,14 @@ RF.mod('10-comfort', function (RF) {
   function applyRender() {
     try {
       const r = RF.renderer; if (!r) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      r.setPixelRatio(clamp(dpr * (+S.rscale || 1), 0.35, 3));
+      const t = frameTarget();
+      r.setPixelRatio(t.r); lastRatio = t.r;
       const on = !!S.shadows;
       if (RF.sun) {
         RF.sun.castShadow = on;
-        const want = S.shadowRes | 0;
+        /* an older iGPU tops out at 2048: asking it for a 4096 map loses the
+           whole shadow pass rather than quietly giving you a smaller one */
+        const want = Math.min(S.shadowRes | 0, maxTexSize());
         if (on && RF.sun.shadow && RF.sun.shadow.mapSize.x !== want) {
           RF.sun.shadow.mapSize.set(want, want);
           if (RF.sun.shadow.map) { RF.sun.shadow.map.dispose(); RF.sun.shadow.map = null; }
@@ -272,9 +371,17 @@ RF.mod('10-comfort', function (RF) {
       /* leave shadowMap.enabled alone: flipping it without recompiling every
          material paints black shadows. Killing the light's cast flag changes
          the lights hash instead, which three does recompile for. */
-      r.shadowMap.autoUpdate = on;
+      /* autoUpdate stays off at every tier: core refreshes the map on its own
+         cadence and re-arming it here would hand straight back the draw calls
+         that throttle exists to save. One needsUpdate pays for this change. */
+      r.shadowMap.autoUpdate = false;
+      if (on) r.shadowMap.needsUpdate = true;
     } catch (e) { RF.err('comfort:render', e, 'warn'); }
-    BODY.dataset.rfQuality = (QUAL[S.quality] || { tag: S.shadows ? (S.rscale >= 1 ? 'high' : 'med') : 'low' }).tag;
+    /* '4k' is a sixth value on a signal that documents five. Every consumer in
+       mods/ reads it as a lookup with a default, and the default is the full
+       budget — an unknown tag costs nobody anything. */
+    BODY.dataset.rfQuality = (QUAL[S.quality] || { tag: !S.shadows ? 'low' : S.rscale >= 1.65 ? '4k' : S.rscale >= 1.15 ? 'ultra' : S.rscale >= 1 ? 'high' : 'med' }).tag;
+    paintRes();
     if (paused) repaint(); else repaintWanted = true;
   }
   function setQuality(q, why) {
@@ -283,7 +390,19 @@ RF.mod('10-comfort', function (RF) {
     applyRender(); persist();
     if (why) say({ level: 'warn', tag: 'rf-comfort-q', ttl: 7000, title: 'Quality → ' + p.lab, body: why });
   }
-  const qualityOfCustom = () => S.shadows ? (S.rscale >= 1.15 ? 'ultra' : S.rscale >= 0.95 ? 'high' : 'med') : (S.rscale >= 0.65 ? 'low' : 'low');
+  const qualityOfCustom = () => S.shadows
+    ? (S.rscale >= 1.65 ? '4k' : S.rscale >= 1.15 ? 'ultra' : S.rscale >= 0.95 ? 'high' : 'med')
+    : (S.rscale >= 0.65 ? 'low' : 'low');
+
+  /* the budget is a function of the window, so a resize changes the ratio this
+     tier is entitled to; core's own handler only ever calls setSize */
+  let resizeT = 0;
+  addEventListener('resize', () => {
+    clearTimeout(resizeT);
+    resizeT = setTimeout(() => {
+      if (Math.abs(frameTarget().r - lastRatio) > 0.01) applyRender(); else paintRes();
+    }, 180);
+  });
 
   /* ---------------------------------------------------------------- audio */
   let audioDone = false;
@@ -312,6 +431,7 @@ RF.mod('10-comfort', function (RF) {
   function applyMotion() {
     BODY.classList.toggle('rf-reduced', reduced());
     BODY.classList.toggle('rf-noflash', reduced() || +S.flash <= 0);
+    BODY.classList.toggle('rfc-motion-keep', S.motion === 'off');
   }
   RF.modify('shake', v => reduced() ? 0 : v * clamp(+S.shake, 0, 2));
   RF.modify('freeze', v => reduced() ? 0 : v * clamp(+S.freeze, 0, 2));
@@ -340,7 +460,9 @@ RF.mod('10-comfort', function (RF) {
   }
   function queuePersist() { const t = Date.now(); if (t - saveT < 900) return; saveT = t; persist(); }
 
-  function applyAll() { applyRender(); applyLook(); applyPalette(); applyMotion(); applyAudio(); applyZoom(); }
+  function applyGlass() { BODY.classList.toggle('rfc-flat', !S.glass); }
+
+  function applyAll() { applyRender(); applyLook(); applyGlass(); applyPalette(); applyMotion(); applyAudio(); applyZoom(); }
 
   /* ------------------------------------------------------------------- DOM */
   const gear = RF.el('<button id="rf-comfort-gear" type="button" title="Settings · O"><i class="rfc-cog"></i>OPTIONS</button>');
@@ -401,12 +523,23 @@ RF.mod('10-comfort', function (RF) {
 
   function paneDisplay() {
     const q = QUAL[S.quality] ? S.quality : 'custom';
+    const t = frameTarget(), mt = maxTexSize();
     return sec('quality')
       + row('Preset', 'each step trades a little of the island for a lot of frames',
         seg('quality', QORDER.map(k => [k, QUAL[k].lab])) + (q === 'custom' ? '<span class="rfc-val">custom</span>' : ''))
-      + row('Render scale', 'draws the world smaller and stretches it up · the cheapest win there is', rg('rscale', 0.4, 1.4, 0.05))
+      + (q === '4k' ? `<div class="rfc-note rfc-4k">4K is the top of the ladder and it is not free · it draws the island at
+        <b>${t.w} x ${t.h}</b> and lets the screen throw most of that away again. Worth it on a desktop card and a dense panel,
+        painful on anything else · the watchdog will never pick this tier for you, and if the frames collapse it drops you to ultra
+        and leaves you there.</div>` : '')
+      /* the one row that has to stay live while the slider moves, so it is
+         built by hand: the label carries the buffer we will actually allocate */
+      + `<div class="rfc-row"><div class="rfc-lab"><b>Render scale</b><span>draws the world smaller and stretches it up · the cheapest win there is</span>
+        <div class="rfc-res" id="rf-comfort-res">${esc(resText())}</div></div><div class="rfc-ctl">${rg('rscale', 0.4, 2, 0.05)}</div></div>`
       + row('Sun shadows', 'the most expensive light in the game by a wide margin', sw('shadows'))
-      + row('Shadow detail', 'only matters while shadows are on', seg('shadowRes', [[512, 'soft'], [1024, 'fair'], [2048, 'sharp'], [4096, 'crisp']]))
+      + row('Shadow detail', 'only matters while shadows are on' + (mt < 4096 ? ' · this card tops out at ' + mt + 'px' : ''),
+        seg('shadowRes', [[512, 'soft'], [1024, 'fair'], [2048, 'sharp'], [4096, 'crisp']]))
+      + row('Glass blur', 'every panel frosts the world behind it · the most expensive thing in the interface'
+        + (BODY.dataset.rfQuality === 'low' ? ' · already off at this tier' : ''), sw('glass'))
       + row('Adapt automatically', 'drops a tier if the frame budget is blown for three seconds, climbs back when it is not', sw('autoQ'))
       + sec('readout')
       + row('Performance overlay', 'F3 cycles it: off · a bare number · the whole panel', seg('perf', [[0, 'off'], [1, 'fps'], [2, 'full']]))
@@ -542,11 +675,15 @@ RF.mod('10-comfort', function (RF) {
 
   /* --------------------------------------------------------- panel events */
   function onSet(k, v) {
-    if (k === 'quality') { setQuality(v); buildPane(); return; }
+    /* whatever the player picks by hand becomes the tier auto is allowed to
+       climb back to — without this, opting into 4k and being stepped down once
+       left the ceiling wherever the last boot happened to find it */
+    if (k === 'quality') { userTier = v; autoTier = null; slowFor = fastFor = 0; setQuality(v); buildPane(); return; }
     if (k === 'palette') { S.palette = v; applyPalette(); persist(); buildPane(); return; }
     S[k] = v;
-    if (k === 'rscale' || k === 'shadows' || k === 'shadowRes') { S.quality = qualityOfCustom(); applyRender(); }
+    if (k === 'rscale' || k === 'shadows' || k === 'shadowRes') { S.quality = qualityOfCustom(); userTier = S.quality; autoTier = null; applyRender(); }
     else if (k === 'hudScale' || k === 'hudOpacity' || k === 'uiScale' || k === 'bigText') applyLook();
+    else if (k === 'glass') applyGlass();
     else if (k === 'motion' || k === 'flash') applyMotion();
     else if (k === 'mute') { try { RF.fn.setMuted(!!v); } catch (e) { } }
     else if (k.indexOf('vol') === 0) applyAudio();
@@ -645,18 +782,33 @@ RF.mod('10-comfort', function (RF) {
 
   /* ----------------------------------------------------- open/close plumbing */
   const uiOpen = () => !!(ov && ov.classList.contains('on')) || !!(cardOv && cardOv.classList.contains('on'));
+  /* Three full-screen surfaces live in this mod and every one of them has to
+     announce itself: downstream mods count opens against closes, so one open
+     that never closes — the card, or a second open on a surface already up —
+     latches their world input off for the rest of the session. Nothing here
+     adds or removes .on by hand: these two are the only doors, the class is
+     the state, and the signal is emitted only on a real transition, after the
+     DOM already says so, so a handler that closes us back is a no-op. */
+  const PANEL = 'rf-comfort', CARD = 'rf-comfort-card', PAUSE = 'rf-comfort-pause';
+  function show(el, name) {
+    if (!el || el.classList.contains('on')) return false;
+    el.classList.add('on'); RF.emit('panel', name, true); return true;
+  }
+  function hide(el, name) {
+    if (!el || !el.classList.contains('on')) return false;
+    el.classList.remove('on'); RF.emit('panel', name, false); return true;
+  }
   function openPanel(t) {
     if (t) tab = t;
     refreshExtras(); buildPane();
-    if (cardOv) cardOv.classList.remove('on');
-    if (ov) ov.classList.add('on');
+    hide(cardOv, CARD);
+    show(ov, PANEL);
     stopWalking();
     try { if (RF.audio && RF.audio.resume) RF.audio.resume(); } catch (e) { }
-    RF.emit('panel', 'rf-comfort', true);
   }
-  function closePanel() { endCapture(); if (ov) ov.classList.remove('on'); RF.emit('panel', 'rf-comfort', false); }
-  function openCard() { buildCard(); if (ov) ov.classList.remove('on'); if (cardOv) cardOv.classList.add('on'); stopWalking(); }
-  function closeCard() { if (cardOv) cardOv.classList.remove('on'); }
+  function closePanel() { endCapture(); hide(ov, PANEL); }
+  function openCard() { buildCard(); hide(ov, PANEL); show(cardOv, CARD); stopWalking(); }
+  function closeCard() { hide(cardOv, CARD); }
   function closeAll() { closePanel(); closeCard(); }
   function stopWalking() { try { const k = RF.keys; for (const n in k) k[n] = false; } catch (e) { } }
 
@@ -713,7 +865,7 @@ RF.mod('10-comfort', function (RF) {
     if (paused || !RF.running || RF.panelOpen) return;
     paused = true; hardPause = true; rafSeen = 0; heldCb = null; pauseClock = RF.clock;
     patchRAF(); stopWalking();
-    if (pauseOv) pauseOv.classList.add('on');
+    show(pauseOv, PAUSE);
     if (S.pauseAudio) { try { const c = RF.audio && RF.audio.ctx; if (c && c.state === 'running') c.suspend(); } catch (e) { } }
     /* one beat later, check the loop really did stop; if the callback we were
        watching for never came, say so rather than lie about a frozen world */
@@ -727,7 +879,7 @@ RF.mod('10-comfort', function (RF) {
   function resume() {
     if (!paused) return;
     paused = false;
-    if (pauseOv) pauseOv.classList.remove('on');
+    hide(pauseOv, PAUSE);
     if (S.pauseAudio) { try { const c = RF.audio && RF.audio.ctx; if (c && c.state === 'suspended') c.resume(); } catch (e) { } }
     if (heldCb) { const cb = heldCb; heldCb = null; try { origRAF(cb); } catch (e) { RF.err('comfort:resume', e); try { window.requestAnimationFrame(cb); } catch (_) { } } }
   }
@@ -755,13 +907,20 @@ RF.mod('10-comfort', function (RF) {
     if (!S.autoQ || !RF.running || paused) { slowFor = 0; fastFor = 0; return; }
     if (avgMs > budget) { slowFor++; fastFor = 0; } else if (avgMs < 14) { fastFor++; slowFor = 0; } else { slowFor = 0; fastFor = 0; }
     const cur = QORDER.indexOf(QUAL[S.quality] ? S.quality : qualityOfCustom());
+    /* auto may walk off any rung, opt-in ones included, but it may only ever
+       climb as far as AUTO_TOP: nobody is handed 4K by a watchdog */
+    const ceilT = Math.min(QORDER.indexOf(userTier), AUTO_TOP);
     if (slowFor >= 3 && cur > 0) {
       slowFor = 0; autoTier = QORDER[cur - 1];
-      setQuality(autoTier, 'the frame budget was blown for three seconds · press O to set it back');
-    } else if (fastFor >= 45 && autoTier && cur < QORDER.indexOf(userTier)) {
+      setQuality(autoTier, QUAL[QORDER[cur]] && QUAL[QORDER[cur]].optIn
+        ? 'this machine could not carry 4K · press O to ask for it again'
+        : 'the frame budget was blown for three seconds · press O to set it back');
+    } else if (fastFor >= 45 && autoTier && cur < ceilT) {
       fastFor = 0; autoTier = QORDER[cur + 1];
       setQuality(autoTier, 'there is headroom again');
-      if (autoTier === userTier) autoTier = null;
+      /* back at the ceiling — which is the player's own tier, or AUTO_TOP when
+         the player's tier is the opt-in one — so the watchdog is done */
+      if (QORDER.indexOf(autoTier) >= ceilT) autoTier = null;
     }
   });
 
@@ -795,6 +954,7 @@ RF.mod('10-comfort', function (RF) {
     let inf = null, prog = 0;
     try { inf = RF.renderer && RF.renderer.info; prog = (inf && inf.programs) ? inf.programs.length : 0; } catch (e) { }
     const mem = (performance && performance.memory) ? Math.round(performance.memory.usedJSHeapSize / 1048576) + ' MB' : '—';
+    const tb = frameTarget();
     const rows = [
       ['fps', fps + ' · ' + Math.round(avgMs * 10) / 10 + ' ms', cls],
       ['p95 frame', Math.round(pctl(0.95) * 10) / 10 + ' ms', pctl(0.95) > 33 ? 'bad' : pctl(0.95) > 22 ? 'warn' : 'ok'],
@@ -804,7 +964,8 @@ RF.mod('10-comfort', function (RF) {
       ['shaders', prog || '—', ''],
       ['heap', mem, ''],
       ['render scale', Math.round(S.rscale * 100) + '% · ' + (QUAL[S.quality] ? QUAL[S.quality].lab : 'custom'), 'ok'],
-      ['shadows', S.shadows ? S.shadowRes + 'px' : 'off', S.shadows ? '' : 'warn']
+      ['buffer', tb.w + ' x ' + tb.h + (tb.capped ? ' · held' : ''), tb.capped ? 'warn' : ''],
+      ['shadows', S.shadows ? Math.min(S.shadowRes | 0, maxTexSize()) + 'px' : 'off', S.shadows ? '' : 'warn']
     ];
     perfRows.innerHTML = rows.map(r => `<div class="rfc-pf"><span>${r[0]}</span><b class="${r[2]}">${r[1]}</b></div>`).join('');
   }
@@ -911,8 +1072,11 @@ RF.mod('10-comfort', function (RF) {
 
   RF.on('keydown', e => {
     if (synth || capturing) return;
-    /* paused first: whatever else is true, the player must be able to get out */
-    if (paused) {
+    /* paused first: whatever else is true, the player must be able to get out.
+       The pause menu can raise the settings panel and the card over itself, and
+       while one of those owns the screen it also owns Esc and O — resuming out
+       from under a modal would leave it floating over a running world. */
+    if (paused && !uiOpen()) {
       if (e.code === 'Escape' || e.code === 'Backquote' || e.code === 'Enter' || e.code === 'Space') { e.preventDefault(); resume(); return true; }
       if (e.code === 'KeyO') { e.preventDefault(); openPanel(); return true; }
       return true;

@@ -19,12 +19,31 @@ RF.mod('02-hud', function (RF) {
      number settling once is information, so those stay either way. */
   let calm = false;
   try { calm = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); } catch (e) {}
+  /* one beat shared by everything that is running out: it knocks faster the
+     closer you stand, and holds still when the player asked for stillness. */
+  const urg = function (d) { return clamp(1 - d / 40, 0.15, 1); };
+  const beat = function (u) {
+    if (calm || document.body.classList.contains('rf-reduced')) return 1;   // 10-comfort may flip this mid-session
+    return 0.55 + 0.45 * Math.sin(RF.clock * (2 + u * 6)); };
 
   const mmss = function (sec) { sec = Math.max(0, Math.round(sec));
     return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0'); };
   const ago = function (ms) { const s = Math.round((Date.now() - ms) / 1000);
     return s < 5 ? 'now' : s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : Math.floor(s / 3600) + 'h'; };
   const dist = function (p) { return p ? Math.round(Math.hypot(p.x - RF.pWorld.x, p.z - RF.pWorld.z)) : 0; };
+  /* MINE_POS, CRATER_POS and meteors landed on the reference table after this
+     mod shipped, so every read is a fresh guarded one and an older game.js
+     simply draws one marker fewer. */
+  const nearMeteor = function () {
+    const m = RF.meteors;
+    if (!m || !m.length) return null;
+    let best = null, bd = 1e9;
+    for (let i = 0; i < m.length; i++) { const q = m[i];
+      if (!q || !isFinite(q.x) || !isFinite(q.z)) continue;
+      const d = Math.hypot(q.x - RF.pWorld.x, q.z - RF.pWorld.z);
+      if (d < bd) { bd = d; best = q; } }
+    return best; };
+  const METEOR_LIFE = 95;     // mirrors the life the strike is born with in game.js §13c
   /* One broken strip must never take the other nine with it. */
   const guard = function (name, fn) { try { fn(); } catch (e) { RF.warn('02-hud/' + name, e); } };
 
@@ -71,15 +90,17 @@ RF.mod('02-hud', function (RF) {
   @keyframes hd-pop{0%{transform:scale(1);}42%{transform:scale(1.09);}100%{transform:scale(1);}}
 
   /* 2 · bucket meter ------------------------------------------------------ */
-  #hud-bucket{position:relative;overflow:hidden;}
+  #hud-bucket{position:fixed;overflow:hidden;}
   .hd-fill{position:absolute;left:0;bottom:0;height:2px;width:0;background:var(--teal);
     box-shadow:0 0 8px currentColor;color:var(--teal);transition:width .35s ease,background .35s,color .35s;}
   .hd-fill.warn{background:var(--gold);color:var(--gold);}
   .hd-fill.hot{background:var(--rose);color:var(--rose);}
 
-  /* 3 + 8 · the left column: effects on top, the forecast under them ------- */
-  .hd-col{left:12px;top:292px;z-index:5;width:190px;display:flex;flex-direction:column;gap:6px;}
-  .hd-rail{display:flex;flex-direction:column;gap:5px;}
+  /* 3 + 8 · status rail and forecast --------------------------------------
+     one left column, clear of the minimap and the auto-rig chip above it; the
+     rail stacks urgency-first and the forecast card rides underneath it */
+  .hd-col{left:12px;top:300px;width:196px;z-index:5;display:flex;flex-direction:column;gap:8px;}
+  .hd-rail{display:flex;flex-direction:column;gap:6px;}
   .hd-fx{display:flex;gap:7px;align-items:center;padding:5px 8px 6px;position:relative;overflow:hidden;
     font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--ink);
     animation:hd-in .28s cubic-bezier(.2,.8,.2,1);}
@@ -311,6 +332,10 @@ RF.mod('02-hud', function (RF) {
       time: mmss(chum / 1000), pct: chum / CHUM_MS, u: chum / 1000 });
     if (comboT > 0) out.push({ id: 'vein', tone: 'g', ic: pix('pick', 13), name: 'vein ×' + combo,
       sub: 'chain it, it pays', time: comboT.toFixed(1) + 's', pct: comboT / COMBO_WINDOW, u: comboT });
+    const met = nearMeteor();
+    if (met) out.push({ id: 'meteor', tone: 'r', ic: pix('ore', 13), name: 'meteorite',
+      sub: met.landed ? dist(met) + 'm off · hold E on it' : 'still falling',
+      time: met.life > 0 ? mmss(met.life) : '', pct: clamp((met.life || 0) / METEOR_LIFE, 0, 1), u: 1000 });
     guard('rail-mkt', function () {
       const m = F.mktMods(), left = RF.MKT_MS - (now % RF.MKT_MS);
       const held = m.hot === 'fish' ? S.bucket.length : (S.ores[m.hot] | 0);
@@ -547,6 +572,21 @@ RF.mod('02-hud', function (RF) {
     add(RF.CASINO_POS, 'wheel', '#ff5d7a', 'the eel');
     add(RF.HARBOR_POS, 'boat', '#39d7c4', 'harbor');
     add(RF.PORTAL_POS, 'island', '#c490ff', 'portal');
+    /* the mine mouth and the lava crater are per-world and may be absent, so
+       they hold a slot and resolve it every frame instead of at load */
+    const live = function (key, icon, col, label, extra) {
+      const el = RF.el('<div class="hd-w" style="color:' + col + '">'
+        + '<span class="hd-wi"><i class="hd-wc"></i>' + pix(icon, 14) + '</span>'
+        + '<span class="hd-wd">0m</span></div>', wpEl);
+      const w = { pos: null, key: key, el: el, chev: el.querySelector('.hd-wc'), d: el.querySelector('.hd-wd'),
+        label: label, shownD: -1, cls: '' };
+      /* the beat is written per frame, so the fade this class carries has to go */
+      if (extra && extra.meteor) el.style.transition = 'none';
+      if (extra) for (const k in extra) w[k] = extra[k];
+      WPS.push(w); };
+    live('MINE_POS', 'pick', '#e8f4ff', 'the shaft');
+    live('CRATER_POS', 'sun', '#ff7a1a', 'the crater');
+    live(null, 'ore', '#ff8a3a', 'meteorite', { meteor: true });
     /* the X moves with the save, so it gets a slot filled per frame */
     const el = RF.el('<div class="hd-w" style="color:#ffd24f">'
       + '<span class="hd-wi"><i class="hd-wc"></i>' + pix('map', 14) + '</span>'
@@ -566,6 +606,17 @@ RF.mod('02-hud', function (RF) {
     wpTextT -= dt; const doText = wpTextT <= 0; if (doText) wpTextT = 0.25;
     for (let i = 0; i < WPS.length; i++) { const w = WPS[i];
       let p = w.pos;
+      if (w.key) {
+        const q = RF[w.key];
+        if (!q || !isFinite(q.x) || !isFinite(q.z)) { if (w.cls !== 'off') { w.cls = 'off'; w.el.className = 'hd-w'; } continue; }
+        _tp.x = q.x; _tp.z = q.z;
+        _tp.y = isFinite(q.y) ? q.y + 1.2 : F.heightAt(q.x, q.z) + 1.2; p = _tp;
+      } else if (w.meteor) {
+        const m = nearMeteor();
+        if (!m) { if (w.cls !== 'off') { w.cls = 'off'; w.el.className = 'hd-w'; w.el.style.opacity = ''; } continue; }
+        _tp.x = m.x; _tp.z = m.z;
+        _tp.y = (isFinite(m.gy) ? m.gy : F.heightAt(m.x, m.z)) + 1.4; p = _tp;
+      }
       if (w.treasure) {
         const tr = S.treasure;
         if (!tr || tr.w !== RF.worldKey) { if (w.cls !== 'off') { w.cls = 'off'; w.el.className = 'hd-w'; } continue; }
@@ -590,6 +641,9 @@ RF.mod('02-hud', function (RF) {
       w.el.style.transform = 'translate(' + (sx | 0) + 'px,' + (sy | 0) + 'px) translate(-50%,-50%)';
       w.chev.style.opacity = inside ? '0' : '1';
       if (!inside) w.chev.style.transform = 'translateX(-50%) rotate(' + ang.toFixed(2) + 'rad)';
+      /* ninety-five seconds and gone: the strike is the only marker that
+         insists, so it borrows the X's beat */
+      if (w.meteor) w.el.style.opacity = (0.35 + beat(urg(d)) * 0.65).toFixed(3);
       if (doText) { const dd = Math.round(d);
         if (dd !== w.shownD) { w.shownD = dd; w.d.textContent = dd + 'm'; } } }
   };
@@ -785,6 +839,8 @@ RF.mod('02-hud', function (RF) {
       poi(RF.CASINO_POS, '#ff5d7a', 4);
       poi(RF.PORTAL_POS, '#c490ff', 4);
       poi(RF.HARBOR_POS, '#39d7c4', 4);
+      poi(RF.MINE_POS, '#e8f4ff', 4);
+      poi(RF.CRATER_POS, '#ff7a1a', 4);
       // other anglers, so a crowded isle looks crowded
       if (RF.peers && RF.peers.size) RF.peers.forEach(function (q) {
         if (q && isFinite(q.x) && isFinite(q.z)) dot(M(q.x), M(q.z), '#7fdcff', 3, true); });
@@ -792,8 +848,8 @@ RF.mod('02-hud', function (RF) {
       if (tr && tr.w === RF.worldKey) {
         const tx = tr.i / N * W, ty = tr.j / N * W;
         const d = Math.hypot(tr.i - HALF - p.x, tr.j - HALF - p.z);
-        const urgency = clamp(1 - d / 40, 0.15, 1);              // it beats faster as you close in
-        const pulse = calm ? 1 : 0.55 + 0.45 * Math.sin(RF.clock * (2 + urgency * 6));
+        const urgency = urg(d);                                  // it beats faster as you close in
+        const pulse = beat(urgency);
         x.strokeStyle = '#ffd24f'; x.lineWidth = 2.4 + urgency;
         x.globalAlpha = 0.45 + pulse * 0.55;
         const a = 4.5 + urgency * 2;
@@ -801,6 +857,18 @@ RF.mod('02-hud', function (RF) {
         x.moveTo(tx + a, ty - a); x.lineTo(tx - a, ty + a); x.stroke();
         x.globalAlpha = 1;
       }
+      // the richest one-shot on the isle lasts ninety-five seconds and used to
+      // announce itself with a single toast: it gets the X's beat
+      const mets = RF.meteors;
+      if (mets && mets.length) for (let i = 0; i < mets.length; i++) { const m = mets[i];
+        if (!m || !isFinite(m.x) || !isFinite(m.z)) continue;
+        const md = Math.hypot(m.x - p.x, m.z - p.z), mu = urg(md), mp = beat(mu);
+        const mx = M(m.x), my = M(m.z);
+        x.globalAlpha = m.landed === false ? 0.5 : 0.45 + mp * 0.55;
+        x.strokeStyle = '#ff8a3a'; x.lineWidth = 1.6 + mu;
+        x.beginPath(); x.arc(mx, my, 4 + mu * 2 + mp * 2, 0, TAU); x.stroke();
+        x.globalAlpha = 1;
+        dot(mx, my, m.landed === false ? '#ffd24f' : '#ff6a2a', 2.6, true); }
       // the hero: a dot with the wedge core never drew — which way you are facing
       const px2 = M(p.x), py2 = M(p.z), fa = p.face || 0;
       const dx = Math.sin(fa), dz = Math.cos(fa);
@@ -865,6 +933,42 @@ RF.mod('02-hud', function (RF) {
     log: function () { return logbook.slice(); }
   };
 
+  /* 10-comfort owns the settings surface and loads after us, so the rows are
+     handed over once everything is up — and only if that mod actually shipped. */
+  const HINTS = {
+    counters:  'coins and pearls roll to their new value and fly a ±chip',
+    rail:      'one pill per live effect, with the timer core keeps to itself',
+    toasts:    'repeats fold into ×N and gold jumps the queue',
+    floats:    'the number appears over the rock, the bobber, your head',
+    waypoints: 'edge chevrons to every landmark, with distance',
+    forecast:  'what the clock and the sky are putting in the water',
+    nudge:     'one line, bottom right, answering what now',
+    hintbars:  'the hint line\'s ▰▱ runs become real bars',
+    minimap:   'hillshade, live ore, other anglers, a facing wedge'
+  };
+  let wired = false;
+  const wireSettings = function () {
+    guard('settings', function () {
+      const st = RF.api && RF.api.settings;
+      if (wired || !st || typeof st.register !== 'function') return;
+      wired = true;
+      const rows = [];
+      const mkRow = function (id, label) {
+        return { type: 'sw', label: label, hint: HINTS[id] || '',
+          get: function () { return !!cfg[id]; },
+          set: function (v) { RF.api.hud.set(id, v); } }; };
+      for (let i = 0; i < SECTIONS.length; i++) rows.push(mkRow(SECTIONS[i].id, SECTIONS[i].label));
+      rows.push({ type: 'btn', label: 'Every strip back on', label2: 'RESET',
+        hint: 'and the nudge stops being snoozed',
+        get: function () { return false; },
+        set: function () { snoozeUntil = 0; RF.api.hud.reset(); } });
+      st.register({ mod: '02-hud', title: 'heads-up display', rows: rows });
+      /* L is ours and nothing taught it before now */
+      if (typeof st.key === 'function') st.key('KeyL', 'replay every message');
+    });
+  };
+  RF.on('ready', wireSettings);
+
   /* ======================================================================
      DRIVE — one frame hook, everything else on a throttle.
      ====================================================================== */
@@ -877,14 +981,16 @@ RF.mod('02-hud', function (RF) {
     guard('f-wp', function () { tickWaypoints(dt); });
     if (cfg.forecast) guard('f-day', function () { measureDay(dt); });
   });
-  RF.every(0.25, function () { guard('t-rail', paintRail); });
-  RF.every(1.0, function () { guard('t-cast', paintCast); guard('t-nudge', tickNudge); });
+  /* a switched-off strip costs nothing: applyVis() already parked it hidden */
+  RF.every(0.25, function () { if (cfg.rail) guard('t-rail', paintRail); });
+  RF.every(1.0, function () { if (cfg.forecast) guard('t-cast', paintCast); guard('t-nudge', tickNudge); });
   RF.every(5.0, function () { if (logOpen) guard('t-log', paintLog); });
 
   /* first paint so nothing sits blank for a quarter second */
   guard('boot', function () { paintRail(); paintCast(); paintBadge(); });
   RF.on('start', function () {
     guard('start', function () {
+      wireSettings();                         // in case 'ready' never reached us
       paintRail(); paintCast();
       nudgeNextAt = RF.clock + 12;            // let the player get their bearings first
       F.toast(pix('map', 13) + ' <b>L</b> replays every message · chevrons point the way', 'good');

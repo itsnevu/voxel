@@ -53,11 +53,11 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 // something unexpected. Importing db.js is read-only — the singleton Database
 // it exports is the same object index.js and realtime.js already share.
 import * as DB from './db.js';
+import { ipRateLimit } from './middleware.js';
 
 /* ------------------------------------------------------------- tuning ----- */
 const RL_WINDOW_MS = 60 * 1000;      // rate-limit window
 const RL_MAX = 30;                   // …and requests allowed inside it, per IP
-const RL_MAP_CAP = 5000;             // opportunistic prune threshold
 
 const REPORTS_LIMIT_DEFAULT = 100;
 const REPORTS_LIMIT_MAX = 500;
@@ -273,128 +273,55 @@ export function isMuted(userId) {
 }
 
 /* ============================================================================
-   ENFORCEMENT WIRING — where the two predicates above must be called.
+   ENFORCEMENT WIRING — where the two predicates above are called.
    ----------------------------------------------------------------------------
-   This module owns none of these files and edits none of them. Everything below
-   is paste-ready for whoever holds them.
+   This module still enforces nothing itself. The doors live in other files and
+   each one calls in here; this is the map, so a route added later knows which
+   gate it is missing.
 
-   ---------------------------------------------------------------------------
-   1. auth.js — refuse a banned account at the front door.
-   ---------------------------------------------------------------------------
-       import { isBanned } from './admin.js';
+   1. auth.js — the password front door.
+      suspended() answers 403 ACCOUNT_SUSPENDED from POST /api/auth/login and
+      from GET /api/auth/me, which is what session resume actually is. Both sit
+      AFTER the credential check: asking first would turn either route into an
+      oracle telling anyone which accounts are banned.
 
-   In mountAuth(), inside app.post('/api/auth/login', ...): AFTER the password
-   check has already succeeded (the `if (!okPass) return 401` block) and BEFORE
-   `const token = sessions.create(row.id)`:
+   2. wallet.js — the signature front door.
+      Same suspended() answer in POST /api/auth/wallet/verify, after the
+      signature has been recovered and the account row resolved.
 
-       const ban = isBanned(row.id);
-       if (ban.banned) {
-         return res.status(403).json({
-           error: 'this account is suspended',
-           until: ban.until,
-           reason: ban.reason,
-         });
-       }
+      /api/auth/guest needs nothing: it mints a brand-new account id every call,
+      so there is never a pre-existing sanction to find. (Ban evasion by
+      re-rolling a guest is a separate problem and belongs to whoever owns guest
+      throttling.)
 
-   The order matters. Checking before the password check would turn the login
-   route into an oracle telling anyone which accounts are banned; behind it, only
-   the account's real owner ever learns.
+   3. index.js — requireNotBanned, wrapped around requireAuth's output.
+      /ban deletes every session row, so the usual answer is a 401 on the very
+      next request; this gate closes the remaining window — a token minted
+      microseconds before the ban landed. It guards every route that MOVES
+      something: /api/action/:name, /api/save, /api/ledger/claim, the six crew
+      mutations and /api/report. Reads stay open so a suspended player can still
+      load the isle and read why they cannot act.
 
-   ---------------------------------------------------------------------------
-   2. wallet.js — the same check on the second front door.
-   ---------------------------------------------------------------------------
-   In mountWalletAuth(), inside app.post('/api/auth/wallet/verify', ...), after
-   the signature has been recovered and `row` resolved, before
-   `const token = sessions.create(row.id)` — same five lines as above.
-
-   /api/auth/guest needs nothing: it mints a brand-new account id every call, so
-   there is never a pre-existing sanction to find. (Ban evasion by re-rolling a
-   guest is a separate problem and belongs to whoever owns guest throttling.)
-
-   ---------------------------------------------------------------------------
-   3. index.js — close the race, and stop tokens minted a moment too early.
-   ---------------------------------------------------------------------------
-   /ban deletes every session row for the account, so an existing token dies
-   immediately. A token issued microseconds before the ban landed would not.
-   Wrap requireAuth once and use the wrapper everywhere:
-
-       import { isBanned } from './admin.js';
-
-       function requireLiveAuth(req, res, next) {
-         requireAuth(req, res, () => {
-           const ban = isBanned(req.userId);
-           if (ban.banned) {
-             return res.status(403).json({
-               error: 'this account is suspended',
-               until: ban.until,
-               reason: ban.reason,
-             });
-           }
-           next();
-         });
-       }
-
-   …then swap `requireAuth` for `requireLiveAuth` on the authenticated routes.
-   Also: mountAdmin(app, deps) must be called BEFORE the `unknown /api/* -> 404`
-   catch-all near the bottom of the file, or every admin route is swallowed by
-   it. And add 'X-Admin-Token' to the CORS `allowedHeaders` list if the console
-   is ever driven from a browser page on another origin (curl needs no CORS).
-
-   ---------------------------------------------------------------------------
    4. realtime.js — the socket, and the megaphone.
-   ---------------------------------------------------------------------------
-       import { isBanned, isMuted } from './admin.js';
-       const CLOSE_BANNED = 4403;   // next to CLOSE_AUTH / CLOSE_REPLACED
+      onConnection() refuses the handshake with CLOSE_BANNED (4403); heartbeat()
+      cuts an account banned mid-session within one PING_MS; onChat() answers
+      {t:'chat_err', m:'muted', until} after the CHAT_GAP throttle, so the gag
+      cannot be spent as a free rate-limit probe; and kick(), which /ban
+      feature-detects below, drops the socket the instant the sanction lands.
 
-   (a) onConnection(), immediately after the `if (!userId) { ...close... }`
-       block, so a banned account cannot even open a socket:
+   5. Still open, and still optional — a presence listing would turn
+      /api/admin/online from bare head-counts into names. Detected below as
+      presence / presenceList / onlineList / listOnline / onlinePlayers / peers,
+      expected to return [{ userId, name, world, id }] — the exact shape of
+      realtime.js's peerPayload() plus the account id:
 
-         const ban = isBanned(userId);
-         if (ban.banned) {
-           try { ws.close(CLOSE_BANNED, 'suspended'); } catch {}
-           return;
-         }
-
-   (b) onChat(), after the CHAT_GAP throttle has been applied (so a muted player
-       cannot spend the check as a free rate-limit probe) and before cleanChat():
-
-         const gag = isMuted(peer.userId);
-         if (gag.muted) {
-           peer.chatAt = t;
-           send(peer, { t: 'chat_err', m: 'muted', until: gag.until });
-           return;
-         }
-
-   (c) heartbeat(), inside the per-peer loop, to cut a player banned MID-session
-       within 30s even if the realtime layer never grows a kick hook:
-
-         if (isBanned(peer.userId).banned) { ws.close(CLOSE_BANNED, 'suspended'); continue; }
-
-   (d) Optional but worth it — export a kick hook and /ban will cut the socket
-       instantly instead of waiting for (c). This module already feature-detects
-       it under the names kick / kickUser / disconnectUser / dropUser / closeUser:
-
-         export function kick(userId, reason = 'kicked') {
-           const peer = byUser.get(Number(userId));
-           if (!peer) return false;
-           dropPeer(peer);
-           try { peer.ws.close(CLOSE_BANNED, String(reason).slice(0, 60)); } catch {}
-           return true;
-         }
-
-   (e) Also optional: a presence listing turns /api/admin/online from bare
-       head-counts into names. Detected as presence / presenceList / onlineList /
-       listOnline / onlinePlayers / peers, expected to return
-       [{ userId, name, world, id }] — the exact shape of peerPayload() plus the
-       account id:
-
-         export function presence() {
-           const out = [];
-           for (const [world, room] of rooms) {
-             for (const p of room) out.push({ userId: p.userId, id: p.id, name: p.name, world });
-           }
-           return out;
-         }
+        export function presence() {
+          const out = [];
+          for (const [world, room] of rooms) {
+            for (const p of room) out.push({ userId: p.userId, id: p.id, name: p.name, world });
+          }
+          return out;
+        }
    ========================================================================== */
 
 /* ============================================================================
@@ -648,33 +575,16 @@ function tokenMatches(provided) {
   return timingSafeEqual(a, b);
 }
 
-const hits = new Map();   // ip -> { count, resetAt }
-
 function clientIp(req) {
   return req.ip || req.socket?.remoteAddress || 'unknown';
 }
 
-function rateLimit(req, res, next) {
-  const t = now();
-  if (hits.size > RL_MAP_CAP) {
-    for (const [ip, rec] of hits) if (rec.resetAt <= t) hits.delete(ip);
-  }
-
-  const ip = clientIp(req);
-  let rec = hits.get(ip);
-  if (!rec || rec.resetAt <= t) {
-    rec = { count: 0, resetAt: t + RL_WINDOW_MS };
-    hits.set(ip, rec);
-  }
-  rec.count += 1;
-
-  if (rec.count > RL_MAX) {
-    const retryAfter = Math.max(1, Math.ceil((rec.resetAt - t) / 1000));
-    res.set('Retry-After', String(retryAfter));
-    return res.status(429).json({ error: 'too many admin requests' });
-  }
-  next();
-}
+// The console keeps its own wording and omits the RATE_LIMIT code, so that a
+// 429 from here never reads to a client like one from a game route.
+const rateLimit = ipRateLimit({
+  max: RL_MAX, windowMs: RL_WINDOW_MS,
+  message: 'too many admin requests', code: null
+});
 
 /**
  * Token gate. A failure answers 404, not 401: the console should be
@@ -1035,7 +945,7 @@ export function mountAdmin(app, deps = {}) {
       }
     } else {
       payload.worlds = null;
-      payload.note = 'realtime exposes head-counts only · see ENFORCEMENT WIRING (4e) in admin.js '
+      payload.note = 'realtime exposes head-counts only · see ENFORCEMENT WIRING (5) in admin.js '
                    + 'for the presence() export that turns this into names';
     }
 
@@ -1116,7 +1026,8 @@ export function mountAdmin(app, deps = {}) {
     }
 
     // The WebSocket authenticates once at connect, so an open socket outlives
-    // its session unless the realtime layer cuts it. See wiring note (4c)/(4d).
+    // its session unless the realtime layer cuts it. realtime.js exports kick()
+    // for exactly this; the heartbeat is the backstop if it ever goes away.
     const kicked = kickSocket(target.id, 'suspended');
 
     audit('ban', target.username, dur.permanent ? null : dur.minutes, {
@@ -1134,8 +1045,8 @@ export function mountAdmin(app, deps = {}) {
       sessionsRevoked: revoked,
       kicked,
       ...(kicked ? {} : {
-        note: 'realtime has no kick hook · any open socket drops on its next '
-            + 'heartbeat or reconnect (see ENFORCEMENT WIRING 4c/4d in admin.js)',
+        note: 'realtime exposed no kick hook · any open socket drops on its next '
+            + 'heartbeat or reconnect (see ENFORCEMENT WIRING 4 in admin.js)',
       }),
     });
   });

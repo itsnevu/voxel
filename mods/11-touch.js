@@ -13,7 +13,7 @@
    6.  The small-screen sheet — core's overlays go full-bleed with a sticky head,
        the hotbar scrolls, the HUD restacks, every edge respects the notch.
    7.  Gesture hygiene — no double-tap zoom, no rubber-band, no long-press
-       callout on the world; all of it still works inside a scrolling panel.
+       callout on the world; every scroller, core or mod, still scrolls.
    8.  Haptics — a tick on a bite, a thump on a break, a cadence on a rare fish.
    9.  One landscape hint, once, dismissible, never again. */
 RF.mod('11-touch', function (RF) {
@@ -183,6 +183,9 @@ RF.mod('11-touch', function (RF) {
   body.rf-touch .card,body.rf-touch #casino .card-c,body.rf-touch .stake-list,body.rf-touch #chatLog,
   body.rf-touch .rf-touch-tray,body.rf-touch #capcard .capc{touch-action:pan-y;overscroll-behavior:contain;
     -webkit-overflow-scrolling:touch;}
+  /* the shared opt-in: any mod's scroll box wears one of these two and is
+     treated exactly like a core scroller, here and in the gesture code */
+  body.rf-touch [data-rf-touch-scroll],body.rf-touch .rf-touch-scroll{overscroll-behavior:contain;-webkit-overflow-scrolling:touch;}
   body.rf-touch #hotbar{touch-action:pan-x;}
   body.rf-touch button,body.rf-touch .btn,body.rf-touch .x,body.rf-touch .tabbtn,body.rf-touch .stake,
   body.rf-touch .betbtn,body.rf-touch .slot,body.rf-touch .wthumb{touch-action:manipulation;-webkit-tap-highlight-color:transparent;}
@@ -623,23 +626,168 @@ RF.mod('11-touch', function (RF) {
   onTap(restore, () => { P.mode = 'on'; savePrefs(); apply(); openTray(); });
 
   /* ══════════════════════════════════════════════════════════════════════
+     7b. WHAT A MOD HANDS US — two things a mod panel needs and core cannot
+     give it: a way to say "this box scrolls" and a way to say "I am covering
+     the glass". Both are opt-in and both cost nothing when nobody calls them.
+     ══════════════════════════════════════════════════════════════════════ */
+
+  /* Every selector core publishes keys off core's own classes, and a mod panel
+     is not inside one of them — which is how six mod panels ended up unable to
+     scroll below the fold. So: an opt-in attribute/class any mod can wear, the
+     selectors a mod registers by hand, and a computed backstop for the ones
+     that wear neither. Only the backstop is cached (touchstart clears it),
+     because it is the one that reads layout: the selector tests are cheap
+     enough to answer fresh on every touchmove. */
+  const MODSCROLL = '[data-rf-touch-scroll],.rf-touch-scroll';
+  const SCROLLERS = '.card,.card-c,.start-box,.stake-list,#chatLog,.rf-touch-tray,#capcard .capc,' +
+    '#hotbar,.tabs,input,textarea,select,' + MODSCROLL;
+  const SCROLLY = { auto: 1, scroll: 1, overlay: 1 };
+  const modSel = [];
+  function inModSel(el) {
+    for (let i = 0; i < modSel.length; i++) { try { if (el.closest(modSel[i])) return true; } catch (e) {} }
+    return false;
+  }
+  function walkScrolls(el) {
+    for (let n = 0, e = el; e && e.nodeType === 1 && n < 12; e = e.parentElement, n++) {
+      if (e === body || e === root3) return false;      // the page itself is the rubber band
+      let cs = null; try { cs = getComputedStyle(e); } catch (er) { return false; }
+      if (cs && SCROLLY[cs.overflowY] && e.scrollHeight - e.clientHeight > 2) {
+        // stamping hands the CSS half of the allow-list the same box the JS half
+        // just found — without it the box escapes preventDefault with no scroll
+        // chain containment, and overscrolls straight into the document bounce
+        try { e.setAttribute('data-rf-touch-scroll', ''); } catch (er) {}
+        return true;
+      }
+    }
+    return false;
+  }
+  let passEl = null, passOK = false;
+  function scrollable(el) {
+    if (!el || !el.closest) return false;
+    if (el.closest(SCROLLERS) || inModSel(el)) return true;
+    if (el !== passEl) { passEl = el; passOK = walkScrolls(el); }
+    return passOK;
+  }
+  /* A selector that reaches the page itself makes every touch somebody's
+     scroller: mine() goes false everywhere and the stick, the pinch and the
+     rubber-band suppressor all die at once. So the page, the body and the glass
+     are refused, the list is capped, and a selector that is not one is dropped
+     rather than thrown from inside closest() on every touchmove. */
+  const MODSEL_MAX = 24;
+  function okSel(sel) {
+    if (typeof sel !== 'string' || !sel || sel.length > 200) return false;
+    try {
+      document.querySelector(sel);
+      if (root3.matches(sel) || body.matches(sel)) return false;
+      const scene = byId('scene');
+      return !(scene && scene.matches(sel));
+    } catch (e) { return false; }
+  }
+  /* an element gets stamped so the selector path catches it from then on; a
+     string is kept for DOM a mod has not built yet */
+  function scroller(what) {
+    try {
+      if (!what) return false;
+      if (typeof what === 'string') {
+        if (modSel.indexOf(what) >= 0) return true;
+        if (!okSel(what) || modSel.length >= MODSEL_MAX) {
+          RF.err('touch:scroller', new Error('refused scroll selector ' + what), 'warn'); return false; }
+        modSel.push(what); return true;
+      }
+      if (what.nodeType === 1) { what.setAttribute('data-rf-touch-scroll', ''); passEl = null; return true; }
+      if (typeof what.length === 'number') {
+        let n = 0; for (let i = 0; i < what.length; i++) if (scroller(what[i])) n++; return n > 0;
+      }
+    } catch (e) { RF.err('touch:scroller', e, 'warn'); }
+    return false;
+  }
+
+  /* RF.panelOpen knows core's four overlays and nothing else, so every panel
+     that announces itself on the 'panel' signal is counted here too, and a mod
+     with no signal of its own can declare itself through RF.api.touch.panel(). */
+  const panels = Object.create(null);
+  let panelN = 0;
+  function markPanel(name, isOpen, el) {
+    const k = 'p:' + (name == null ? 'anon' : name);
+    const had = Object.prototype.hasOwnProperty.call(panels, k);
+    if (isOpen) { if (!had) panelN++;
+      panels[k] = { el: (el && el.nodeType === 1) ? el : null, t: Date.now() }; }
+    else if (had) { delete panels[k]; panelN--; }
+    if (panelN < 0) panelN = 0;
+  }
+  /* A mod that throws between its open and its close — or that closes one of
+     its surfaces by hand without balancing the signal — would otherwise latch
+     the stick off forever, and the 'panel' signal carries no element, so most
+     entries have nothing of their own to test. What the census really claims is
+     "something is covering the glass", so that is what gets asked: five points
+     put to the compositor, and a hit only counts as a cover when it belongs to
+     a box owning a real share of the screen — a toast or a HUD pill is not a
+     panel, and our own layer never is. An entry that named an element keeps the
+     exact check; the rest lapse only after the glass has read clear for a beat,
+     which is what keeps a genuinely open panel from being released early. */
+  const NOTGLASS = '#scene,#vig,#rf-touch,.rf-touch-tip,.rf-touch-restore';
+  const PROBE = [0.5, 0.5, 0.5, 0.22, 0.5, 0.78, 0.24, 0.5, 0.76, 0.5];
+  const PLAPSE = 1500;
+  let clearAt = 0, probeAt = 0;
+  function glassCovered() {
+    const w = window.innerWidth, h = window.innerHeight, need = w * h * 0.18;
+    for (let i = 0; i < PROBE.length; i += 2) {
+      let hit = null;
+      try { hit = document.elementFromPoint(w * PROBE[i], h * PROBE[i + 1]); } catch (e) {}
+      if (!hit || !hit.closest || hit.closest(NOTGLASS)) continue;
+      for (let n = 0, e = hit; e && e.nodeType === 1 && n < 8; e = e.parentElement, n++) {
+        if (e === body || e === root3) break;
+        let r = null; try { r = e.getBoundingClientRect(); } catch (er) { break; }
+        if (r.width * r.height >= need) return true;
+      }
+    }
+    return false;
+  }
+  function sweepPanels() {
+    const now = Date.now();
+    let anon = false;
+    for (const k in panels) {
+      const el = panels[k].el;
+      if (!el) { anon = true; continue; }
+      let live = false;
+      try { live = el.isConnected !== false && !!(el.getClientRects && el.getClientRects().length); } catch (e) { live = false; }
+      if (!live) { delete panels[k]; panelN--; }
+    }
+    // the probe is a layout read, so it is asked a few times a second at most,
+    // and only while an entry with nothing to check is actually outstanding
+    if (anon && now - probeAt > 380) {
+      probeAt = now;
+      clearAt = glassCovered() ? 0 : (clearAt || now);
+      if (clearAt && now - clearAt >= PLAPSE) {
+        for (const k in panels) { const p = panels[k];
+          if (!p.el && now - p.t >= PLAPSE) { delete panels[k]; panelN--; } }
+      }
+    }
+    if (panelN < 0) panelN = 0;
+  }
+  const panelsOpen = () => panelN > 0;
+
+  /* ══════════════════════════════════════════════════════════════════════
      8. GESTURES ON THE WORLD — pinch to zoom, two fingers that scroll
      nothing, and a one-finger orbit that gives photo mode a way out.
      ══════════════════════════════════════════════════════════════════════ */
   let pinch = null, orbit = null;
   const SKIP = '#rf-touch .rf-touch-act,#rf-touch .rf-touch-btn,#rf-touch .rf-touch-cell,' +
     '#rf-touch .rf-touch-tray,#rf-touch .rf-touch-scrim,.rf-touch-tip,.rf-touch-restore,' +
-    '#hotbar,#chat,.overlay,#casino,#capcard,#emotebar,#mute,#err,button,input,textarea,a,[role="button"]';
+    '#hotbar,#chat,.overlay,#casino,#capcard,#emotebar,#mute,#err,button,input,textarea,a,[role="button"],' +
+    MODSCROLL;
   const mine = t => { const el = t && t.target;
-    return !(el && el.closest && el.closest(SKIP)); };
+    if (!el || !el.closest) return true;
+    if (el.closest(SKIP) || inModSel(el)) return false;
+    return !scrollable(el); };
 
   const inStick = (x, y) => x < window.innerWidth * 0.56 &&
     y > window.innerHeight - Math.min(window.innerHeight * 0.52, RING * 2 + 70);
 
   function gestureStart(e) {
-    lastTouchT = Date.now();
+    lastTouchT = Date.now(); passEl = null;
     if (!touched) { touched = true; apply(); }
-    if (!active || RF.panelOpen || !RF.running) return;
+    if (!active || RF.panelOpen || panelsOpen() || !RF.running) return;
     for (let i = 0; i < e.changedTouches.length; i++) {
       const t = e.changedTouches[i];
       if (!mine(t)) continue;
@@ -718,13 +866,10 @@ RF.mod('11-touch', function (RF) {
   document.addEventListener('touchcancel', e => { try { gestureEnd(e); } catch (err) {} releaseAll(); }, { passive: true });
 
   /* Rubber-band and double-tap zoom die on the world surface only — anything
-     that is meant to scroll is named here and left completely alone. */
-  const SCROLLERS = '.card,.card-c,.start-box,.stake-list,#chatLog,.rf-touch-tray,#capcard .capc,' +
-    '#hotbar,.tabs,input,textarea,select';
+     that scrolls, core or mod, named or merely computed, is left alone. */
   document.addEventListener('touchmove', e => {
     if (!active) return;
-    const el = e.target;
-    if (el && el.closest && el.closest(SCROLLERS)) return;
+    if (scrollable(e.target)) return;
     if (e.cancelable) e.preventDefault();
   }, { passive: false });
   document.addEventListener('gesturestart', e => { if (active && e.cancelable) e.preventDefault(); });
@@ -771,7 +916,7 @@ RF.mod('11-touch', function (RF) {
     try {
       /* the controls stand aside for panels, the title screen and the chat
          keyboard — and the stick is released as they do, not left latched */
-      const hush = !RF.running || RF.panelOpen || RF.chatOpen;
+      const hush = !RF.running || RF.panelOpen || RF.chatOpen || panelsOpen();
       if (hush !== lastHush) { lastHush = hush; body.classList.toggle('rf-touch-hush', hush);
         if (hush) { releaseAll(); closeTray(); } }
       if (hush) return;
@@ -819,6 +964,7 @@ RF.mod('11-touch', function (RF) {
   RF.every(0.22, () => {
     if (!active || !RF.running) return;
     try {
+      if (panelN) sweepPanels();
       const h = byId('hint');
       let v = 'E';
       if (h && h.classList.contains('on')) {
@@ -834,9 +980,10 @@ RF.mod('11-touch', function (RF) {
     } catch (e) { RF.err('touch:verb', e, 'warn'); }
   });
 
-  /* a panel closing must never leave the hero mid-stride */
-  RF.on('panel', () => releaseAll());
-  RF.on('travel', () => releaseAll());
+  /* a panel closing must never leave the hero mid-stride, and the same signal
+     is the census the stick hushes on */
+  RF.on('panel', (name, open) => { markPanel(name, open); releaseAll(); });
+  RF.on('travel', () => { for (const k in panels) delete panels[k]; panelN = 0; releaseAll(); });
   RF.on('start', () => { try { metrics(); placeHome(); maybeTip(); renderTray(); } catch (e) {} });
   RF.on('muted', () => { if (tray.classList.contains('on')) renderTray(); });
 
@@ -857,7 +1004,15 @@ RF.mod('11-touch', function (RF) {
     get mode() { return P.mode; },
     haptics(v) { if (v === undefined) return P.haptics; P.haptics = !!v; savePrefs(); return P.haptics; },
     buzz: buzz,
-    key: tapKey                       // other mods can drive a bound key from their own touch UI
+    key: tapKey,                      // other mods can drive a bound key from their own touch UI
+    /* hand over a scroll box — an element, a list of them, or a selector for
+       DOM that does not exist yet — and the rubber-band suppressor lets it be */
+    scroller: scroller,
+    /* declare a mod panel open so the stick goes quiet underneath it; pass the
+       panel element as the third argument and we clean up after a mod that
+       forgets to close */
+    panel(name, open, el) { markPanel(name, open, el); if (open) releaseAll(); return panelN > 0; },
+    panelOpen() { return panelN > 0; }
   };
 
   apply();

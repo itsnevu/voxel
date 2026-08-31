@@ -72,6 +72,13 @@ export const DEEDS = [
   ['d_dex',    'Master of the Dex',     'complete the entire Fishdex',      s => DEX_TOTAL > 0 && dexNames(s).length >= DEX_TOTAL]
 ];
 
+/* The two id namespaces, as sets. /api/save merges a legacy client's trophy
+   blob into the server's state, and the ledger claim route HMAC-signs whatever
+   deed ids it finds there — so the merge has to be able to ask whether an id is
+   one of ours, not merely whether it looks like one. */
+export const ACH_IDS = new Set(ACH.map(e => e[0]));
+export const DEED_IDS = new Set(DEEDS.map(e => e[0]));
+
 /* A name in the dex is legendary if any world's table lists it as such. */
 const LEGENDARY = new Set(
   ALL_FISH.filter(e => e && e[0] && e[0].rar === 'legendary').map(e => e[0].name)

@@ -1751,15 +1751,28 @@ body.photo #rf-world-atlas{display:none!important;}
           // night → dawn → open day → dusk → night, keyed off the engine's own day curve
           const nightAmt = clamp(dT < 0.12 ? 1 - dT / 0.12 * 0.7 : dT > 0.76 ? (dT - 0.76) / 0.24 * 0.7 + 0.3 : 0, 0, 1);
           const goldAmt = Math.max(0, 1 - Math.abs(dT - 0.14) * 11) + Math.max(0, 1 - Math.abs(dT - 0.72) * 11);
-          r = 26; g = 40; b = 84; a = nightAmt * 0.30;
+          /* The engine grades the LIGHT now — sun and hemisphere carry their own
+             colour through dawn, dusk, night and weather. This wash used to be
+             the only dusk in the game and had to be strong enough to sell it
+             alone; on top of real light it double-counts, so it steps back to
+             what a wash is actually good for: a thin atmospheric veil the lit
+             surfaces show through. Halved deliberately, not tuned down by feel. */
+          const ENGINE_LIT = 0.5;
+          r = 26; g = 40; b = 84; a = nightAmt * 0.30 * ENGINE_LIT;
           if (goldAmt > 0) {
             const kk = goldAmt / (goldAmt + a * 3 + 0.001);
-            r = lerp(r, 255, kk); g = lerp(g, 150, kk); b = lerp(b, 86, kk); a = Math.max(a, goldAmt * 0.19);
+            r = lerp(r, 255, kk); g = lerp(g, 150, kk); b = lerp(b, 86, kk);
+            a = Math.max(a, goldAmt * 0.19 * ENGINE_LIT);
           }
-          if (WX === 'rain') { r = lerp(r, 104, .6); g = lerp(g, 130, .6); b = lerp(b, 142, .6); a = Math.max(a, 0.16); }
-          else if (WX === 'storm') { r = lerp(r, 58, .7); g = lerp(g, 74, .7); b = lerp(b, 90, .7); a = Math.max(a, 0.25); }
-          else if (WX === 'snow') { r = lerp(r, 206, .7); g = lerp(g, 230, .7); b = lerp(b, 242, .7); a = Math.max(a, 0.13); }
-          else if (WX === 'ash') { r = lerp(r, 132, .7); g = lerp(g, 76, .7); b = lerp(b, 52, .7); a = Math.max(a, 0.21); }
+          /* Follow the kind being DRAWN and how far it has crossed, so the wash
+             fades on the same clock as the sky instead of snapping at 8Hz. */
+          const WXD = (typeof RF.weatherDrawn === 'string') ? RF.weatherDrawn : WX;
+          const mix = (typeof RF.weatherMix === 'number') ? RF.weatherMix : 1;
+          const wa = ENGINE_LIT * mix;
+          if (WXD === 'rain') { r = lerp(r, 104, .6); g = lerp(g, 130, .6); b = lerp(b, 142, .6); a = Math.max(a, 0.16 * wa); }
+          else if (WXD === 'storm') { r = lerp(r, 58, .7); g = lerp(g, 74, .7); b = lerp(b, 90, .7); a = Math.max(a, 0.25 * wa); }
+          else if (WXD === 'snow') { r = lerp(r, 206, .7); g = lerp(g, 230, .7); b = lerp(b, 242, .7); a = Math.max(a, 0.13 * wa); }
+          else if (WXD === 'ash') { r = lerp(r, 132, .7); g = lerp(g, 76, .7); b = lerp(b, 52, .7); a = Math.max(a, 0.21 * wa); }
           a += mistAmt * 0.10;
         }
         gradeEl.style.backgroundColor = 'rgba(' + (r | 0) + ',' + (g | 0) + ',' + (b | 0) + ',' + a.toFixed(3) + ')';

@@ -277,14 +277,6 @@ RF.mod('12-boot', function (RF) {
     border-radius:10px;padding:9px 10px;resize:vertical;min-height:120px;}
   #rf-boot-copy.on{display:block;}
 
-  /* the title-screen links sit in the same faint register as "wipe save" */
-  #rf-boot-links{width:100%;margin-top:2px;}
-  #rf-boot-links button{background:none;border:none;color:var(--faint);text-decoration:underline;cursor:pointer;
-    font:inherit;font-size:10px;padding:0;}
-  #rf-boot-links button:hover{color:var(--teal);}
-  #rf-boot-links .rfb-bad{color:var(--rose);}
-  #rf-boot-links .rfb-pip{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--rose);
-    box-shadow:0 0 7px var(--rose);vertical-align:1px;margin-right:3px;}
 
   /* the tour: one dim layer with a hole punched by an enormous ring shadow */
   #rf-boot-tour{position:fixed;inset:0;z-index:33;display:none;pointer-events:none;}
@@ -830,29 +822,42 @@ RF.mod('12-boot', function (RF) {
   }
 
   /* ==========================================================================
-     8 · THE TITLE-SCREEN LINKS
+     8 · THE WAYS IN — the start screen stays bare, so the three panels this
+     mod owns hang off the settings pane, which is one key away from anywhere,
+     plus one card handed over exactly once: the tour on a first boot, the
+     changelog on the first boot after a version bump.
      ========================================================================== */
-  function mountLinks() {
-    const acct = byId('acct'); if (!acct || byId('rf-boot-links')) return;
-    const bad = worst(originRow ? CHECKS.concat([originRow]) : CHECKS) !== 'ok';
-    const links = RF.el('<div id="rf-boot-links" class="loadnote">' +
-      '<button type="button" data-a="report"' + (bad ? ' class="rfb-bad"' : '') + '>' +
-        (bad ? '<span class="rfb-pip"></span>' : '') + 'system check</button> · ' +
-      '<button type="button" data-a="news">what’s new</button> · ' +
-      '<button type="button" data-a="tour">show me around</button></div>', null);
-    if (!links) return;
-    acct.appendChild(links);
-    links.addEventListener('click', e => {
-      const b = e.target && e.target.closest ? e.target.closest('button') : null; if (!b) return;
-      const a = b.getAttribute('data-a');
-      if (a === 'report') openReport();
-      else if (a === 'news') openNews();
-      else if (a === 'tour') { closePanel(); startTour(true); }
-    });
+  let wired = false;
+  function wireSettings() {
+    /* 10-comfort owns that pane and may be missing or dead, so this is asked
+       at call time and the answer is allowed to be no. */
+    const st = RF.api && RF.api.settings;
+    if (wired || !st || typeof st.register !== 'function') return;
+    wired = true;
+    /* our scrim shares 10-comfort's z band, and the tour would open behind its
+       overlay, so the pane closes before anything of ours is put on screen */
+    const act = (label, tag, hint, fn) => ({ type: 'btn', label: label, label2: tag, hint: hint,
+      get: () => false, set: () => { try { st.close(); } catch (e) {} fn(); } });
+    st.register({ mod: '12-boot', title: 'boot & diagnostics', rows: [
+      act('System check', 'OPEN', 'what this browser can do, and what breaks where it cannot', openReport),
+      act('What is new', 'v' + VER, 'every system that landed on the isle in this version', openNews),
+      act('Show me around', 'TOUR', 'the six-step tour again, from wherever you are standing',
+          () => startTour(true))
+    ] });
   }
-  function repaintLinks() {
-    const el = byId('rf-boot-links'); if (!el) return;
-    el.remove(); mountLinks();
+
+  /* Said once per version and never again — nagging a player who has already
+     decided is the thing this mod refuses to do everywhere else. The card is
+     sticky rather than timed, so it waits to be answered instead of expiring
+     behind the title screen. */
+  function offerNews() {
+    mine.ver = VER; persist();
+    const close = h => { if (h && h.close) h.close(); };
+    say({ level: 'info', tag: 'rf-boot-news', icon: 'island', ttl: 0,
+      title: 'Version ' + VER + ' · ' + NEWS[0].name,
+      body: NEWS[0].lines.length + ' new systems have landed since you were last on the isle.',
+      actions: [{ label: 'What is new', key: true, fn: h => { close(h); openNews(); } },
+                { label: 'Show me around', fn: h => { close(h); startTour(true); } }] });
   }
 
   /* ==========================================================================
@@ -887,7 +892,6 @@ RF.mod('12-boot', function (RF) {
     c.value = ok ? 'working' : 'writes refused';
     c.why = ok ? '' : 'Nothing can be saved · every coin and fish is lost when this tab closes.';
     if (panelView === 'report') openReport();
-    repaintLinks();
   });
 
   addEventListener('resize', () => {
@@ -903,7 +907,7 @@ RF.mod('12-boot', function (RF) {
     try {
       CHECKS = battery();
       readOrigin();
-      mountLinks();
+      wireSettings();
       guardMods();
 
       /* One notification per failing check, loudest first, capped so a genuinely
@@ -928,14 +932,19 @@ RF.mod('12-boot', function (RF) {
       else if (!sig && mine.capSig) { delete mine.capSig; persist(); }
 
       if (fresh) {
-        mine.ver = VER; persist();              // a first-timer gets the tour, not a changelog
-        setTimeout(() => { if (!scrim || !scrim.classList.contains('on')) startTour(false); }, 1100);
-      } else if (mine.ver !== VER) {
-        if (!shownReport) setTimeout(() => {
-          if (scrim && scrim.classList.contains('on')) return;
-          openNews();
-        }, 700);
-      } else if (!mine.last) { mine.last = Date.now(); persist(); }
+        mine.ver = VER; persist();            // a first-timer is not owed a changelog
+        /* The tour's own first step is the invitation: it points at PLAY, it
+           carries Skip, and it defaults to never asking again. Nothing else on
+           the title screen would have told a newcomer it exists. */
+        setTimeout(() => {
+          if (tour || mine.tourSeen) return;
+          if (scrim && scrim.classList.contains('on')) return;   // the report got there first
+          startTour(false);
+        }, 900);
+      } else {
+        if (!mine.last) { mine.last = Date.now(); persist(); }
+        if (mine.ver !== VER) offerNews();
+      }
     } catch (e) { RF.err('boot:sequence', e); }
   });
 

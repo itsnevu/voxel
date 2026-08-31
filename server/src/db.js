@@ -205,15 +205,27 @@ function integrityCheck() {
    v1 is the schema as it stood before versioning existed, written to be fully
    idempotent (IF NOT EXISTS / column probes) so a database created by the old
    code adopts version 1 without a single row changing.
+
+   KNOWN LIMIT: every step runs inside db.transaction(), and SQLite ignores
+   `PRAGMA foreign_keys` (set ON at line ~150) while a transaction is open. The
+   12-step table-rebuild recipe — the only way to drop a column or change a
+   constraint — needs foreign_keys OFF *outside* a transaction, so it cannot be
+   expressed here. Nothing declares REFERENCES today, so this is latent; the
+   step that first needs a rebuild has to run its own connection-level dance
+   rather than being bolted onto this runner.
    ========================================================================== */
 
-/** True when `table` already has a column named `col`. */
+/**
+ * True when `table` already has a column named `col`.
+ *
+ * Deliberately uncaught. `table_info` on a table that does not exist returns an
+ * empty list rather than raising, so a throw from here is never "no such table"
+ * — it is a real failure, and answering `false` to it would have a migration
+ * ALTER a table it knows nothing about. Letting it propagate rolls the step's
+ * transaction back and leaves the version unstamped, so the next boot retries.
+ */
 function hasColumn(table, col) {
-  try {
-    return db.pragma(`table_info(${table})`).some((c) => c.name === col);
-  } catch {
-    return false;
-  }
+  return db.pragma(`table_info(${table})`).some((c) => c.name === col);
 }
 
 const MIGRATIONS = [
@@ -348,14 +360,62 @@ const MIGRATIONS = [
   },
 ];
 
+/**
+ * Version 0 means one thing only: nothing has ever been stamped. Every other
+ * outcome — including "the read failed" — must stop the boot, because the
+ * runner turns 0 into "replay from v1" and a replay over a populated database
+ * is how a transient error becomes data loss.
+ *
+ * SQLite does not give a missing table its own error code. better-sqlite3
+ * raises SqliteError { code: 'SQLITE_ERROR', message: 'no such table:
+ * schema_meta' } — the same code a corrupt page, a stale busy_timeout, or a
+ * typo'd column carries, so matching on it would be matching on nothing.
+ * Ask sqlite_master instead: it exists in every SQLite file, so a throw from
+ * THAT query can never mean "fresh database".
+ */
+function schemaMetaExists() {
+  return !!db.prepare(
+    `SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'`
+  ).get();
+}
+
+function unreadableVersion(detail) {
+  return new Error(
+    `Database schema version could not be read from ${DB_PATH}: ${detail}. ` +
+    'schema_meta is present but unreadable, so this build cannot tell which ' +
+    'migrations have already run.\nRefusing to start: treating that as a fresh ' +
+    'database would replay every migration over live player data.\n' +
+    'Retry once — a SQLITE_BUSY can outlive the 5s busy_timeout under load. If it ' +
+    'persists, inspect the file:\n' +
+    `  sqlite3 "${DB_PATH}" "PRAGMA integrity_check; SELECT * FROM schema_meta;"\n` +
+    'and restore the newest good backup if that does not come back clean.'
+  );
+}
+
 function readVersion() {
+  let present;
   try {
-    const row = db.prepare('SELECT value FROM schema_meta WHERE key = ?').get('version');
-    const n = row ? Number(row.value) : 0;
-    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
-  } catch {
-    return 0;
+    present = schemaMetaExists();
+  } catch (e) {
+    throw unreadableVersion(`the schema catalogue itself is unreadable (${e && e.message})`);
   }
+  if (!present) return 0; // genuinely fresh file — the only honest 0
+
+  let row;
+  try {
+    row = db.prepare('SELECT value FROM schema_meta WHERE key = ?').get('version');
+  } catch (e) {
+    throw unreadableVersion(e && e.message);
+  }
+  // The table exists but nothing is stamped yet: runMigrations() creates it
+  // before the first step runs, so this is a fresh file one line further on.
+  if (!row) return 0;
+
+  const n = Number(row.value);
+  if (!Number.isFinite(n) || n < 0) {
+    throw unreadableVersion(`schema_meta.version is ${JSON.stringify(row.value)}, not a version number`);
+  }
+  return Math.floor(n);
 }
 
 function writeVersion(v) {
@@ -531,8 +591,12 @@ export function stats() {
   out.dbBytes = fileBytes(DB_PATH);
   out.walBytes = fileBytes(`${DB_PATH}-wal`);
 
+  // readVersion() throws on an unreadable schema_meta by design. stats() feeds
+  // dashboards, not decisions, so swallow it here — refusing the boot is
+  // runMigrations()' job — but keep it out of the page counters' try so one
+  // sick table does not blank the whole block.
+  try { out.schemaVersion = readVersion(); } catch { /* reported as 0 */ }
   try {
-    out.schemaVersion = readVersion();
     out.freelistPages = db.pragma('freelist_count', { simple: true }) | 0;
     out.pageCount = db.pragma('page_count', { simple: true }) | 0;
   } catch { /* advisory only */ }

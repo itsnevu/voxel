@@ -197,7 +197,12 @@ describe('auth', () => {
       assert.equal(nonce.status, 200);
       assert.equal(typeof nonce.body.nonce, 'string');
       assert.ok(nonce.body.message.includes(nonce.body.nonce));
-      assert.ok(nonce.body.message.includes(wallet.address));
+      /* Compared case-insensitively: the text to sign carries the EIP-55
+         CHECKSUMMED address, because that is the spelling a wallet renders and
+         a mismatch there reads to the signer as a tampered message. Only the
+         echoed `address` field is the casing the caller asked with. */
+      assert.equal(nonce.body.address, wallet.address);
+      assert.ok(nonce.body.message.toLowerCase().includes(wallet.address.toLowerCase()));
 
       const verify = await server.post('/api/auth/wallet/verify', {
         body: { address: wallet.address, signature: signMessage(wallet.priv, nonce.body.message) },
@@ -283,23 +288,55 @@ describe('auth', () => {
       assert.match(replay.body.error, /nonce/i);
     });
 
-    it('burns the nonce even on a FAILED attempt', async () => {
+    it('burns a NAMED nonce even on a failed attempt', async () => {
       const wallet = newWallet();
       const impostor = newWallet();
       const nonce = await server.get(`/api/auth/wallet/nonce?address=${wallet.address}`);
 
+      /* naming the nonce is what buys pass-or-fail burning: only whoever asked
+         for that id knows it, so consuming it can cost nobody else a login */
       const failed = await server.post('/api/auth/wallet/verify', {
-        body: { address: wallet.address, signature: signMessage(impostor.priv, nonce.body.message) },
+        body: {
+          address: wallet.address,
+          nonce: nonce.body.nonce,
+          signature: signMessage(impostor.priv, nonce.body.message),
+        },
       });
       assert.equal(failed.status, 401);
 
       /* the real owner's own signature over that same nonce is now worthless:
          one guess per nonce, so a signature cannot be brute-forced */
       const retry = await server.post('/api/auth/wallet/verify', {
-        body: { address: wallet.address, signature: signMessage(wallet.priv, nonce.body.message) },
+        body: {
+          address: wallet.address,
+          nonce: nonce.body.nonce,
+          signature: signMessage(wallet.priv, nonce.body.message),
+        },
       });
       assert.equal(retry.status, 400);
       assert.match(retry.body.error, /nonce/i);
+    });
+
+    it('will not let a stranger burn an UNNAMED challenge someone is mid-signature on', async () => {
+      const wallet = newWallet();
+      const impostor = newWallet();
+      const nonce = await server.get(`/api/auth/wallet/nonce?address=${wallet.address}`);
+
+      /* Without a nonce id the server has to try every live challenge for the
+         address, so burning on failure would hand anyone a denial of service:
+         post garbage for a victim's address the instant before they sign and
+         their signature arrives at a challenge that no longer exists. Only the
+         one that actually verifies is consumed. */
+      const failed = await server.post('/api/auth/wallet/verify', {
+        body: { address: wallet.address, signature: signMessage(impostor.priv, nonce.body.message) },
+      });
+      assert.equal(failed.status, 401);
+
+      const owner = await server.post('/api/auth/wallet/verify', {
+        body: { address: wallet.address, signature: signMessage(wallet.priv, nonce.body.message) },
+      });
+      assert.equal(owner.status, 200, 'the owner lost a challenge a stranger poisoned');
+      assert.equal(owner.body.wallet, wallet.address.toLowerCase());
     });
 
     it('issues a different nonce every time', async () => {

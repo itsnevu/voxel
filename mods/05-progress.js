@@ -159,7 +159,7 @@ RF.mod('05-progress', function (RF) {
      ------------------------------------------------------------------------ */
   const DEF = { v: 1, ren: 0, life: 0, hist: [], drip: {},
     day: -1, week: -1, dq: [], wq: [], streak: 0, lastClaim: -1,
-    ms: {}, own: {}, theme: 'deep', badge: 1, log: 1, boot: 0, expWarn: -1 };
+    ms: {}, own: {}, theme: 'deep', badge: 1, log: 1, boot: 0, expWarn: -1, hello: 1 };
   let data;
   try { const raw = RF.store.get(KEY, null);
     data = Object.assign({}, DEF, raw && typeof raw === 'object' ? raw : null);
@@ -874,7 +874,7 @@ RF.mod('05-progress', function (RF) {
     if (t === root) close();
   } catch (err) { RF.err('05-progress:click', err); } });
 
-  function show() { if (open) return; open = true; rollover(true); applyTheme(); render();
+  function show() { if (open) return; cancelHello(); open = true; rollover(true); applyTheme(); render();
     root.classList.add('on'); try { RF.sfx.open(); } catch (e) {} }
   function close() { if (!open) return; open = false; root.classList.remove('on');
     try { RF.sfx.close(); } catch (e) {} flush(); }
@@ -937,23 +937,61 @@ RF.mod('05-progress', function (RF) {
   addEventListener('beforeunload', flush);
 
   /* --------------------------------------------------------------------------
+     THE HELLO. Everything this file owns lives behind one unlabelled key, and
+     the only line that ever names that key is the rollover notice — which by
+     definition cannot fire until the board turns over, i.e. never on the day a
+     save is made. So the first board announces itself once, and once only.
+     After that we go quiet: a returning player hears from us only when there is
+     something actually claimable, because a greeting that repeats on every
+     reload is a greeting nobody reads by the third one.
+     ------------------------------------------------------------------------ */
+  let firstRun = false, helloTimer = 0;
+  const cancelHello = () => { if (helloTimer) { clearTimeout(helloTimer); helloTimer = 0; } };
+
+  function armHello(first) {
+    cancelHello();
+    let tries = 0;
+    const fire = () => {
+      helloTimer = 0;
+      try {
+        if (open) return;                                   // they found Q on their own · say nothing
+        // the boot tour, the control card and a core overlay all outrank us;
+        // wait them out rather than stacking a fourth card on a new player
+        if ((!RF.running || RF.panelOpen) && ++tries < 12) { helloTimer = setTimeout(fire, 5000); return; }
+        if (first) {
+          data.hello = 1; touch();
+          say({ level: 'info', title: 'The board has work for you',
+            body: fmt(data.dq.length) + ' dailies and ' + fmt(data.wq.length) + ' weeklies posted · Renown, ranks and a ' +
+                  LADDER.length + '-rung ladder · press Q',
+            tag: 'rf-progress-daily', ttl: 10000 });
+          return;
+        }
+        const c = renownClaimable().length; if (!c) return;
+        say({ level: 'good', tone: 'gold', title: 'The Board · ' + rankOf(data.life).name,
+          body: c + ' objective' + (c > 1 ? 's' : '') + ' ready to claim · press Q',
+          tag: 'rf-progress-hello', ttl: 7000 });
+      } catch (e) { RF.err('05-progress:hello', e, 'warn'); }
+    };
+    // a first-timer already has a boot tour and a control card in front of
+    // them at 'start'; this one waits until they have read those and moved on
+    helloTimer = setTimeout(fire, first ? 13000 : 3500);
+  }
+  addEventListener('pagehide', cancelHello);
+
+  /* --------------------------------------------------------------------------
      BOOT
      ------------------------------------------------------------------------ */
   RF.on('ready', () => { try {
     reseed(); geodeWatch(0);
     rollover(true);
-    if (!data.boot) { data.boot = Date.now(); scanLadder(true); }
+    if (!data.boot) { data.boot = Date.now(); data.hello = 0; scanLadder(true); }
     else scanLadder(false);
+    firstRun = !data.hello;
     applyTheme(); buildBadge(); flush();
   } catch (e) { RF.err('05-progress:boot', e); } });
 
   RF.on('start', () => { try {
     geodeSeen = null; geodeWatch(0); reseed(); buildBadge();
-    const c = renownClaimable().length;
-    const rk = rankOf(data.life);
-    say({ level: 'info', title: 'The Board · ' + rk.name,
-      body: c ? c + ' objective' + (c > 1 ? 's' : '') + ' ready to claim · press Q'
-              : fmt(data.dq.length) + ' dailies and ' + fmt(data.wq.length) + ' weeklies posted · press Q',
-      tag: 'rf-progress-hello', ttl: 7000 });
+    armHello(firstRun);
   } catch (e) { RF.err('05-progress:start', e, 'warn'); } });
 });

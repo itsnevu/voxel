@@ -137,13 +137,79 @@ export function accessLog(req, res, next) {
 }
 
 /* ============================================================================
+   IP RATE LIMIT
+   ----------------------------------------------------------------------------
+   One fixed-window counter per client IP, held in a Map. auth.js, wallet.js and
+   admin.js each grew their own copy of this, byte-for-byte the same loop with a
+   different budget and a different 429 body; they now all call this factory.
+
+   Fixed window, not a sliding one: a burst straddling the boundary can spend
+   two budgets, which is the price of never allocating per-request. Every user
+   of this is a coarse abuse ceiling, not an accounting limit — the per-user,
+   per-action cooldowns that decide who may act live in the action log instead.
+
+   In-memory, so the budget is per process: a multi-instance deployment needs a
+   shared store, and this file is where that would go.
+   ========================================================================== */
+
+const RL_MAP_CAP = 5000;   // prune only once the map is worth walking
+
+const clientIp = (req) => req.ip || (req.socket && req.socket.remoteAddress) || 'unknown';
+
+/**
+ * @param {object} opts
+ * @param {number} opts.max        requests allowed per window, per IP
+ * @param {number} opts.windowMs   window length
+ * @param {string} [opts.message]  `error` field of the 429 body
+ * @param {string|null} [opts.code] `code` field; null omits it
+ * @param {(req)=>string} [opts.key] override the bucket key (defaults to IP)
+ * @returns {Function} express middleware
+ */
+export function ipRateLimit(opts) {
+  const max = Number(opts && opts.max) || 0;
+  const windowMs = Number(opts && opts.windowMs) || 0;
+  const message = (opts && opts.message) || 'too many attempts, try again later';
+  const code = (opts && 'code' in opts) ? opts.code : 'RATE_LIMIT';
+  const keyOf = (opts && opts.key) || clientIp;
+  const hits = new Map();   // key -> { count, resetAt }
+
+  return function rateLimit(req, res, next) {
+    const now = Date.now();
+    // Cheap opportunistic cleanup so the map cannot grow without bound.
+    if (hits.size > RL_MAP_CAP) {
+      for (const [k, rec] of hits) if (rec.resetAt <= now) hits.delete(k);
+    }
+
+    const key = keyOf(req);
+    let rec = hits.get(key);
+    if (!rec || rec.resetAt <= now) {
+      rec = { count: 0, resetAt: now + windowMs };
+      hits.set(key, rec);
+    }
+    rec.count += 1;
+
+    if (rec.count > max) {
+      const retryAfter = Math.max(1, Math.ceil((rec.resetAt - now) / 1000));
+      res.set('Retry-After', String(retryAfter));
+      const body = { error: message };
+      if (code) body.code = code;
+      return res.status(429).json(body);
+    }
+    next();
+  };
+}
+
+/* ============================================================================
    SECURITY HEADERS
    ----------------------------------------------------------------------------
    The policy is tuned to the game as it actually ships, not to a generic
    template — index.html loads three local <script src> files (no inline JS, so
    script-src stays 'self' with no escape hatch), one inline <style> block, and
-   Google Fonts. connect-src keeps ws:/wss: because realtime.js rides the same
-   origin over a WebSocket.
+   Google Fonts. connect-src is 'self' and nothing else: a bare `ws:`/`wss:`
+   scheme matches EVERY host, which would let an injected script stream a save
+   to any listener on the internet. 'self' already covers the same-origin
+   WebSocket realtime.js rides on — the scheme upgrade is part of the origin
+   match, so ws://<this host>/ws and wss://<this host>/ws both pass.
 
    If you ever add an inline <script>, do NOT add 'unsafe-inline' here — that
    single word is what turns any future XSS into a full account takeover. Move
@@ -161,9 +227,13 @@ export const CSP = [
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   'font-src https://fonts.gstatic.com',
   "img-src 'self' data:",
-  "connect-src 'self' ws: wss:",
+  "connect-src 'self'",
   "object-src 'none'",
   "base-uri 'self'",
+  // The game posts no forms at all, and frames nothing: both directives exist
+  // to give an injected <form> or <iframe> nowhere to point.
+  "form-action 'self'",
+  "frame-src 'none'",
   "frame-ancestors 'self'"
 ].join('; ');
 

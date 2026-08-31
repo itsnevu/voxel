@@ -19,10 +19,11 @@ Server ini membuat state pemain **tidak bisa dicurangi lewat console browser**. 
 9. [Nginx reverse proxy](#9-nginx-reverse-proxy)
 10. [HTTPS dengan certbot](#10-https-dengan-certbot)
 11. [Firewall](#11-firewall)
-12. [Backup database](#12-backup-database)
-13. [Cara update](#13-cara-update)
-14. [Troubleshooting](#14-troubleshooting)
-15. [Catatan keamanan](#15-catatan-keamanan)
+12. [Moderasi](#12-moderasi)
+13. [Backup database](#13-backup-database)
+14. [Cara update](#14-cara-update)
+15. [Troubleshooting](#15-troubleshooting)
+16. [Catatan keamanan](#16-catatan-keamanan)
 
 ---
 
@@ -231,12 +232,14 @@ Acuan isi (samakan dengan nama variabel yang ada di `.env.example` milik repo �
 
 ```ini
 NODE_ENV=production
-HOST=127.0.0.1
 PORT=8787
 DB_PATH=/opt/reelfortune/server/data/reelfortune.db
 LEDGER_SECRET=ganti_dengan_hasil_openssl_rand_hex_32
+ADMIN_TOKEN=ganti_dengan_hasil_openssl_rand_hex_24
 CORS_ORIGIN=https://game.example.com
 ```
+
+`ADMIN_TOKEN` yang dibiarkan kosong membuat seluruh console moderasi menjawab `404` — laporan pemain tetap masuk ke database tapi tidak ada satu pun cara membacanya atau menindaklanjutinya. Isi sekarang; penjelasan lengkapnya di [bagian 12](#12-moderasi).
 
 **Aturan format `EnvironmentFile` systemd** — beda dari file `.env` biasa:
 
@@ -248,7 +251,7 @@ CORS_ORIGIN=https://game.example.com
 
 ### 6.3 Kunci permission file rahasia
 
-`.env` berisi `LEDGER_SECRET`. Jangan biarkan bisa dibaca semua user:
+`.env` berisi `LEDGER_SECRET` dan `ADMIN_TOKEN`. Jangan biarkan bisa dibaca semua user:
 
 ```bash
 sudo chown root:reelfortune /opt/reelfortune/server/.env
@@ -419,26 +422,175 @@ sudo ss -tlnp | grep 8787
 # harus: 127.0.0.1:8787  — BUKAN 0.0.0.0:8787
 ```
 
-Kalau muncul `0.0.0.0:8787`, perbaiki `HOST=127.0.0.1` di `.env` dan restart.
+Bind ini di-hardcode di `src/index.js` (`app.listen(PORT, '127.0.0.1')`) — tidak ada variabel `HOST`
+yang bisa mengubahnya. Kalau yang muncul `0.0.0.0:8787`, yang jalan bukan proses ini.
 
 ---
 
-## 12. Backup database
+## 12. Moderasi
+
+Chat dan nameplate melayang aktif sejak layer realtime jalan. Sejak itu tabel `reports` terisi setiap kali pemain melapor — lewat tombol di client (`{t:"report"}` di websocket) maupun `POST /api/report`. Yang membaca tabel itu, dan satu-satunya cara menindak, adalah console moderasi di `/api/admin` (`src/admin.js`).
+
+> **Console itu mati kalau `ADMIN_TOKEN` tidak diisi.** Bukan terkunci — tidak ada. Semua path `/api/admin` menjawab `404`, sama persis dengan jawaban untuk token salah, jadi deploy yang lupa mengisi token tidak bisa dibedakan dari deploy yang benar: laporan tetap masuk, tidak ada yang bisa membacanya. Satu-satunya petunjuk adalah satu baris peringatan saat boot.
+
+### 12.1 Menyalakan console
+
+```bash
+openssl rand -hex 24
+```
+
+Masukkan hasilnya ke `.env` sebagai `ADMIN_TOKEN`, lalu restart:
+
+```bash
+sudo nano /opt/reelfortune/server/.env      # ADMIN_TOKEN=<hasil openssl>
+sudo systemctl restart reelfortune
+```
+
+Token ini setara password root untuk moderasi: satu nilai yang tidak terikat akun mana pun dan memberi seluruh wewenang di bawah. Simpan di password manager, jangan di riwayat shell. Kurang dari 24 karakter tetap diterima tapi diperingatkan saat boot.
+
+Pastikan menyala — baris `configuration` saat boot menyebutkan statusnya:
+
+```bash
+sudo journalctl -u reelfortune -n 200 | grep -i adminConsole
+# "adminConsole":"enabled"    ← menyala
+# "adminConsole":"disabled"   ← masih mati
+```
+
+### 12.2 Cara memanggilnya
+
+Tidak ada halaman HTML. Semua rute mengembalikan JSON dan token dikirim sebagai header `X-Admin-Token` — **tidak pernah** lewat query string, karena nginx menulis URL apa adanya ke access log dan token di file log adalah token yang bocor selamanya.
+
+```bash
+TOKEN='isi_ADMIN_TOKEN_di_sini'
+BASE=https://game.example.com/api/admin
+
+# daftar rute yang tersedia — sekaligus tes token
+curl -s -H "X-Admin-Token: $TOKEN" "$BASE/" | jq
+```
+
+(`jq` hanya merapikan JSON-nya — `sudo apt install -y jq`, atau buang saja dari setiap perintah di bawah.)
+
+Dapat `404`? Berarti token salah **atau** `ADMIN_TOKEN` kosong — dua hal itu sengaja dibuat tidak bisa dibedakan dari luar. Yang bisa membedakannya cuma log server: setiap penolakan mencatat IP pemanggil (`"action":"auth-reject"`).
+
+Batasnya 30 permintaan per menit per IP, dihitung **sebelum** token diperiksa, supaya secret tidak bisa di-brute force. Batas itu berlaku untuk semua rute termasuk yang cuma membaca.
+
+### 12.3 Yang bisa dilakukan console
+
+| Rute | Fungsi |
+|---|---|
+| `GET /reports?limit=100&since=<ms>` | Laporan pemain, nama pelapor dan terlapor sudah di-resolve, plus status sanksi terlapor. `hotTargets` = siapa yang paling sering dilaporkan dalam 7 hari terakhir |
+| `GET /players?q=<substr>&limit=50` | Cari akun berdasarkan username atau alamat wallet. Wallet ditampilkan tersamar (`0x1234…abcd`) |
+| `GET /online` | Jumlah pemain per world |
+| `GET /stats` | Hitungan baris tiap tabel, ukuran database, jumlah sanksi aktif, uptime, memori |
+| `POST /mute` `{username, minutes}` | Bungkam chat, `minutes` wajib, maksimal 525600 (1 tahun) |
+| `POST /unmute` `{username}` | Cabut bungkam |
+| `POST /ban` `{username, minutes?, reason}` | Suspend akun. Tanpa `minutes` = permanen |
+| `POST /unban` `{username}` | Cabut suspend |
+
+Yang sebenarnya terjadi di balik dua aksi itu:
+
+- **`mute`** hanya menyentuh chat. Pesan pemain ditolak dengan `{t:"chat_err", m:"muted", until}`; ia tetap bisa main, tetap terlihat, socket-nya tidak diputus. Mute tidak mengubah ban yang sedang berjalan, dan sebaliknya — keduanya sanksi terpisah di baris yang sama.
+- **`ban`** menulis `banned_until`, lalu **menghapus semua session** akun itu (permintaan HTTP berikutnya langsung `401`) dan meminta layer realtime memutus socket-nya saat itu juga. Setelahnya login dan verifikasi wallet menjawab `403 ACCOUNT_SUSPENDED`, handshake websocket ditutup dengan kode `4403`, dan semua rute yang **mengubah** sesuatu — aksi game, save, klaim deed, crew, report — ditolak. Rute baca sengaja dibiarkan terbuka supaya pemain masih bisa memuat game dan melihat alasannya.
+- **Tidak ada** rute yang menulis save. Console tidak bisa menambah atau mengurangi koin siapa pun; angka koin di `/players` cuma bacaan. Itu disengaja — admin yang bisa menyunting koin membuat seluruh audit ekonomi tidak ada artinya.
+
+Sanksi yang sudah lewat masa berlakunya tetap terlihat sekitar sebulan di `/players` sebelum disapu, jadi "minggu lalu pernah kena ban" masih terbaca.
+
+### 12.4 Hari pertama menghadapi pemain kasar
+
+```bash
+TOKEN='isi_ADMIN_TOKEN_di_sini'
+BASE=https://game.example.com/api/admin
+
+# 1. Baca laporan yang masuk, dan lihat siapa yang berulang kali dilaporkan
+curl -s -H "X-Admin-Token: $TOKEN" "$BASE/reports?limit=50" | jq '.hotTargets, .reports[0:5]'
+
+# 2. Pastikan orangnya — laporan menyimpan nama, sanksi butuh akun
+curl -s -H "X-Admin-Token: $TOKEN" "$BASE/players?q=namapemain" | jq '.players'
+
+# 3. Spam chat / kata kasar → bungkam sejam dulu. Reversible, tidak memutus permainan
+curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"username":"namapemain","minutes":60}' "$BASE/mute" | jq
+
+# 4. Pelecehan berulang atau curang → suspend. Tanpa "minutes" artinya permanen
+curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"username":"namapemain","reason":"pelecehan, laporan #128 dan #131"}' "$BASE/ban" | jq
+
+# 5. Salah orang? Cabut. "changed": false hanya muncul kalau akun itu memang
+#    belum pernah kena sanksi sama sekali
+curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"username":"namapemain"}' "$BASE/unban" | jq
+```
+
+Urutannya penting: **mute dulu, ban belakangan.** Mute menghentikan keributan dalam hitungan detik dan gampang dicabut; ban memutus sesi dan socket, dan pemain yang salah di-ban akan lebih ribut daripada masalah aslinya. `reason` selalu diisi — itu satu-satunya konteks yang tersisa saat sanksi ditinjau ulang berbulan-bulan kemudian.
+
+Setiap aksi yang mengubah sesuatu masuk ke journal dengan field `admin: true`, jadi seluruh riwayat moderasi bisa ditarik kembali:
+
+```bash
+sudo journalctl -u reelfortune --since "7 days ago" | grep '"admin":true'
+```
+
+### 12.5 Yang console ini **tidak** bisa lakukan
+
+Jangan sampai tertukar antara "tidak ada datanya" dan "tidak ada masalahnya":
+
+- **`/online` cuma memberi jumlah, bukan nama.** Layer realtime belum mengekspos daftar presence, jadi `worlds` bernilai `null` dan responsnya menyertakan catatan. Di `/players` dan `/reports`, `online: null` berarti **tidak diketahui**, bukan "sedang offline".
+- **Terlapor tidak selalu bisa ditindak.** Field `target` di laporan adalah teks bebas. Laporan dari websocket memakai nama akun (client tidak punya suara soal itu, server yang mengisinya), tapi laporan lewat `POST /api/report` bisa berisi nama yang tidak cocok dengan akun mana pun — barisnya muncul dengan `target.id: null` dan `mute`/`ban` akan menjawab `404 no such account`.
+- **Akun tamu bisa di-ban, tapi tidak mahal untuk diulang.** Tamu adalah akun sungguhan bernama `guest_xxxxxx` dan tunduk pada sanksi yang sama, hanya saja `POST /api/auth/guest` selalu bisa memberi yang baru. Menutup celah itu butuh pembatasan pendaftaran tamu, bukan console ini.
+- **Tidak ada identitas moderator.** Satu token dipakai bersama; log mencatat aksi, target, dan IP pemanggil — bukan siapa. Kalau nanti ada lebih dari satu orang yang memoderasi, itu yang perlu dibenahi lebih dulu.
+- **`"kicked": false` pada jawaban `ban` bukan berarti gagal.** Layer realtime punya hook pemutus socket dan dipakai; `false` muncul begitu pemainnya memang sedang tidak terhubung — dan `note` yang menyertainya keliru menyebut hook-nya tidak ada. Yang menentukan ban berhasil adalah `"ok": true`.
+- **Tidak ada UI.** Semuanya `curl` (atau HTTPie/Postman). Tidak ada halaman yang bisa dibuka di browser.
+
+### 12.6 Kunci `/api/admin` di nginx
+
+`deploy/nginx.conf` **belum** punya location khusus untuk `/api/admin`, jadi console ikut `location /api/` yang umum dan token adalah satu-satunya pertahanannya dari internet. Kalau IP Anda tetap, tambahkan blok ini di `nginx.conf` — prefixnya lebih panjang dari `/api/` sehingga otomatis menang dalam pemilihan location nginx, di mana pun ia diletakkan:
+
+```nginx
+location /api/admin/ {
+    allow 203.0.113.7;      # IP kantor/rumah Anda
+    allow 127.0.0.1;
+    deny all;
+
+    proxy_pass http://127.0.0.1:8787;
+    proxy_http_version 1.1;
+
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Connection        "";
+
+    proxy_buffering off;
+    expires -1;
+}
+```
+
+Perhatikan trailing slash: `location /api/admin/` tidak mencakup `/api/admin` tanpa slash. Pakai `location ^~ /api/admin` kalau ingin keduanya. Setelah diubah: `sudo nginx -t && sudo systemctl reload nginx`, lalu tes ulang dari IP yang diizinkan **dan** dari IP lain.
+
+Kalau IP Anda berubah-ubah, alternatifnya adalah tidak mengekspos `/api/admin` sama sekali dan memanggilnya lewat SSH tunnel:
+
+```bash
+ssh -L 8787:127.0.0.1:8787 user@vps
+curl -s -H "X-Admin-Token: $TOKEN" http://127.0.0.1:8787/api/admin/ | jq
+```
+
+---
+
+## 13. Backup database
 
 Database adalah satu-satunya hal yang tidak bisa dibuat ulang. Kode bisa di-clone lagi; progres pemain tidak.
 
-### 12.1 Kenapa tidak boleh `cp` saja
+### 13.1 Kenapa tidak boleh `cp` saja
 
 Server jalan dalam mode WAL. Menyalin file `.db` mentah saat ada transaksi berjalan bisa menghasilkan backup korup. Gunakan `sqlite3 .backup`, yang mengambil snapshot konsisten **tanpa menghentikan service**.
 
-### 12.2 Backup manual sekali jalan
+### 13.2 Backup manual sekali jalan
 
 ```bash
 sudo sqlite3 /opt/reelfortune/server/data/reelfortune.db \
   ".backup '/var/backups/reelfortune/manual-$(date +%F).db'"
 ```
 
-### 12.3 Script backup + rotasi 7 hari
+### 13.3 Script backup + rotasi 7 hari
 
 ```bash
 sudo mkdir -p /var/backups/reelfortune
@@ -451,7 +603,7 @@ sudo /opt/reelfortune/server/deploy/backup.sh
 
 Script akan: mengambil snapshot `.backup`, menjalankan `PRAGMA integrity_check` (backup yang tidak lolos ditolak), kompres gzip, lalu menghapus backup yang lebih tua dari 7 hari.
 
-### 12.4 Jadwalkan harian
+### 13.4 Jadwalkan harian
 
 ```bash
 sudo crontab -e
@@ -470,7 +622,7 @@ ls -lh /var/backups/reelfortune/
 tail -20 /var/log/reelfortune-backup.log
 ```
 
-### 12.5 Restore
+### 13.5 Restore
 
 ```bash
 sudo systemctl stop reelfortune
@@ -493,7 +645,7 @@ sudo systemctl start reelfortune
 
 ---
 
-## 13. Cara update
+## 14. Cara update
 
 ```bash
 # 1. Backup dulu — selalu, sebelum apa pun
@@ -534,7 +686,7 @@ sudo systemctl restart reelfortune
 
 ---
 
-## 14. Troubleshooting
+## 15. Troubleshooting
 
 ### Port 8787 sudah dipakai
 
@@ -674,13 +826,15 @@ Penyebab umum: port 80 ditutup di ufw, atau A record domain sudah tidak menunjuk
 
 ---
 
-## 15. Catatan keamanan
+## 16. Catatan keamanan
 
 Daftar periksa sebelum server dibuka untuk publik:
 
 - [ ] **Port 8787 tidak diekspos.** `sudo ss -tlnp | grep 8787` harus menunjukkan `127.0.0.1:8787`, bukan `0.0.0.0`. Hanya nginx yang boleh menghadap internet.
 - [ ] **ufw aktif, hanya 80/443/SSH.** Jangan pernah `ufw allow 8787`.
 - [ ] **`LEDGER_SECRET` sudah diganti** dengan hasil `openssl rand -hex 32`. Nilai contoh di repo bersifat publik — siapa pun bisa memalsukan deed kalau dipakai apa adanya.
+- [ ] **`ADMIN_TOKEN` sudah diisi** dengan hasil `openssl rand -hex 24`. Dibiarkan kosong bukan berarti aman — berarti tidak ada yang bisa membungkam atau memblokir pemain kasar, sementara chat sudah terbuka untuk publik. Cek: `journalctl -u reelfortune | grep adminConsole` harus `"enabled"`.
+- [ ] **`/api/admin` dibatasi per-IP di nginx** (lihat [12.6](#126-kunci-apiadmin-di-nginx)), supaya token yang bocor saja tidak cukup untuk membobol moderasi.
 - [ ] **`.env` mode 640, `root:reelfortune`.** Jangan pernah di-commit ke git. Pastikan ada di `.gitignore`.
 - [ ] **Service jalan sebagai `reelfortune`, bukan root.** Cek: `systemctl show reelfortune -p User`.
 - [ ] **Kode dimiliki root, hanya folder `data/` yang writable.** Service yang dibobol tetap tidak bisa mengubah aturan ekonominya sendiri.
@@ -717,6 +871,9 @@ sudo nginx -t && sudo systemctl reload nginx
 
 # backup manual
 sudo /opt/reelfortune/server/deploy/backup.sh
+
+# laporan pemain yang belum ditangani (butuh ADMIN_TOKEN, lihat bagian 12)
+curl -s -H "X-Admin-Token: $TOKEN" https://game.example.com/api/admin/reports | jq '.hotTargets'
 
 # inspeksi database
 sudo -u reelfortune sqlite3 /opt/reelfortune/server/data/reelfortune.db \

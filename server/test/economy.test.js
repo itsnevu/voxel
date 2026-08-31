@@ -1,17 +1,20 @@
 /* ============================================================================
    economy.test.js — the parts of the game that must give the same answer twice.
 
-   No server here: economy.js and rules.js are pure, and that purity is the
-   whole security argument. The client draws a stock chart from the same
-   `hash`/`vnoise` the server settles trades with, and it derives an ore node's
-   type from the same two integers — so "deterministic" is not a nice property,
-   it is the reason the client can be trusted to render prices at all.
+   No server here: economy.js, rules.js and the actions.js handlers are pure, and
+   that purity is the whole security argument. The client draws a stock chart
+   from the same `hash`/`vnoise` the server settles trades with, and it derives
+   an ore node's type from the same two integers — so "deterministic" is not a
+   nice property, it is the reason the client can be trusted to render prices at
+   all.
 
-   The three things being pinned down:
+   The five things being pinned down:
      - a price is a function of (ticker, epoch) and nothing else
      - an ore node's type is a function of (world, node id) and nothing else
      - a dividend quarter is paid exactly once, and a mangled save is repaired
        rather than replaced
+     - the roulette keeps a house edge on every bet, charm or no charm
+     - a credit to a huge balance saturates instead of wrapping negative
    ========================================================================== */
 
 import { describe, it } from 'node:test';
@@ -28,6 +31,8 @@ import {
   hash, oreTypeFor, rollOreType, normalizeState, newState,
   WORLDS, MAXLVL, MAX_BOAT,
 } from '../src/game/rules.js';
+
+import { HANDLERS } from '../src/game/actions.js';
 
 const QUARTER_MS = MKT_MS * DIV_Q;
 
@@ -380,6 +385,154 @@ describe('dropped share certificates', () => {
     assert.equal(grantShare(null, 'REEL').granted, false);
     assert.deepEqual(state.stocks.own, {});
   });
+});
+
+/* ============================================================================
+   BIG NUMBERS — a credit must never be able to bankrupt someone
+   ========================================================================== */
+
+describe('a credit to a huge balance saturates instead of wrapping', () => {
+  /* Past 2^31-1 and still an exact integer in a double. Reachable: a Frostbite
+     legendary that has ridden a few green pockets sells for eight figures. */
+  const NEAR_MAX = 3_000_000_000;
+  const I32_MAX = 2 ** 31 - 1;
+
+  it('is the ToInt32 wrap that this is defending against', () => {
+    /* The bug in one line, kept here so the assertions below have something to
+       be compared against: `| 0` turns a three-billion purse negative, and the
+       loader then reads a negative balance as no balance at all. */
+    assert.ok((NEAR_MAX | 0) < 0);
+    assert.equal(normalizeState({ coins: (NEAR_MAX | 0) + 90 }).coins, 0);
+  });
+
+  it('keeps a fortune whole when a full portfolio liquidates into it', () => {
+    const state = newState();
+    state.coins = NEAR_MAX;
+    state.stocks.own.EEL = STOCK_CAP;
+
+    const drop = grantShare(state, 'EEL');
+    assert.equal(drop.granted, true);
+    assert.ok(drop.soldFor >= 1);
+    assert.equal(state.coins, NEAR_MAX + drop.soldFor);
+    assert.ok(state.coins > I32_MAX, 'the credit wrapped');
+
+    /* and the balance survives the trip through the loader, which is where a
+       wrapped negative would have been floored to zero */
+    const reloaded = normalizeState(JSON.parse(JSON.stringify(state)));
+    assert.equal(reloaded.coins, state.coins);
+  });
+
+  it('keeps a fortune whole when a dividend quarter pays out', () => {
+    const own = { HARB: 100, LUMB: 100, DIGG: 100 };
+    const dNow = Math.floor(Date.now() / QUARTER_MS);
+
+    /* the board retains earnings a quarter in four, so walk back to a window
+       that genuinely pays rather than trusting a fixed one */
+    let from = dNow;
+    while (from > dNow - 40 && expectedDividends(own, from, dNow) === 0) from--;
+    const expected = expectedDividends(own, from, dNow);
+    assert.ok(expected > 0, 'no quarter in the last 40 paid anything — cannot test');
+
+    const state = holder(own, from - 1, NEAR_MAX);
+    assert.equal(payDividends(state), expected);
+    assert.equal(state.coins, NEAR_MAX + expected);
+    assert.ok(state.coins > I32_MAX, 'the credit wrapped');
+    assert.equal(state.stats.earned, expected);
+
+    const reloaded = normalizeState(JSON.parse(JSON.stringify(state)));
+    assert.equal(reloaded.coins, state.coins);
+    assert.ok(reloaded.coins > 0, 'a wrapped balance normalises to nothing on the next load');
+  });
+
+  it('keeps a fortune whole when the wheel pays out', () => {
+    const state = newState();
+    state.coins = NEAR_MAX;
+    state.rodLvl = MAXLVL;                 // the top chip needs the Poseidon Rod
+
+    const STAKE = 5000;                    // the largest rung of the coin ladder
+    let wins = 0;
+    for (let i = 0; i < 200 && wins < 3; i++) {
+      const before = state.coins;
+      const out = HANDLERS.spin(state, { bet: 'red', coinStake: STAKE });
+      assert.equal(out.ok, true, out.error);
+      assert.ok(state.coins > I32_MAX, `balance fell to ${state.coins}`);
+      if (out.result.won) { wins++; assert.equal(state.coins, before + STAKE); }
+    }
+    assert.ok(wins >= 3, 'red never came up in 200 spins');
+    assert.ok(normalizeState(JSON.parse(JSON.stringify(state))).coins > I32_MAX);
+  });
+});
+
+/* ============================================================================
+   THE SPINNING EEL — the house has to win
+   ========================================================================== */
+
+describe('the roulette pays back less than it takes', () => {
+  /* The wheel is drawn from crypto.randomInt, which nothing here can seed, so
+     this is a sampled expected value rather than an enumerated one. The sample
+     is sized off the variance of the worst case (green: 14x on 1 pocket in 15,
+     sd ~3.5 per unit staked), so 200k spins put the analytic mean about eight
+     standard errors clear of 1.0. Anything that genuinely inverts an edge moves
+     the mean by 0.04 or more and fails every time, not one run in twenty. */
+  const SPINS = 200_000;
+  const STAKE = 50;                        // on COIN_STAKES and inside a Lv.1 rod's cap
+
+  /* 15 pockets: 7 red, 7 black, 1 green. Every outside bet wins 7 of 15 at 2x
+     and green wins 1 of 15 at 14x, so the bare wheel pays back 14/15 either
+     way. The charm re-rolls one losing outside spin in twenty, which lifts the
+     win rate from p to p + (1-p)/20*p — and is excluded from green, because a
+     14x pocket that gets a second look is the one bet a re-roll turns
+     profitable. Those two numbers are the whole house edge. */
+  const P_OUTSIDE = 7 / 15;
+  const EV_BARE = 2 * P_OUTSIDE;                                   // 0.9333
+  const EV_CHARM = 2 * (P_OUTSIDE + (1 - P_OUTSIDE) / 20 * P_OUTSIDE); // 0.9582
+  const EV_GREEN = 14 * (1 / 15);                                  // 0.9333
+
+  /** Total returned per coin staked over SPINS spins of one bet kind. */
+  function expectedValue(bet, charm) {
+    const state = newState();
+    state.charm = charm ? 1 : 0;
+    /* park the share pity-cap in the far future: a green jackpot also rolls a
+       certificate, and a full portfolio would liquidate it into `coins` and
+       quietly inflate a measurement of the wheel */
+    state.stocks.lastShareEpoch = 1e12;
+
+    let gross = 0;
+    for (let i = 0; i < SPINS; i++) {
+      state.coins = STAKE;                 // exactly one chip, so nothing can be staked twice
+      const out = HANDLERS.spin(state, { bet, coinStake: STAKE });
+      assert.equal(out.ok, true, out.error);
+      gross += out.result.payout;
+    }
+    return gross / (SPINS * STAKE);
+  }
+
+  for (const bet of ['red', 'black', 'green', 'odd', 'even', 'high']) {
+    it(`keeps an edge on ${bet}, charm or no charm`, () => {
+      const bare = expectedValue(bet, false);
+      const charmed = expectedValue(bet, true);
+
+      assert.ok(bare < 1, `${bet} pays ${bare.toFixed(4)} per coin with no charm`);
+      assert.ok(charmed < 1, `${bet} pays ${charmed.toFixed(4)} per coin WITH the Lucky Charm`);
+
+      const expectBare = bet === 'green' ? EV_GREEN : EV_BARE;
+      const expectCharm = bet === 'green' ? EV_GREEN : EV_CHARM;
+      assert.ok(Math.abs(bare - expectBare) < 0.05,
+        `${bet} bare paid ${bare.toFixed(4)}, expected ~${expectBare.toFixed(4)}`);
+      assert.ok(Math.abs(charmed - expectCharm) < 0.05,
+        `${bet} charmed paid ${charmed.toFixed(4)}, expected ~${expectCharm.toFixed(4)}`);
+
+      /* the charm has to be worth its 600 pearls without being worth more than
+         the table — except on green, which it must not touch at all */
+      if (bet === 'green') {
+        assert.ok(Math.abs(charmed - bare) < 0.08,
+          `the charm moved green from ${bare.toFixed(4)} to ${charmed.toFixed(4)}`);
+      } else {
+        assert.ok(charmed > bare,
+          `the charm did nothing for ${bet}: ${bare.toFixed(4)} -> ${charmed.toFixed(4)}`);
+      }
+    });
+  }
 });
 
 /* ============================================================================

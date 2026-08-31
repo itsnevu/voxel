@@ -147,7 +147,8 @@ async function bootOnce() {
   const handle = { child, dir, port, origin };
   live.add(handle);
 
-  const deadline = Date.now() + BOOT_TIMEOUT_MS;
+  const startedAt = Date.now();
+  const deadline = startedAt + BOOT_TIMEOUT_MS;
   let healthy = false;
   while (Date.now() < deadline) {
     if (exited) break;
@@ -165,8 +166,18 @@ async function bootOnce() {
     live.delete(handle);
     try { child.kill('SIGKILL'); } catch { /* already gone */ }
     fs.rmSync(dir, { recursive: true, force: true });
-    const why = exited ? `exited (code ${exited.code}, signal ${exited.signal})` : 'timed out';
-    throw new Error(`server ${why} during boot on port ${port}\n${output.slice(-2000)}`);
+    const waited = Date.now() - startedAt;
+    const why = exited
+      ? `exited (code ${exited.code}, signal ${exited.signal}` +
+        `${exited.err ? `, spawn error: ${exited.err.message}` : ''})`
+      : `never answered /api/health (still ${child.exitCode === null && child.signalCode === null ? 'running' : 'gone'})`;
+    /* An empty tail is the worst report this can give: it reads as "the child
+       said nothing was wrong" when it almost always means the child never got
+       far enough to say anything. Spell out which of the two it was. */
+    const tail = output
+      ? `\n${output.slice(-2000)}`
+      : '\n  (the child wrote nothing at all to stdout or stderr)';
+    throw new Error(`server ${why} during boot on port ${port} after ${waited}ms${tail}`);
   }
 
   return { handle, output: () => output };
@@ -189,15 +200,23 @@ async function bootOnce() {
  */
 export async function startServer() {
   let lastErr;
-  for (let attempt = 0; attempt < BOOT_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= BOOT_ATTEMPTS; attempt++) {
     try {
       const { handle, output } = await bootOnce();
       return makeServer(handle, output);
     } catch (err) {
       lastErr = err;
+      /* Printed as it happens, not merely rethrown at the end. A suite that
+         dies in before() is reported by node --test as "0 fail, N cancelled":
+         the throw below never reaches a TAP diagnostic, so without this the
+         only evidence of three dead children is a summary that looks like
+         nothing ran. */
+      console.error(`[helpers] boot attempt ${attempt}/${BOOT_ATTEMPTS} failed: ${err.message}`);
     }
   }
-  throw lastErr;
+  throw new Error(
+    `no server booted in ${BOOT_ATTEMPTS} attempts — see the attempt logs above`,
+    { cause: lastErr });
 }
 
 function makeServer(handle, output) {

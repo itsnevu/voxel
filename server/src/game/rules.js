@@ -11,6 +11,16 @@
 export const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 export const rand = (a, b) => a + Math.random() * (b - a);
 
+const num = (v, d = 0) => (Number.isFinite(+v) ? +v : d);
+/* `x | 0` is ToInt32, so it silently WRAPS past 2^31: a hand-edited
+   `pearls: 4294967296` reads back as 0, and 2147483648 as a negative. Worse,
+   a CREDIT written as `(coins | 0) + n` turns a nine-figure purse into
+   -1294967206 the moment it crosses the boundary, which then normalises to 0
+   on the next load. Floor the Number instead, then clamp at the call site —
+   out-of-range values saturate, not wrap. Exported because every credit site
+   in economy.js has to go through it too. */
+export const int0 = (v) => Math.max(0, Math.floor(num(v, 0)));
+
 /* Own-property test. Every table lookup keyed by a string that came out of a
    save file goes through this: a plain `WORLDS[k]` answers truthily for
    '__proto__', 'constructor' and 'toString', which is enough to walk a bogus
@@ -57,18 +67,22 @@ export function rollOreType() {
 }
 
 /* Fold an arbitrary key into a small non-negative integer. Only used to feed
-   hash(), so it needs to be stable and well-spread, not cryptographic. */
-function foldKey(v) {
+   hash(), so it needs to be stable and well-spread, not cryptographic.
+   Exported because the client's copy of the world clock (see THE WORLD CLOCK,
+   below) has to fold world keys exactly the same way. */
+export function foldKey(v) {
   const s = String(v ?? '');
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 100003;
   return h;
 }
 
-/* A world's lane in the ore hash. The shipped `seed` is what the client uses
-   to lay the isle out, so keyed ore types stay in the same family of numbers;
-   an unrecognised key still gets its own lane rather than colliding on isle. */
-function worldSeed(world) {
+/* A world's lane in the hashes — ore types and the weather clock both ride it.
+   The shipped `seed` is what the client uses to lay the isle out, so keyed ore
+   types stay in the same family of numbers; an unrecognised key still gets its
+   own lane rather than colliding on isle. Exported: the client duplicates this
+   to derive its own weather, so the lane has to be readable in one place. */
+export function worldSeed(world) {
   const w = typeof world === 'string' && has(WORLDS, world) ? WORLDS[world] : null;
   return w && Number.isFinite(w.seed) ? w.seed : foldKey(world);
 }
@@ -445,12 +459,7 @@ function normalizeFish(f) {
 export function normalizeState(raw) {
   const s = raw && typeof raw === 'object' ? raw : {};
   const st = newState();
-  const num = (v, d = 0) => (Number.isFinite(+v) ? +v : d);
   const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : null);
-  /* `x | 0` is ToInt32, so it silently WRAPS past 2^31: a hand-edited
-     `pearls: 4294967296` reads back as 0, and 2147483648 as a negative. Floor
-     the Number instead, then clamp — out-of-range values saturate, not wrap. */
-  const int0 = (v) => Math.max(0, Math.floor(num(v, 0)));
 
   st.coins = int0(s.coins);
   st.bucket = Array.isArray(s.bucket)
@@ -536,6 +545,101 @@ export function normalizeState(raw) {
 /* ============================================================================
    FISHING
    ============================================================================ */
+
+/* ---- THE WORLD CLOCK: time of day and weather -----------------------------
+   THE CONTRACT — read it before touching a number below.
+
+   dayPhaseAt() and weatherAt() are pure functions of the wall clock and of
+   nothing else: the same ms in gives the same sky out, on every machine, with
+   or without a network. That is the whole point of them. The catch roll used
+   to take night and weather from the request body, which is not an ambient
+   fact at all — it is a +36% raise on every catch for anyone willing to type
+   `storm` — while a file:// client with no server still has to know what the
+   sky is doing. One clock, derived from Date.now() on both sides, answers both.
+
+   game.js carries a hand-copy of this arithmetic, constant for constant: its
+   `dayT` / isNight() and its `wState` weather machine (§14b SKY) read the same
+   numbers out of the same wall clock, and the HUD sky readout, the moon, the
+   weather toasts, every storm-gated species and the odds card in
+   mods/01-angler.js all hang off that. THIS FILE IS THE SOURCE OF TRUTH; the
+   client copies it, never the other way round. server/test/parity.test.js
+   samples both sides and fails on drift, so a change made here and not
+   mirrored there is caught rather than quietly paying the player wrong.
+
+   Everything the client must duplicate is exported and named below — day
+   length, night thresholds, weather period, weather salt, the per-world
+   weather split, and the world's hash lane (worldSeed/foldKey/hash, above).
+   If you add an input to either function, export it here first.
+   -------------------------------------------------------------------------- */
+
+/** One in-game day, in ms. The client spells the same span in seconds as
+    DAY_LEN = 420, so DAY_MS === DAY_LEN * 1000 and neither may move alone. */
+export const DAY_MS = 420000;
+/** Night is the tail of the cycle plus its head: the client's isNight() is
+    exactly `dayT < NIGHT_END || dayT > NIGHT_START`. */
+export const NIGHT_END = 0.13, NIGHT_START = 0.72;
+
+/**
+ * Where the wall clock sits in the day cycle.
+ * `t` is the client's `dayT` — [0,1), 0 is midnight — and `night` applies the
+ * client's isNight() split to it. Same ms in, same answer out, on any machine.
+ * The lunar `dayCount` the client draws the moon phase from is the whole part
+ * of the same division, Math.floor(ms / DAY_MS), so the moon rides this too.
+ * The cave is the one exemption on the client: it has no sky, so game.js pins
+ * dayT there rather than reading the clock. Nothing in CAVE_FISH is
+ * night-gated, so the roll cannot disagree with what is drawn down there.
+ */
+export function dayPhaseAt(ms) {
+  const t = ((num(ms, 0) / DAY_MS) % 1 + 1) % 1;
+  return { t, night: t < NIGHT_END || t > NIGHT_START };
+}
+
+/* Weather rides its own tick, slower than a cast and slower than the market's.
+   The client used to reroll on a rand(70,160)s timer; a fixed two minutes sits
+   in the middle of that window — the sky turns about as often as it always
+   did — and is the only cadence both sides can agree on without talking. */
+export const WEATHER_MS = 120000;
+/** The weather tick the wall clock is in. */
+export const weatherEpochNow = () => Math.floor(Date.now() / WEATHER_MS);
+/** Keeps the weather lane clear of the market's hash(e, 7) / hash(e, 13). */
+export const WEATHER_SALT = 613;
+
+/* ---- the per-world weather split ------------------------------------------
+   Thresholds on the [0,1) hash: below `clear` the sky is clear, below `storm`
+   it is that world's own `wet` kind, at or above `storm` it storms. The splits
+   are the client's own (game.js's weather state machine, which keys them off
+   isCold()/isAsh()): frost snows, the volcano throws ash, every other isle
+   rains, and all three can storm.
+   -------------------------------------------------------------------------- */
+export const WEATHER_MIX = {
+  frost:   { wet: 'snow', clear: 0.45, storm: 0.85 },
+  volcano: { wet: 'ash',  clear: 0.5,  storm: 0.82 }
+};
+/** Isle, mine, and any key this build does not recognise — the client's `else`
+    branch, which is the one that rains. */
+export const WEATHER_MIX_DEFAULT = { wet: 'rain', clear: 0.55, storm: 0.88 };
+/** The split for a world. Own-property safe, and never null. */
+export const weatherMixOf = (world) =>
+  (typeof world === 'string' && has(WEATHER_MIX, world) ? WEATHER_MIX[world] : WEATHER_MIX_DEFAULT);
+
+/**
+ * The weather over `world` during weather epoch `epoch`, as the client's
+ * `wState` string: 'clear' | 'rain' | 'snow' | 'ash' | 'storm'.
+ *
+ * Each isle rolls on its own hash lane, so two worlds are never handed the
+ * same sky by accident, and the split it rolls against is WEATHER_MIX above.
+ * The cave has no sky at all — the client forces 'clear' underground, so this
+ * does too, and neither side ever draws rain onto stone.
+ */
+export function weatherAt(world, epoch = weatherEpochNow()) {
+  const w = typeof world === 'string' && has(WORLDS, world) ? WORLDS[world] : null;
+  if (w && w.cave) return 'clear';
+  const e = Math.floor(num(epoch, 0));
+  /* the +1 keeps epoch 0 of world `isle` (seed 0) off hash()'s sin(0) === 0 */
+  const r = hash(e + 1, worldSeed(world) + WEATHER_SALT);
+  const mix = weatherMixOf(world);
+  return r < mix.clear ? 'clear' : r < mix.storm ? mix.wet : 'storm';
+}
 
 /** Does a species' spawn condition hold under the given weather/time? */
 export function condOK(cond, { night = false, rain = false, storm = false } = {}) {

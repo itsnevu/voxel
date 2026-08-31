@@ -67,7 +67,7 @@ RF.mod('03-panels', function (RF) {
   .p3-hint{display:block;font-size:9.5px;color:var(--faint);letter-spacing:.02em;margin-top:1px;}
   .p3-hint .pix{vertical-align:-2px;}
   .p3-cur{outline:1px solid var(--teal);outline-offset:-1px;box-shadow:0 0 12px rgba(57,215,196,.22)!important;}
-  .p3-tip{position:fixed;z-index:40;max-width:290px;pointer-events:none;opacity:0;transform:translateY(4px);
+  .p3-tip{position:fixed;z-index:33;max-width:290px;pointer-events:none;opacity:0;transform:translateY(4px);
     transition:opacity .12s ease,transform .12s ease;font-size:11.5px;line-height:1.55;color:var(--ink);
     background:var(--glass-hud);backdrop-filter:blur(14px) saturate(1.6);-webkit-backdrop-filter:blur(14px) saturate(1.6);
     border:1px solid var(--glass-bd);border-radius:11px;padding:9px 12px;
@@ -116,8 +116,10 @@ RF.mod('03-panels', function (RF) {
   .p3-sell .p3-chip{padding:7px 11px;font-size:11.5px;}
   .p3-sell .p3-chip.go{color:var(--gold);border-color:rgba(255,207,92,.5);}
   .p3-sell .p3-chip:disabled{opacity:.35;cursor:default;}
+  /* two routes to the same answer: the OS switch, and 10-comfort's in-game toggle */
   @media (prefers-reduced-motion:reduce){
     .p3-tip,.p3-bar i,.p3-chip{transition:none;} }
+  body.rf-reduced .p3-tip,body.rf-reduced .p3-bar i,body.rf-reduced .p3-chip{transition:none;}
   `, '03-panels-css');
 
   /* ---------------------------------------------------------------- tooltips.

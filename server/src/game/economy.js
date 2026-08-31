@@ -10,7 +10,7 @@
    every save is silently repriced.
    ============================================================================ */
 
-import { hash, vnoise } from './rules.js';
+import { hash, vnoise, int0 } from './rules.js';
 
 /* ============================================================================
    ROTATING MARKET DEMAND
@@ -110,7 +110,9 @@ export function grantShare(state, ticker) {
   const n = st.own[ticker] | 0;
   if (n >= STOCK_CAP) {
     const soldFor = stockBid(ticker, e);
-    state.coins = (state.coins | 0) + soldFor;
+    /* int0, never `| 0`: ToInt32 wraps at 2^31, so a nine-figure purse taking
+       a 90-coin credit came back NEGATIVE and normalised to 0 on next load */
+    state.coins = int0(state.coins) + soldFor;
     return { granted: true, ticker, full: true, soldFor, own: n };
   }
 
@@ -161,9 +163,9 @@ export function payDividends(state) {
   st.lastDiv = dNow;
   if (tot > 0) {
     if (!state.stats || typeof state.stats !== 'object') state.stats = {};
-    state.coins = (state.coins | 0) + tot;
-    state.stats.earned = (+state.stats.earned || 0) + tot;
-    state.stats.divEarned = (+state.stats.divEarned || 0) + tot;
+    state.coins = int0(state.coins) + tot;
+    state.stats.earned = int0(state.stats.earned) + tot;
+    state.stats.divEarned = int0(state.stats.divEarned) + tot;
   }
   return tot;
 }
