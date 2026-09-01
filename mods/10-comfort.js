@@ -119,15 +119,23 @@ RF.mod('10-comfort', function (RF) {
   #rf-comfort-gear:hover{border-color:var(--teal);color:var(--ink);}
   #rf-comfort-gear .rfc-cog{display:inline-block;width:8px;height:8px;margin-right:6px;vertical-align:0;
     border:2px solid currentColor;border-radius:2px;transform:rotate(45deg);}
-  /* rung 110: 78 now belongs to social's pill (see the stack note there) */
-  #rf-comfort-fps{bottom:110px;display:none;font-family:"Chakra Petch",sans-serif;font-weight:700;
+  /*
+     The bottom-right corner is a STACK, 32px to a rung. Three mods had all
+     independently picked 46-48px for it and drawn on top of each other, so the
+     allocation is written out here and repeated at each site:
+        14  #mute (SOUND, index.html)     46  #rf-comfort-gear (OPTIONS)
+        78  #rf-social-hud (ONLINE)      110  .hd-logbtn (L, the log)
+       142  #rf-comfort-fps / -perf
+     Anything new takes the next free rung and adds itself to this list.
+  */
+  #rf-comfort-fps{bottom:142px;display:none;font-family:"Chakra Petch",sans-serif;font-weight:700;
     font-variant-numeric:tabular-nums;color:var(--teal);cursor:default;}
   #rf-comfort-fps.on{display:block;}
   #rf-comfort-fps.warn{color:var(--gold);}#rf-comfort-fps.bad{color:var(--rose);}
   body.photo #rf-comfort-gear,body.photo #rf-comfort-fps,body.photo #rf-comfort-perf,
   body.capcam #rf-comfort-gear,body.capcam #rf-comfort-fps,body.capcam #rf-comfort-perf{display:none!important;}
 
-  #rf-comfort-perf{position:fixed;right:12px;bottom:110px;z-index:28;display:none;width:236px;
+  #rf-comfort-perf{position:fixed;right:12px;bottom:142px;z-index:28;display:none;width:236px;
     background:var(--glass-sheen),var(--glass-hud);backdrop-filter:blur(14px) saturate(1.6);
     -webkit-backdrop-filter:blur(14px) saturate(1.6);border:1px solid var(--glass-bd);border-radius:12px;
     padding:10px 12px 11px;box-shadow:var(--glass-hi),0 8px 24px rgba(2,8,10,.35);}
@@ -278,7 +286,10 @@ RF.mod('10-comfort', function (RF) {
   /* live sheet — rewritten whenever scale/opacity/text settings change */
   const zoomOK = !!(window.CSS && CSS.supports && CSS.supports('zoom', '1.25'));
   const HUD_L = '#hud-bucket,#hud-ores,#minimap,#hud-auto';
-  const HUD_R = '#hud-coins,#hud-pearls,#hud-bait,#derby';
+  /* #hud-purse is the positioned card now; the three ids inside it are plain
+     rows, so scaling them individually would stretch the contents and leave
+     the card where it was. */
+  const HUD_R = '#hud-purse,#derby';
   const HUD_C = '#area';
   const HUD_B = '#hotbar,#hint,#toasts';
   const HUD_ALL = HUD_L + ',' + HUD_R + ',' + HUD_C + ',' + HUD_B;

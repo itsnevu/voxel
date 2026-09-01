@@ -262,13 +262,15 @@ RF.mod('09-social', function (RF) {
      4. STYLE
      ====================================================================== */
   RF.css(`
-  /* The bottom-right corner is a STACK, 32px to a rung, and every mod that
-     parks something there has to take the next one up:
-        14  #mute (SOUND)        46  #rf-comfort-gear (OPTIONS)
-        78  this pill           110  #rf-comfort-fps / #rf-comfort-perf
-     This sat at 48 — two pixels off the gear's 46 — so the two drew on top of
-     each other and the pill was only visible as a sliver poking out behind
-     OPTIONS. */
+  /*
+     The bottom-right corner is a STACK, 32px to a rung. Three mods had all
+     independently picked 46-48px for it and drawn on top of each other, so the
+     allocation is written out here and repeated at each site:
+        14  #mute (SOUND, index.html)     46  #rf-comfort-gear (OPTIONS)
+        78  #rf-social-hud (ONLINE)      110  .hd-logbtn (L, the log)
+       142  #rf-comfort-fps / -perf
+     Anything new takes the next free rung and adds itself to this list.
+  */
   #rf-social-hud{position:fixed;bottom:78px;right:12px;z-index:28;display:none;align-items:center;gap:8px;}
   #rf-social-hud.on{display:flex;}
   body.photo #rf-social-hud,body.photo #rf-social-unread{display:none!important;}

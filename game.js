@@ -1415,6 +1415,7 @@ addEventListener('keydown',e=>{
   if(e.code==='KeyF'&&running&&!chatOpen&&!marketOpen&&!casinoOpen&&!invOpen&&!harborOpen){ e.preventDefault(); toggleAuto(); }
   if(e.code==='KeyP'&&running){ e.preventDefault(); togglePhoto(); }
   if(e.code==='KeyC'&&running&&!chatOpen&&!marketOpen&&!casinoOpen&&!invOpen&&!harborOpen){ e.preventDefault(); toggleCam(); }
+  if(e.code==='KeyH'&&running&&!chatOpen&&!marketOpen&&!casinoOpen&&!invOpen&&!harborOpen){ e.preventDefault(); toggleLean(); }
   if(e.code==='Escape'){ if(marketOpen)closeMarket(); else if(casinoOpen)closeCasino(); else if(harborOpen)closeHarbor(); else if(invOpen)closeInv(); else if(capCam)closeCam(); else if(fishing.state!=='idle')cancelFish(); else if(autoFish.on)packRig(); else if(mining.node)cancelMine(); else if(chopping.tree)cancelChop(); else if(digging.active){digging.active=false;hint('');} }},{passive:false});
 addEventListener('keyup',e=>{RF.emit('keyup',e);const m=KMAP[e.code]; if(m)keys[m]=false;});
 addEventListener('blur',()=>{for(const k in keys)keys[k]=false;});
@@ -3519,7 +3520,13 @@ function togglePhoto(){ if(capCam)closeCam();   // both modes own vTargP/vTargL 
    own vTargP/vTargL and would otherwise fight over the frame.
    ======================================================================== */
 let capCam=false, capAng=0;
-const CAP_R=6.2, CAP_EY=4.4, CAP_ORBIT=0.22, CAP_SHIFT=1.35, CAP_SIZE=2.9; // ortho: only CAP_SIZE zooms
+/* CAP_EY is the eye HEIGHT and CAP_R the ground distance, so their ratio is the
+   tilt: 4.4/6.2 opened at ~35 degrees and capSolve() was free to add another 33
+   on top when it wanted a clear sight line — which is a camera looking at the
+   top of a straw hat. A portrait wants to be in FRONT of the captain, near his
+   own eye level, so this is 1.8/6.2 ≈ 16 degrees: enough to see the boots
+   without looking down on him. */
+const CAP_R=6.2, CAP_EY=1.8, CAP_ORBIT=0.22, CAP_SHIFT=1.15, CAP_SIZE=2.9; // ortho: only CAP_SIZE zooms
 // 35deg elevation — lower than the 40.5deg follow-cam for a heroic read, high enough to clear a 1-block step
 const capCardEl=document.getElementById('capcard'), emoBarEl=document.getElementById('emotebar');
 
@@ -3777,14 +3784,18 @@ function capShow(){ for(const g of capHid)g.visible=true; capHid.length=0; }
 function capHit(x,y,z){ for(const b of capNear)
   if(y<b.h&&(x-b.x)*(x-b.x)+(z-b.z)*(z-b.z)<b.r*b.r)return true; return false; }
 function capSolve(a){                       // first (elevation, distance) pair on this bearing that sees the feet
+  /* Climbs in smaller steps than it used to (0.075 rad, not 0.115) and stops
+     lower: a ridge in the way should nudge the lens up a little, not tip the
+     whole portrait into a plan view. Worst case now tops out around 40 degrees
+     instead of 68. */
   for(let e=0;e<6;e++){
-    const el=CAP_EL+e*0.115, ce=Math.cos(el), ux=Math.cos(a)*ce, uy=Math.sin(el), uz=Math.sin(a)*ce;
+    const el=CAP_EL+e*0.075, ce=Math.cos(el), ux=Math.cos(a)*ce, uy=Math.sin(el), uz=Math.sin(a)*ce;
     let t=CAP_DIST, hit=false;
     for(let i=2;i<=14;i++){ const d=CAP_DIST*i/14;
       const sx=pWorld.x+ux*d, sz=pWorld.z+uz*d, sy=pWorld.y+uy*d;
       if(sy<heightAt(sx,sz)+0.55||capHit(sx,sy,sz)){ t=CAP_DIST*(i-1)/14-0.15; hit=true; break; } }
     if(!hit||t>=3.4){ capOut[0]=el; capOut[1]=clamp(t,2.6,CAP_DIST); return; } }
-  capOut[0]=CAP_EL+5*0.115; capOut[1]=CAP_DIST; }   // last resort: look down over whatever it is
+  capOut[0]=CAP_EL+5*0.075; capOut[1]=CAP_DIST; }   // last resort: tilt up over whatever it is
 function capPickArc(){                      // the widest run of clear bearings, scanned twice around for wrap
   const N=48, ok=[]; let any=false;
   for(let i=0;i<N;i++){ const c=capClear(i/N*TAU)>=3.4; ok.push(c); any=any||c; }
@@ -3851,6 +3862,26 @@ function closeCam(){
   capShadow(false); capLabels(false); capShow();
   beep(300,0.09,'sine',0.04); }
 function toggleCam(){ capCam?closeCam():openCam(); }
+
+/* ---- LEAN VIEW -----------------------------------------------------------
+   Hide every readout and play on a clear isle. Deliberately NOT photo mode:
+   that one takes the camera as well and stops you fishing. This only removes
+   the chrome, so the game underneath carries on exactly as it was. */
+let hudLean=false;
+function setLean(on){
+  hudLean=!!on;
+  document.body.classList.toggle('hud-lean',hudLean);
+  try{ localStorage.setItem('rf-hud-lean',hudLean?'1':''); }catch(e){}
+  /* The pill that brings it back is inert while a panel or the captain view is
+     up, so it can never be the thing you hit when reaching for a close button. */
+  if(hudLean)toast('HUD hidden · press H or the HUD pill to bring it back','good');
+}
+function toggleLean(){ setLean(!hudLean); }
+{ const hide=document.getElementById('hudHide'), show=document.getElementById('hudShow');
+  if(hide)hide.onclick=e=>{ e.stopPropagation(); setLean(true); };
+  if(show)show.onclick=e=>{ e.stopPropagation(); setLean(false); };
+  // remembered per browser: someone who plays lean should not re-hide it daily
+  try{ if(localStorage.getItem('rf-hud-lean'))document.body.classList.add('hud-lean'),hudLean=true; }catch(e){} }
 
 // ---- click the captain: no raycasting existed in this file, so this is the whole rig ----
 const capRay=new THREE.Raycaster(), capNDC=new THREE.Vector2();

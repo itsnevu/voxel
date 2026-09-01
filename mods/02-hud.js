@@ -155,7 +155,16 @@ RF.mod('02-hud', function (RF) {
     font-variant-numeric:tabular-nums;}
 
   /* 5 · messages ---------------------------------------------------------- */
-  .hd-logbtn{position:fixed;right:12px;bottom:48px;z-index:21;pointer-events:auto;cursor:pointer;
+  /*
+     The bottom-right corner is a STACK, 32px to a rung. Three mods had all
+     independently picked 46-48px for it and drawn on top of each other, so the
+     allocation is written out here and repeated at each site:
+        14  #mute (SOUND, index.html)     46  #rf-comfort-gear (OPTIONS)
+        78  #rf-social-hud (ONLINE)      110  .hd-logbtn (L, the log)
+       142  #rf-comfort-fps / -perf
+     Anything new takes the next free rung and adds itself to this list.
+  */
+  .hd-logbtn{position:fixed;right:12px;bottom:110px;z-index:21;pointer-events:auto;cursor:pointer;
     display:flex;gap:7px;align-items:center;font-family:"IBM Plex Mono",monospace;font-size:10px;
     letter-spacing:.12em;color:var(--muted);background:var(--glass);border:1px solid var(--glass-bd-soft);
     backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-radius:9px;padding:6px 10px;}

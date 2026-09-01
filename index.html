@@ -79,22 +79,53 @@
   #minimap{position:fixed;top:100px;left:12px;z-index:5;width:140px;height:140px;border-radius:16px;
     border:1px solid var(--glass-bd);background:var(--glass);backdrop-filter:blur(14px) saturate(1.6);-webkit-backdrop-filter:blur(14px) saturate(1.6);
     box-shadow:var(--glass-hi),0 8px 24px rgba(2,8,10,.35);image-rendering:pixelated;}
-  #hud-coins{top:12px;right:12px;display:flex;gap:9px;align-items:center;background:var(--glass-hud);
+  /* THE PURSE — coins, pearls and bait as three rows of one card. Labels share
+     a column and values share another, so the numbers line up vertically and
+     the eye reads down a column instead of hopping between islands. */
+  #hud-purse{top:12px;right:12px;min-width:186px;background:var(--glass-hud);
     backdrop-filter:blur(14px) saturate(1.6);-webkit-backdrop-filter:blur(14px) saturate(1.6);
-    border:1px solid rgba(255,207,92,.5);border-radius:12px;padding:9px 15px;font-family:var(--f-disp);font-weight:700;font-size:20px;color:var(--gold);
-    box-shadow:var(--glass-hi),0 0 22px rgba(255,207,92,.18),0 8px 24px rgba(2,8,10,.3);font-variant-numeric:tabular-nums;}
-  #hud-coins .lab{font-size:9px;letter-spacing:.24em;color:var(--lab);font-family:var(--f-mono);font-weight:500;}
-  #hud-pearls{top:62px;right:12px;display:flex;gap:8px;align-items:center;background:var(--glass-hud);
-    backdrop-filter:blur(14px) saturate(1.6);-webkit-backdrop-filter:blur(14px) saturate(1.6);
-    border:1px solid rgba(57,215,196,.45);border-radius:11px;padding:7px 13px;font-family:var(--f-disp);font-weight:700;font-size:15px;color:var(--teal);
-    box-shadow:var(--glass-hi),0 0 18px rgba(57,215,196,.14),0 6px 20px rgba(2,8,10,.3);font-variant-numeric:tabular-nums;}
-  #hud-pearls .lab{font-size:9px;letter-spacing:.24em;color:var(--lab);font-family:var(--f-mono);font-weight:500;}
-  #hud-bait{top:106px;right:12px;display:flex;gap:8px;align-items:center;background:var(--glass-hud);
-    border:1px solid var(--border2);border-radius:9px;padding:6px 11px;font-size:12px;font-weight:600;
-    backdrop-filter:blur(7px);color:var(--muted);}
-  #hud-bait .lab{font-size:9px;letter-spacing:.24em;color:var(--lab);font-family:var(--f-mono);font-weight:500;}
+    border:1px solid var(--glass-bd);border-radius:14px;padding:4px;
+    box-shadow:var(--glass-hi),0 8px 26px rgba(2,8,10,.34);
+    transition:opacity .22s ease,transform .22s ease;}
+  #hud-purse > div{display:grid;grid-template-columns:1fr auto;align-items:baseline;gap:12px;
+    padding:8px 11px;border-radius:10px;font-variant-numeric:tabular-nums;}
+  #hud-purse .lab{font-size:9px;letter-spacing:.24em;color:var(--lab);
+    font-family:var(--f-mono);font-weight:500;}
+  /* hairline between rows, never under the last one */
+  #hud-purse > div + div{box-shadow:inset 0 1px 0 rgba(255,255,255,.055);}
+  #hud-coins{font-family:var(--f-disp);font-weight:700;font-size:21px;color:var(--gold);}
+  #hud-coins .lab{color:rgba(255,207,92,.6);}
+  #hud-pearls{font-family:var(--f-disp);font-weight:700;font-size:16px;color:var(--teal);}
+  #hud-pearls .lab{color:rgba(57,215,196,.6);}
+  #hud-bait{font-size:12px;font-weight:600;color:var(--muted);}
   #hud-bait .bd{width:9px;height:9px;border-radius:50%;box-shadow:0 0 7px currentColor;}
-  /* the auto-rig only announces itself while it is running */
+
+  /* the collapse handle, tucked into the card's own corner */
+  #hudHide{position:absolute;top:6px;left:-11px;width:22px;height:22px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;
+    background:var(--glass-hud);border:1px solid var(--glass-bd);color:var(--lab);
+    font-size:13px;line-height:1;padding:0;backdrop-filter:blur(10px);
+    box-shadow:0 3px 10px rgba(2,8,10,.35);transition:color .12s,border-color .12s,transform .12s;}
+  #hudHide:hover{color:var(--teal);border-color:rgba(57,215,196,.55);transform:scale(1.08);}
+  #hud-purse{position:fixed;}
+
+  /* ---- LEAN VIEW: the isle with nothing on top of it ----------------------
+     Every readout is chrome over a world the player came to look at, so H
+     takes all of it away — this is not photo mode, the game keeps running and
+     you keep playing. One small pill stays behind to bring it back, because a
+     hidden HUD with no way home is a bug report. */
+  body.hud-lean .hud,body.hud-lean #minimap,body.hud-lean #derby,body.hud-lean #area{
+    opacity:0!important;pointer-events:none!important;}
+  #hudShow{position:fixed;top:12px;right:12px;z-index:6;display:none;cursor:pointer;
+    font-family:var(--f-mono);font-size:9.5px;letter-spacing:.22em;color:var(--lab);
+    background:var(--glass-hud);border:1px solid var(--glass-bd);border-radius:9px;
+    padding:7px 11px;backdrop-filter:blur(10px);box-shadow:0 4px 14px rgba(2,8,10,.3);
+    transition:color .12s,border-color .12s;}
+  #hudShow:hover{color:var(--teal);border-color:rgba(57,215,196,.55);}
+  body.hud-lean #hudShow{display:block;}
+  body.photo #hudShow,body.capcam #hudShow{display:none!important;}
+  @media (prefers-reduced-motion:reduce){ #hud-purse,#hudHide,#hudShow{transition:none;} }
+
   #hud-auto{top:252px;left:12px;display:none;gap:8px;align-items:center;background:var(--glass-hud);
     backdrop-filter:blur(14px) saturate(1.6);-webkit-backdrop-filter:blur(14px) saturate(1.6);
     border:1px solid rgba(57,215,196,.55);border-radius:11px;padding:6px 11px;
@@ -762,9 +793,16 @@
   <div class="orechip"><span class="od" style="background:#5ee8e2;color:#5ee8e2"></span><span id="oreD">0</span></div>
 </div>
 <canvas id="minimap" width="140" height="140"></canvas>
-<div id="hud-coins" class="hud"><span class="lab">COINS</span><span id="coinVal">0</span></div>
-<div id="hud-pearls" class="hud"><span class="lab">PEARLS</span><span id="pearlVal">◉ 0</span></div>
-<div id="hud-bait" class="hud"><span class="lab">BAIT</span><span id="baitVal">none</span></div>
+<!-- One purse, not three drifting pills. They used to be separate fixed cards
+     with different paddings and radii, so their edges never lined up and the
+     corner read as clutter rather than as a readout. -->
+<div id="hud-purse" class="hud">
+  <button id="hudHide" type="button" title="Hide the HUD · H" aria-label="Hide the HUD">‹</button>
+  <div id="hud-coins"><span class="lab">COINS</span><span id="coinVal">0</span></div>
+  <div id="hud-pearls"><span class="lab">PEARLS</span><span id="pearlVal">◉ 0</span></div>
+  <div id="hud-bait"><span class="lab">BAIT</span><span id="baitVal">none</span></div>
+</div>
+<button id="hudShow" type="button" title="Show the HUD · H" aria-label="Show the HUD">HUD</button>
 <div id="hud-auto" class="hud"><span class="lab">AUTO</span><span id="autoVal">off</span></div>
 <div id="area"></div>
 <div id="hint"></div>
