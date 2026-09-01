@@ -1,7 +1,7 @@
 {
   "name": "Reel Fortune Angler #854",
   "description": "Reel Fortune Anglers: 1000 voxel anglers from the Reel Fortune isles. Each one is the game's hero re-rolled — different island, outfit, hat, tool and companion. A cosmetic collectible: bought at the dock, never won by any in-game roll.",
-  "image": "http://localhost:8787/nft/images/854.png",
+  "image": "https://reelfortune.xyz/nft/images/854.png",
   "dna": "010345b695ed990ee9518b8c03cc361050947050",
   "edition": 854,
   "date": 1788284305021,
@@ -59,5 +59,5 @@
       "value": "None"
     }
   ],
-  "external_url": "http://localhost:8787/mint.html"
+  "external_url": "https://reelfortune.xyz/mint"
 }

@@ -1,7 +1,7 @@
 {
   "name": "Reel Fortune Angler #843",
   "description": "Reel Fortune Anglers: 1000 voxel anglers from the Reel Fortune isles. Each one is the game's hero re-rolled — different island, outfit, hat, tool and companion. A cosmetic collectible: bought at the dock, never won by any in-game roll.",
-  "image": "http://localhost:8787/nft/images/843.png",
+  "image": "https://reelfortune.xyz/nft/images/843.png",
   "dna": "480953278fc8c0a807e4eff92d8239fb8b545c7e",
   "edition": 843,
   "date": 1788284304475,
@@ -59,5 +59,5 @@
       "value": "Baby Eel"
     }
   ],
-  "external_url": "http://localhost:8787/mint.html"
+  "external_url": "https://reelfortune.xyz/mint"
 }
