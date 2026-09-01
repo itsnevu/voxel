@@ -10,3 +10,6 @@ __test*.js
 .DS_Store
 __shot*.html
 __shot*.js
+contracts/out/
+contracts/cache/
+contracts/broadcast/

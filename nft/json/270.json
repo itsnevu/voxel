@@ -1,0 +1,63 @@
+{
+  "name": "Reel Fortune Angler #270",
+  "description": "Reel Fortune Anglers: 1000 voxel anglers from the Reel Fortune isles. Each one is the game's hero re-rolled — different island, outfit, hat, tool and companion. A cosmetic collectible: bought at the dock, never won by any in-game roll.",
+  "image": "http://localhost:8787/nft/images/270.png",
+  "dna": "e22bfbb33108eee02327c4f6d3f8ceceac451c22",
+  "edition": 270,
+  "date": 1788284275977,
+  "attributes": [
+    {
+      "trait_type": "Background",
+      "value": "Open Sea Rain"
+    },
+    {
+      "trait_type": "Aura",
+      "value": "None"
+    },
+    {
+      "trait_type": "Back Gear",
+      "value": "None"
+    },
+    {
+      "trait_type": "Pants",
+      "value": "Maroon"
+    },
+    {
+      "trait_type": "Outfit",
+      "value": "Crimson Corsair"
+    },
+    {
+      "trait_type": "Skin",
+      "value": "Sand"
+    },
+    {
+      "trait_type": "Eyes",
+      "value": "Happy"
+    },
+    {
+      "trait_type": "Mouth",
+      "value": "Grin"
+    },
+    {
+      "trait_type": "Hair",
+      "value": "Chestnut"
+    },
+    {
+      "trait_type": "Neckwear",
+      "value": "Red Scarf"
+    },
+    {
+      "trait_type": "Headwear",
+      "value": "Straw Hat"
+    },
+    {
+      "trait_type": "Tool",
+      "value": "Lantern"
+    },
+    {
+      "trait_type": "Companion",
+      "value": "Crab"
+    }
+  ],
+  "external_url": "http://localhost:8787/mint.html"
+}

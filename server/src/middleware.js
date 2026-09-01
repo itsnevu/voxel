@@ -211,6 +211,15 @@ export function ipRateLimit(opts) {
    WebSocket realtime.js rides on — the scheme upgrade is part of the origin
    match, so ws://<this host>/ws and wss://<this host>/ws both pass.
 
+   The one exception to that is the mint page, which is a chain client: it has
+   to reach a JSON-RPC endpoint that is by definition not this origin. So
+   connect-src gains the RPC ORIGIN and nothing else — derived from the same
+   NFT_RPC_URL the server itself calls, so the page can only talk to the node
+   the operator already chose. Deployments that mint on several chains list the
+   extra origins in CSP_CONNECT_EXTRA. Never widen this to a bare scheme or a
+   wildcard: `https:` matches every host on the internet, which is precisely
+   the hole 'self' was protecting.
+
    If you ever add an inline <script>, do NOT add 'unsafe-inline' here — that
    single word is what turns any future XSS into a full account takeover. Move
    the code into a .js file instead.
@@ -220,6 +229,39 @@ export function ipRateLimit(opts) {
    easiest way to let the app own the policy.
    ========================================================================== */
 
+/**
+ * Origins the page may open a connection to, beyond this one.
+ *
+ * Read from env rather than from nft.js so this module stays a leaf: nft.js
+ * imports auth.js, which imports this file, and a cycle here would be a boot
+ * order bug hiding behind a security header.
+ *
+ * Anything that is not an absolute http(s) URL is dropped rather than passed
+ * through — a malformed entry must not become a stray token in the policy.
+ */
+function connectOrigins() {
+  /* Same unset-vs-empty rule as nft.js: a deployment that empties NFT_RPC_URL is
+     saying there is no chain, and must not then have a loopback address written
+     into its Content-Security-Policy. */
+  const rpc = process.env.NFT_RPC_URL === undefined
+    ? 'http://127.0.0.1:8545'
+    : process.env.NFT_RPC_URL;
+  const raw = [rpc].concat(String(process.env.CSP_CONNECT_EXTRA || '').split(','));
+  const out = [];
+  for (const entry of raw) {
+    const value = String(entry || '').trim();
+    if (!value) continue;
+    try {
+      const u = new URL(value);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') continue;
+      if (!out.includes(u.origin)) out.push(u.origin);
+    } catch {
+      /* not a URL: dropped */
+    }
+  }
+  return out;
+}
+
 /** The exact Content-Security-Policy sent with every response. */
 export const CSP = [
   "default-src 'self'",
@@ -227,7 +269,7 @@ export const CSP = [
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   'font-src https://fonts.gstatic.com',
   "img-src 'self' data:",
-  "connect-src 'self'",
+  ["connect-src 'self'"].concat(connectOrigins()).join(' '),
   "object-src 'none'",
   "base-uri 'self'",
   // The game posts no forms at all, and frames nothing: both directives exist

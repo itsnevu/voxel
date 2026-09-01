@@ -117,7 +117,7 @@ function nextIp() {
 
 /* ---------------------------------------------------------------- boot ---- */
 
-async function bootOnce(budgetMs = BOOT_TIMEOUT_MS) {
+async function bootOnce(budgetMs = BOOT_TIMEOUT_MS, extraEnv = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reelfortune-test-'));
   const dbPath = path.join(dir, 'test.db');
   /* An empty static root: express.static must not be handed the real project
@@ -140,6 +140,9 @@ async function bootOnce(budgetMs = BOOT_TIMEOUT_MS) {
       /* Fixed so /api/ledger/claim signatures are reproducible within a run
          and the boot never prints its "ephemeral dev secret" warning. */
       LEDGER_SECRET: 'test-ledger-secret-not-for-production',
+      /* Last, so a suite can point the child at its own fake chain (or any
+         other per-suite setting) without the defaults above overwriting it. */
+      ...extraEnv,
     },
   });
 
@@ -208,11 +211,11 @@ async function bootOnce(budgetMs = BOOT_TIMEOUT_MS) {
  * X-Forwarded-For address so a test can deliberately share a rate-limit
  * bucket across calls.
  */
-export async function startServer() {
+export async function startServer({ env = {} } = {}) {
   let lastErr;
   for (let attempt = 1; attempt <= BOOT_ATTEMPTS; attempt++) {
     try {
-      const { handle, output } = await bootOnce(BOOT_TIMEOUT_MS + (attempt - 1) * BOOT_TIMEOUT_STEP_MS);
+      const { handle, output } = await bootOnce(BOOT_TIMEOUT_MS + (attempt - 1) * BOOT_TIMEOUT_STEP_MS, env);
       return makeServer(handle, output);
     } catch (err) {
       lastErr = err;

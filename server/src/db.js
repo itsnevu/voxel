@@ -358,6 +358,25 @@ const MIGRATIONS = [
       // Both access paths were confirmed against the queries in this file.
     },
   },
+  {
+    v: 3,
+    name: 'chosen-usernames',
+    up(database) {
+      // A wallet account used to be born with a machine name ("w_1a2b3c"). Now
+      // the address only proves ownership and the player names the angler
+      // themselves, so we need to know which names were actually CHOSEN.
+      if (!hasColumn('users', 'name_chosen')) {
+        database.exec('ALTER TABLE users ADD COLUMN name_chosen INTEGER NOT NULL DEFAULT 0');
+      }
+
+      // Everyone who registered with a password typed their own name at the
+      // door, so those are chosen by definition. The machine-named wallet and
+      // guest accounts stay at 0 and get asked once, on their next sign-in.
+      database.exec(`UPDATE users SET name_chosen = 1
+                       WHERE wallet IS NULL
+                         AND username NOT LIKE 'guest\\_%' ESCAPE '\\'`);
+    },
+  },
 ];
 
 /**
@@ -628,10 +647,10 @@ export function close() {
 
 export const users = {
   /** Insert a new account. Throws on duplicate username (UNIQUE COLLATE NOCASE). */
-  create(username, passHash) {
+  create(username, passHash, nameChosen = 1) {
     const info = q(
-      'INSERT INTO users (username, pass_hash, created_at) VALUES (?, ?, ?)'
-    ).run(String(username), String(passHash), Date.now());
+      'INSERT INTO users (username, pass_hash, created_at, name_chosen) VALUES (?, ?, ?, ?)'
+    ).run(String(username), String(passHash), Date.now(), nameChosen ? 1 : 0);
     return info.lastInsertRowid;
   },
 
@@ -641,6 +660,25 @@ export const users = {
 
   findById(id) {
     return q('SELECT * FROM users WHERE id = ?').get(id) || null;
+  },
+
+  /**
+   * Claim a name for an account that has not chosen one yet. Returns false when
+   * the name is taken; the caller turns that into a 409.
+   *
+   * The name_chosen = 0 guard is inside the UPDATE, not in a read before it, so
+   * two requests racing to rename the same account cannot both win: SQLite
+   * applies them one after the other and the second matches no rows.
+   */
+  claimName(id, name) {
+    try {
+      const info = q('UPDATE users SET username = ?, name_chosen = 1 WHERE id = ? AND name_chosen = 0')
+        .run(String(name), id);
+      return info.changes > 0;
+    } catch (err) {
+      if (String(err?.code || '').includes('SQLITE_CONSTRAINT')) return false;
+      throw err;
+    }
   },
 };
 

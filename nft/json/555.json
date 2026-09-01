@@ -1,0 +1,63 @@
+{
+  "name": "Reel Fortune Angler #555",
+  "description": "Reel Fortune Anglers: 1000 voxel anglers from the Reel Fortune isles. Each one is the game's hero re-rolled — different island, outfit, hat, tool and companion. A cosmetic collectible: bought at the dock, never won by any in-game roll.",
+  "image": "http://localhost:8787/nft/images/555.png",
+  "dna": "62c0a8e2d2df65e932c8b87c280c38a04bec28c6",
+  "edition": 555,
+  "date": 1788284290165,
+  "attributes": [
+    {
+      "trait_type": "Background",
+      "value": "Cinder Atoll"
+    },
+    {
+      "trait_type": "Aura",
+      "value": "Eel Purple"
+    },
+    {
+      "trait_type": "Back Gear",
+      "value": "Treasure Sack"
+    },
+    {
+      "trait_type": "Pants",
+      "value": "Navy"
+    },
+    {
+      "trait_type": "Outfit",
+      "value": "Teal Captain"
+    },
+    {
+      "trait_type": "Skin",
+      "value": "Peach"
+    },
+    {
+      "trait_type": "Eyes",
+      "value": "Shades"
+    },
+    {
+      "trait_type": "Mouth",
+      "value": "Grin"
+    },
+    {
+      "trait_type": "Hair",
+      "value": "Sea Green"
+    },
+    {
+      "trait_type": "Neckwear",
+      "value": "None"
+    },
+    {
+      "trait_type": "Headwear",
+      "value": "Captain Cap"
+    },
+    {
+      "trait_type": "Tool",
+      "value": "Diamond Pickaxe"
+    },
+    {
+      "trait_type": "Companion",
+      "value": "Trophy Fish"
+    }
+  ],
+  "external_url": "http://localhost:8787/mint.html"
+}

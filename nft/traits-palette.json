@@ -1,0 +1,399 @@
+{
+  "order": [
+    "Background",
+    "Aura",
+    "Back Gear",
+    "Pants",
+    "Outfit",
+    "Skin",
+    "Eyes",
+    "Mouth",
+    "Hair",
+    "Neckwear",
+    "Headwear",
+    "Tool",
+    "Companion"
+  ],
+  "defaults": {
+    "Background": "Fortune Isle Day",
+    "Aura": "None",
+    "Back Gear": "Wooden Pack",
+    "Pants": "Navy",
+    "Outfit": "Teal Captain",
+    "Skin": "Peach",
+    "Eyes": "Bright",
+    "Mouth": "Grin",
+    "Hair": "Chestnut",
+    "Neckwear": "Red Scarf",
+    "Headwear": "Straw Hat",
+    "Tool": "Fishing Rod",
+    "Companion": "None"
+  },
+  "traits": {
+    "Background": {
+      "Fortune Isle Day": {
+        "sky": "#4fb8ea",
+        "water": "#a8ecfb"
+      },
+      "Fortune Isle Dusk": {
+        "sky": "#5a3a8a",
+        "water": "#ff9a5c"
+      },
+      "Fortune Isle Night": {
+        "sky": "#070f24",
+        "water": "#1b3560"
+      },
+      "Great Mine": {
+        "sky": "#7c9bb0",
+        "water": "#7da85c"
+      },
+      "Great Mine Storm": {
+        "sky": "#1d2530",
+        "water": "#4e6a3c"
+      },
+      "Cinder Atoll": {
+        "sky": "#a8452c",
+        "water": "#5a3a2c"
+      },
+      "Cinder Eruption": {
+        "sky": "#2a0c0c",
+        "water": "#3a221a"
+      },
+      "Frostbite Isle": {
+        "sky": "#8ccbe6",
+        "water": "#c8dde8"
+      },
+      "Frostbite Aurora": {
+        "sky": "#050a1c",
+        "water": "#3b5570"
+      },
+      "Casino Night": {
+        "sky": "#120a22",
+        "water": "#3a1c6a"
+      },
+      "Open Sea Rain": {
+        "sky": "#3c4f60",
+        "water": "#7d93a3"
+      },
+      "Golden Harbor": {
+        "sky": "#e8a63c",
+        "water": "#ffe9a0"
+      }
+    },
+    "Aura": {
+      "None": {},
+      "Teal Tide": {
+        "glow": "#39d7c4"
+      },
+      "Gold Fortune": {
+        "glow": "#ffd24f"
+      },
+      "Eel Purple": {
+        "glow": "#c07bff"
+      }
+    },
+    "Back Gear": {
+      "Wooden Pack": {
+        "primary": "#9a6b3a"
+      },
+      "None": {},
+      "Fish Basket": {
+        "primary": "#c9a05a"
+      },
+      "Rod Quiver": {
+        "primary": "#6b4a2e"
+      },
+      "Treasure Sack": {
+        "primary": "#a8865a"
+      }
+    },
+    "Pants": {
+      "Navy": {
+        "pants": "#33507a",
+        "boots": "#5e4226"
+      },
+      "Charcoal": {
+        "pants": "#3a3a40",
+        "boots": "#1c1c22"
+      },
+      "Khaki": {
+        "pants": "#b8a070",
+        "boots": "#5e4226"
+      },
+      "Olive": {
+        "pants": "#5a6a3a",
+        "boots": "#3a2a1a"
+      },
+      "Maroon": {
+        "pants": "#6a2a34",
+        "boots": "#1c1c22"
+      },
+      "Sailor Stripes": {
+        "pants": "#e8eef2",
+        "boots": "#1f3550"
+      }
+    },
+    "Outfit": {
+      "Teal Captain": {
+        "vest": "#2ba394",
+        "shirt": "#f2e6c8",
+        "sleeve": "#f2e6c8",
+        "belt": "#5e4226",
+        "buckle": "#ffd24f",
+        "emblem": "#ffd24f"
+      },
+      "Crimson Corsair": {
+        "vest": "#b0242e",
+        "shirt": "#f2e6c8",
+        "sleeve": "#f2e6c8",
+        "belt": "#1c1c22",
+        "buckle": "#ffd24f",
+        "emblem": "#f4f7f8"
+      },
+      "Harbor Blue": {
+        "vest": "#2f5fa8",
+        "shirt": "#e8eef2",
+        "sleeve": "#e8eef2",
+        "belt": "#5e4226",
+        "buckle": "#ffd24f",
+        "emblem": "#ffd24f"
+      },
+      "Miner Denim": {
+        "vest": "#3a5a86",
+        "shirt": "#8a8a7a",
+        "sleeve": "#3a5a86",
+        "belt": "#5e4226",
+        "buckle": "#ffd24f",
+        "emblem": "#c9a05a"
+      },
+      "Lumber Plaid": {
+        "vest": "#b0242e",
+        "shirt": "#b0242e",
+        "sleeve": "#b0242e",
+        "belt": "#5e4226",
+        "buckle": "#ffd24f"
+      },
+      "Casino Tux": {
+        "vest": "#1c1c22",
+        "shirt": "#ffffff",
+        "sleeve": "#1c1c22",
+        "belt": "#1c1c22",
+        "buckle": "#8a8a90"
+      },
+      "Storm Slicker": {
+        "vest": "#f2c130",
+        "shirt": "#f2c130",
+        "sleeve": "#f2c130",
+        "belt": "#8a6a1a",
+        "buckle": "#5e4226"
+      },
+      "Frost Parka": {
+        "vest": "#c8dce8",
+        "shirt": "#c8dce8",
+        "sleeve": "#c8dce8",
+        "belt": "#7a94a8",
+        "buckle": "#ffd24f"
+      },
+      "Eel Skin": {
+        "vest": "#4a2a7a",
+        "shirt": "#5b2bd8",
+        "sleeve": "#4a2a7a",
+        "belt": "#2a1a4a",
+        "buckle": "#c07bff",
+        "emblem": "#c07bff"
+      },
+      "Gilded Admiral": {
+        "vest": "#1f2f5a",
+        "shirt": "#f6f0e0",
+        "sleeve": "#1f2f5a",
+        "belt": "#1c1c22",
+        "buckle": "#ffd24f",
+        "emblem": "#ffd24f"
+      }
+    },
+    "Skin": {
+      "Sand": {
+        "skin": "#e9d2a6",
+        "blush": "#e0a080"
+      },
+      "Peach": {
+        "skin": "#f0c090",
+        "blush": "#d88a6a"
+      },
+      "Tan": {
+        "skin": "#c9975f",
+        "blush": "#b06a48"
+      },
+      "Olive": {
+        "skin": "#a89060",
+        "blush": "#9a6a4a"
+      },
+      "Deep": {
+        "skin": "#7a4a2a",
+        "blush": "#8a4a3a"
+      },
+      "Sea Ghost": {
+        "skin": "#9fd8d0",
+        "blush": "#5fb8b0"
+      }
+    },
+    "Eyes": {
+      "Bright": {},
+      "Wink": {},
+      "Happy": {},
+      "Sleepy": {},
+      "Shades": {},
+      "Eyepatch": {},
+      "Star Eyes": {},
+      "Laser Teal": {
+        "primary": "#39d7c4"
+      }
+    },
+    "Mouth": {
+      "Grin": {},
+      "Smile": {},
+      "Whistle": {
+        "primary": "#39d7c4"
+      },
+      "Stubble Grin": {},
+      "Pipe": {
+        "primary": "#5e4226"
+      },
+      "Gold Tooth": {}
+    },
+    "Hair": {
+      "Chestnut": {
+        "hair": "#5a4632"
+      },
+      "Black": {
+        "hair": "#1e1a1a"
+      },
+      "Blonde": {
+        "hair": "#e2c060"
+      },
+      "Ginger": {
+        "hair": "#c8602a"
+      },
+      "Silver": {
+        "hair": "#c8ccd0"
+      },
+      "Sea Green": {
+        "hair": "#2ba394"
+      },
+      "Pink": {
+        "hair": "#ff7ab8"
+      }
+    },
+    "Neckwear": {
+      "Red Scarf": {
+        "scarf": "#d8483f"
+      },
+      "None": {},
+      "Teal Scarf": {
+        "scarf": "#2ba394"
+      },
+      "Navy Scarf": {
+        "scarf": "#33507a"
+      },
+      "Gold Scarf": {
+        "scarf": "#ffd24f"
+      },
+      "Pearl Necklace": {
+        "primary": "#f6eef0"
+      },
+      "Shell Necklace": {
+        "primary": "#5e4226"
+      }
+    },
+    "Headwear": {
+      "Straw Hat": {
+        "hat": "#e8c86a",
+        "band": "#d8483f"
+      },
+      "Straw Hat Teal Band": {
+        "hat": "#e8c86a",
+        "band": "#39d7c4"
+      },
+      "Straw Hat Gold Band": {
+        "hat": "#e8c86a",
+        "band": "#ffd24f"
+      },
+      "Captain Cap": {
+        "primary": "#1f3550"
+      },
+      "Bucket Hat": {
+        "primary": "#8a8a5a"
+      },
+      "Miner Helmet": {
+        "primary": "#f2c130"
+      },
+      "Beanie": {
+        "primary": "#e07a2c"
+      },
+      "Bandana": {
+        "primary": "#d8483f"
+      },
+      "Pirate Tricorn": {
+        "primary": "#1c1c22"
+      },
+      "Frost Ushanka": {
+        "primary": "#8a7a6a"
+      },
+      "Crown": {
+        "primary": "#ffd24f"
+      },
+      "None": {}
+    },
+    "Tool": {
+      "Fishing Rod": {
+        "primary": "#d8483f"
+      },
+      "Golden Rod": {
+        "primary": "#f6f0e0"
+      },
+      "Pickaxe": {
+        "primary": "#9a6b3a"
+      },
+      "Diamond Pickaxe": {
+        "primary": "#3a2a1a"
+      },
+      "Axe": {
+        "primary": "#9a6b3a"
+      },
+      "Lantern": {
+        "primary": "#2b2320"
+      },
+      "Net": {
+        "primary": "#9a6b3a"
+      },
+      "Treasure Map": {
+        "primary": "#8a6a42"
+      },
+      "None": {}
+    },
+    "Companion": {
+      "None": {},
+      "Seagull": {
+        "primary": "#f4f7f8"
+      },
+      "Crab": {
+        "primary": "#e0552a"
+      },
+      "Trophy Fish": {
+        "primary": "#f4f7f8"
+      },
+      "Pearl": {
+        "primary": "#f6eef0"
+      },
+      "Baby Eel": {
+        "primary": "#6a3fa8"
+      },
+      "Shiny Fish": {
+        "primary": "#dcdcdc"
+      },
+      "Lucky Coin": {
+        "primary": "#ffd24f"
+      }
+    }
+  }
+}

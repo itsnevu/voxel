@@ -17,6 +17,7 @@
 
    Wire protocol (the client half lives in net.js + game.js §16):
      client -> {t:"hello", world, title, wardrobe}
+              (the equipped Angler is NOT sent: the server reads it from the save)
                {t:"pos", x, y, z, face, act}     act: ""|"fish"|"mine"|"chop"|"dig"
                {t:"chat", m}
                {t:"mute", id}   {t:"unmute", id}
@@ -38,7 +39,7 @@ import { WebSocketServer } from 'ws';
 // being added to db.js separately; DB.reports is undefined until it lands,
 // and the report handler guards for that instead of crashing.
 import * as DB from './db.js';
-import { sessions, users } from './db.js';
+import { sessions, users, saves } from './db.js';
 import { isBanned, isMuted } from './admin.js';
 import { WORLDS } from './game/rules.js';
 
@@ -335,6 +336,37 @@ export function broadcast(world, obj) {
   roomSend(cleanWorld(world), obj);   // '' -> no room -> no-op, by design
 }
 
+/**
+ * Tell this player's isle that they changed Angler, without making them
+ * reconnect to be seen in it.
+ *
+ * Called by /api/nft/equip AFTER the on-chain ownership check has passed. The
+ * token is re-read from the save here rather than passed in, so there is only
+ * one path by which a skin can reach other players' screens, and it starts at
+ * the database.
+ *
+ * A no-op when the player has no live socket, which is the common case: they
+ * will carry the new skin into their next hello anyway.
+ */
+export function announceChar(userId) {
+  const peer = byUser.get(Number(userId));
+  if (!peer || !peer.world) return false;
+
+  let next = 0;
+  try {
+    const st = saves.get(peer.userId);
+    const id = st && st.charTokenId;
+    if (Number.isInteger(id) && id > 0) next = id;
+  } catch (e) { console.error('[rt.char]', e); return false; }
+
+  if (peer.charTokenId === next) return false;
+  peer.charTokenId = next;
+  // Sent to the whole room INCLUDING the wearer: their own hero is redrawn by
+  // the wardrobe mod, but every other client needs to be told.
+  roomSend(peer.world, { t: 'skin', id: peer.id, charTokenId: next });
+  return true;
+}
+
 export function announceAll(obj) {
   const raw = JSON.stringify(obj);
   for (const room of rooms.values()) {
@@ -352,6 +384,9 @@ function peerPayload(p) {
     face: p.face,
     act: p.act,
     wardrobe: p.wardrobe,
+    // 0 = the default hero. Read from the save on the server (see onHello), so
+    // this is a token the player demonstrably owns, not one they claimed.
+    charTokenId: p.charTokenId || 0,
   };
 }
 
@@ -574,6 +609,19 @@ function onHello(peer, msg, t) {
   let row = null;
   try { row = users.findById(peer.userId); } catch (e) { console.error('[rt.users]', e); }
   peer.name = row && row.username ? String(row.username) : 'angler';
+
+  /* The equipped Angler, for the same reason and from the same direction: it is
+     read out of this account's save, which only /api/nft/equip can write and
+     only after checking the chain. Taking it from `msg` instead would let
+     anybody broadcast a legendary they have never owned — the wardrobe indices
+     above are bounded numbers and cost nothing to fake, but this one is a claim
+     of property, so it comes from the server's own records. */
+  peer.charTokenId = 0;
+  try {
+    const st = saves.get(peer.userId);
+    const id = st && st.charTokenId;
+    if (Number.isInteger(id) && id > 0) peer.charTokenId = id;
+  } catch (e) { console.error('[rt.char]', e); }
 
   // A second hello means the player sailed: the old isle sees them leave.
   if (peer.world) leaveRoom(peer);
@@ -944,6 +992,7 @@ function onConnection(ws, req) {
     name: 'angler',
     title: '',
     wardrobe: {},
+    charTokenId: 0,
     x: 0, y: 0, z: 0, face: 0, act: '',
     dirty: false,
     gone: false,

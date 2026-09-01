@@ -165,6 +165,11 @@ function fitCamera(){ const a=window.innerWidth/window.innerHeight;
 fitCamera();
 addEventListener('wheel',e=>{ if(typeof marketOpen!=='undefined'&&(marketOpen||casinoOpen||invOpen||harborOpen))return;
   if(typeof capCam!=='undefined'&&capCam)return;   // this listener is registered before the flags exist
+  /* A paused world must not move. The render loop is held while paused, so a
+     wheel notch here changed the camera invisibly and the view jumped the
+     moment you resumed. The comfort mod's own zoom handler already checked
+     this; the core one never did. */
+  if(RF.paused)return;
   camSize=clamp(camSize+Math.sign(e.deltaY)*1.1,7,17); fitCamera(); },{passive:true});
 
 const hemiL=new THREE.HemisphereLight(0xffffff,0x8fb060,0.62); scene.add(hemiL);
@@ -4683,6 +4688,10 @@ function start(){ initAudio(); if(AC&&AC.state==='suspended')AC.resume(); startM
   if(state.stats.caught===0&&state.stats.mined===0)toast(pixSVG('island',13)+' Welcome to '+WORLD.name+'! Walk through the gate','gold');
   RF.emit('start'); }
 document.getElementById('startBtn').onclick=start;
+/* The way in without an account at all. The title screen leads with two online
+   doors, so this one has to exist somewhere or a player with no server (or no
+   interest in one) has nothing to press. */
+{ const off=document.getElementById('playOffline'); if(off)off.onclick=start; }
 
 /* ========================================================================
    16. MULTIPLAYER — other anglers on the same isle
@@ -4693,6 +4702,49 @@ const peers=new Map();
 function peerColors(g,w){ const m=g.userData.mats; if(!m||!w)return;
   for(const slot of ['band','scarf','vest']){ const i=w[slot];
     m[slot].color.setHex(i!=null&&WPAL[i]!=null?WPAL[i]:WDEF[slot]); } }
+/* ---- an Angler on somebody ELSE's hero ------------------------------------
+   makeHero() builds every material fresh per call, so recolouring one peer can
+   never bleed into another — the sharing inside a hero (both legs, arms+belly,
+   head+hands) is exactly what makes a costume look like a costume.
+
+   The part→material map mirrors mods/15-nft.js's hero(), which does the same
+   job for the local player. It lives here rather than there because this one
+   takes a group: the mod only ever dresses RF.player. */
+function heroParts(g){ const u=g&&g.userData; if(!u||!u.body)return null;
+  const head=Array.isArray(u.head.material)?u.head.material:[u.head.material,0,0,0,u.head.material];
+  return{ pants:u.legL.material, boots:u.bootL.material, vest:u.body.material, sleeve:u.armL.material,
+    skin:head[0], face:head[4], hair:u.hair.material, scarf:u.scarf.material,
+    hat:u.crown.material, band:u.band.material,
+    show:{ scarf:u.scarf, hat:[u.crown,u.band,u.brim], pack:u.pack } }; }
+
+/**
+ * Dress a peer in the Angler the SERVER says they have equipped.
+ *
+ * Asynchronous — the token's metadata and the palette are fetched — so it
+ * re-checks that the peer still exists and still wears this token before
+ * painting. Without that, somebody who equips twice quickly, or sails off
+ * mid-fetch, gets the wrong costume or a write into a disposed hero.
+ */
+function applyPeerSkin(id,tokenId){
+  const q=peers.get(id); if(!q)return;
+  const parts=heroParts(q.g); if(!parts)return;
+
+  // Back to the wardrobe colours first: unequipping has to visibly undo.
+  if(!tokenId){ peerColors(q.g,q.wardrobe); parts.show.scarf.visible=true;
+    parts.show.hat.forEach(m=>{m.visible=true;}); parts.show.pack.visible=true; return; }
+
+  const api=window.RF&&RF.api&&RF.api.nft;
+  if(!api||!api.forToken)return;                 // wardrobe mod absent: default hero, no error
+  api.forToken(tokenId).then(paint=>{
+    const cur=peers.get(id);
+    if(!cur||cur.g!==q.g||cur.charTokenId!==tokenId||!paint)return;   // sailed off, or changed again
+    for(const k in paint.colors){ if(parts[k])parts[k].color.setHex(paint.colors[k]); }
+    parts.show.scarf.visible=paint.show.scarf!==false;
+    parts.show.hat.forEach(m=>{m.visible=paint.show.hat!==false;});
+    parts.show.pack.visible=paint.show.pack!==false;
+  }).catch(e=>RF.err('peer:skin',e,'warn'));
+}
+
 function addPeer(p){ if(!p||p.id==null||peers.has(p.id))return;
   const g=makeHero(); g.rotation.order='YXZ'; peerColors(g,p.wardrobe);
   g.position.set(p.x||0,p.y||0,p.z||0); scene.add(g);
@@ -4701,7 +4753,9 @@ function addPeer(p){ if(!p||p.id==null||peers.has(p.id))return;
   if(sub){ sub.scale.set(1.8,0.45,1); scene.add(sub); }
   peers.set(p.id,{g,tag,sub,name:p.name||'angler',
     x:p.x||0,y:p.y||0,z:p.z||0,tx:p.x||0,ty:p.y||0,tz:p.z||0,
-    face:p.face||0,tface:p.face||0,act:p.act||'',step:0});
+    face:p.face||0,tface:p.face||0,act:p.act||'',step:0,
+    wardrobe:p.wardrobe||{},charTokenId:p.charTokenId||0});
+  if(p.charTokenId)applyPeerSkin(p.id,p.charTokenId);
   toast(`${p.name} is on the isle`,'good'); }
 function dropPeer(id){ const q=peers.get(id); if(!q)return;
   scene.remove(q.g); scene.remove(q.tag); if(q.sub)scene.remove(q.sub);
@@ -4860,6 +4914,10 @@ function startRealtime(){
     chatPush('','· connected to '+(WORLD.name)+' · press T to chat ·','sys'); })
   .on('join',d=>addPeer(d.p))
   .on('leave',d=>{ const q=peers.get(d.id); if(q)toast(q.name+' sailed off'); dropPeer(d.id); })
+  /* Somebody on this isle changed Angler. The server sends this only after it
+     has re-checked ownership on chain, so the token is one they really hold. */
+  .on('skin',d=>{ if(!d||d.id==null)return; const q=peers.get(d.id); if(!q)return;
+    q.charTokenId=d.charTokenId||0; applyPeerSkin(d.id,q.charTokenId); })
   .on('snap',d=>{ for(const a of d.a||[]){ const q=peers.get(a[0]); if(!q)continue;
       q.tx=a[1]; q.ty=a[2]; q.tz=a[3]; q.tface=a[4]; q.act=a[5]||''; } })
   .on('chat',d=>chatPush(d.name,d.m,'',d.id))
@@ -4935,6 +4993,7 @@ function streamPos(dt){ if(!window.RFNet||!RFNet.wsReady)return;
   const waysEl=$('acctWays'),noteEl=$('acctNote');
   function paint(){ if(!statusEl)return;
     const on=window.RFNet&&RFNet.online, up=window.RFNet&&RFNet.reachable;
+    const sailEl=document.getElementById('startBtn');
     if(on){
       const w=RFNet.wallet;
       statusEl.textContent=(w?'◆ '+w.slice(0,6)+'…'+w.slice(-4):'signed in as '+RFNet.user)+' · progress saved on the server';
@@ -4943,13 +5002,19 @@ function streamPos(dt){ if(!window.RFNet||!RFNet.wsReady)return;
       if(waysEl)waysEl.style.display='none';
       if(noteEl)noteEl.style.display='none';
       if(toggleEl)toggleEl.textContent='sign out';
+      // already through a door: one button, and it is the one that sails
+      if(sailEl)sailEl.style.display='';
     } else {
-      statusEl.textContent=up?'choose how to play online · or just press Set sail to play offline'
-                             :'playing offline · progress saved in this browser';
+      statusEl.textContent=up?'pick how you want to be known'
+                             :'no server found · playing offline, progress saved in this browser';
       statusEl.className='';
+      /* With no server, CONNECT WALLET and PLAY AS GUEST are both dead ends —
+         so they are replaced by the one button that still works rather than
+         left there to fail on click. */
       if(waysEl)waysEl.style.display=up?'flex':'none';
       if(noteEl)noteEl.style.display=up?'block':'none';
       if(toggleEl)toggleEl.textContent='use a username instead';
+      if(sailEl)sailEl.style.display=up?'none':'';
     } }
   /* Pull the authoritative state and adopt it wholesale. */
   async function adopt(){ try{ const d=await RFNet.getState();
@@ -4973,21 +5038,157 @@ function streamPos(dt){ if(!window.RFNet||!RFNet.wsReady)return;
   const doAuth=async(fn,label)=>{ const [u,p]=creds();
     if(u.length<3||p.length<8){ msg('Username ≥3 chars, password ≥8.','bad'); return; }
     msg(label+'…');
-    try{ await fn(u,p); msg('Welcome, '+RFNet.user+'!','good'); paint(); await adopt(); startRealtime(); }
+    try{ await fn(u,p); await afterAuth('Welcome, '+RFNet.user+'!'); }
     catch(e){ msg(e.message||'failed','bad'); } };
   if($('acctLogin'))$('acctLogin').onclick=()=>doAuth((u,p)=>RFNet.login(u,p),'Signing in');
   if($('acctReg'))$('acctReg').onclick=()=>doAuth((u,p)=>RFNet.register(u,p),'Creating account');
+  /* ========================================================================
+     NAME YOUR ANGLER
+     ------------------------------------------------------------------------
+     A wallet proves an address, which is a 40-character hex string and no way
+     to name a person. So the first time an address signs in, the player picks
+     the name the whole server will know them by — checked for uniqueness
+     server-side, because two anglers called "navy" is not a thing the
+     leaderboard, the chat or the crew list can render.
+
+     Built here in JS rather than in index.html on purpose: the markup belongs
+     to whoever is holding that file, and a picker that ships with its own DOM
+     cannot be broken by an edit over there.
+     ==================================================================== */
+  const NAME_RE=/^[A-Za-z0-9_]{3,20}$/;
+  let namePicker=null;
+  function closeNamePicker(){ if(!namePicker)return;
+    namePicker.el.remove(); document.removeEventListener('keydown',namePicker.onKey,true); namePicker=null; }
+
+  /**
+   * Show the picker and resolve with the name the player committed to, or null
+   * if they backed out. `submit(name)` does the actual claiming and should
+   * throw with .data.code on a rejected name; the picker keeps the overlay open
+   * and shows why, so a taken name costs a retype and not a second signature.
+   */
+  function askAnglerName({title,blurb,submit,allowSkip}){
+    closeNamePicker();
+    return new Promise(resolve=>{
+      const el=document.createElement('div');
+      el.style.cssText='position:fixed;inset:0;z-index:9000;display:flex;align-items:center;'
+        +'justify-content:center;background:rgba(6,12,16,.78);backdrop-filter:blur(3px);padding:18px;';
+      el.innerHTML=`<div style="width:min(420px,100%);background:var(--panel);border:1px solid var(--border);
+          border-radius:14px;padding:20px 20px 17px;box-shadow:0 18px 60px rgba(0,0,0,.55)">
+        <div style="font-family:var(--f-disp);font-weight:700;font-size:19px;color:var(--teal);margin-bottom:6px">${title}</div>
+        <div style="font-size:11.5px;line-height:1.5;color:var(--muted);margin-bottom:14px">${blurb}</div>
+        <input id="rfNameIn" maxlength="20" autocomplete="off" spellcheck="false" placeholder="your angler name"
+          style="width:100%;box-sizing:border-box;background:var(--panel2);border:1px solid var(--border);
+          border-radius:10px;padding:11px 13px;color:var(--ink);font-family:inherit;font-size:14px;outline:none">
+        <div id="rfNameHint" style="min-height:17px;font-size:11px;margin:8px 2px 12px;color:var(--muted)">3–20 characters · letters, numbers, underscore</div>
+        <div style="display:flex;gap:9px">
+          <button id="rfNameGo" class="btn" style="flex:1">CLAIM THIS NAME</button>
+          ${allowSkip?'<button id="rfNameSkip" class="btn" style="flex:0 0 auto;opacity:.7">later</button>':''}
+        </div></div>`;
+      document.body.appendChild(el);
+
+      const input=el.querySelector('#rfNameIn'),hint=el.querySelector('#rfNameHint'),
+        go=el.querySelector('#rfNameGo'),skip=el.querySelector('#rfNameSkip');
+      const say=(t,color)=>{ hint.textContent=t; hint.style.color=color||'var(--muted)'; };
+      const finish=v=>{ closeNamePicker(); resolve(v); };
+
+      let checkT=0,checkSeq=0,busy=false;
+      const setBusy=b=>{ busy=b; go.disabled=b; go.style.opacity=b?'.6':''; };
+
+      input.oninput=()=>{
+        const v=input.value.trim();
+        clearTimeout(checkT);
+        if(!v){ say('3–20 characters · letters, numbers, underscore'); return; }
+        if(!NAME_RE.test(v)){ say('letters, numbers and underscore only · 3–20 characters','var(--rose)'); return; }
+        say('checking…');
+        /* Sequence-guarded: answers can land out of order, and a stale "taken"
+           overwriting a fresh "available" would block a name that is free. */
+        const seq=++checkSeq;
+        checkT=setTimeout(async()=>{
+          const free=await RFNet.nameFree(v);
+          if(seq!==checkSeq||!namePicker)return;
+          if(free===null)say('could not check right now · try claiming it anyway');
+          else if(free)say('“'+v+'” is free ✓','var(--teal)');
+          else say('“'+v+'” is taken · pick another','var(--rose)');
+        },320);
+      };
+
+      go.onclick=async()=>{
+        if(busy)return;
+        const v=input.value.trim();
+        if(!NAME_RE.test(v)){ say('letters, numbers and underscore only · 3–20 characters','var(--rose)'); return; }
+        setBusy(true); say('claiming…');
+        try{ await submit(v); finish(v); }
+        catch(e){
+          setBusy(false);
+          const code=e&&e.data&&e.data.code;
+          if(code==='CLAIM_EXPIRED'){ say('that took too long · connect the wallet again','var(--rose)');
+            setTimeout(()=>finish(null),1400); return; }
+          say((e&&e.data&&e.data.error)||e.message||'could not claim that name','var(--rose)');
+        }
+      };
+      input.onkeydown=ev=>{ if(ev.key==='Enter'){ ev.preventDefault(); go.click(); } };
+      if(skip)skip.onclick=()=>finish(null);
+
+      const onKey=ev=>{ if(ev.key==='Escape'){ ev.stopPropagation(); if(allowSkip)finish(null); } };
+      document.addEventListener('keydown',onKey,true);
+      namePicker={el,onKey};
+      setTimeout(()=>input.focus(),40);
+    });
+  }
+
   /* one shared finish line for wallet + guest */
-  const afterAuth=async label=>{ msg(label,'good'); paint(); await adopt(); startRealtime(); };
+  /* Signing in IS pressing play now: the two doors on the title screen are the
+     only buttons there, so finishing one has to put you on the isle. start() is
+     called last, after the save has been adopted, so the world you walk into is
+     the one the server says you left. */
+  const afterAuth=async(label,enter)=>{ msg(label,'good'); paint(); await adopt(); startRealtime();
+    if(enter!==false&&!running)start(); };
   if($('acctWallet'))$('acctWallet').onclick=async()=>{
     if(!RFNet.hasWallet()){ msg('No wallet extension found · install MetaMask, or press PLAY AS GUEST.','bad'); return; }
     msg('Check your wallet · approve the signature request…');
-    try{ await RFNet.walletLogin(); await afterAuth('Wallet connected · welcome, '+RFNet.user+'!'); }
+    try{
+      const d=await RFNet.walletLogin();
+      /* Proven but nameless: this address has never played here. No account
+         exists yet — it is created the moment they claim a name — so backing
+         out of the picker leaves nothing behind. */
+      if(d&&d.needsName&&d.claim){
+        msg('Signature accepted · now name your angler.');
+        const name=await askAnglerName({
+          title:'Name your angler',
+          blurb:'Your wallet proves it is you; this is what everyone else sees — '
+            +'on the leaderboard, in chat, and above your head. It has to be unique, '
+            +'and you only get to pick it once.',
+          submit:n=>RFNet.claimName(d.claim,n)});
+        if(!name){ msg('No name, no account · connect again whenever you like.'); return; }
+        await afterAuth('Welcome aboard, '+RFNet.user+'!');
+        return;
+      }
+      await afterAuth('Wallet connected · welcome, '+RFNet.user+'!');
+      // An account from before names existed. Signed in already; just ask once.
+      if(d&&d.needsName)offerRename();
+    }
     catch(e){ msg(e&&e.code===4001?'Signature rejected · no problem, you can still play as guest.'
       :(e.message||'Wallet sign-in failed'),'bad'); } };
+
+  /* For an account that is already signed in but still wearing a machine name
+     ("w_1a2b3c", "guest_ab12cd"). Skippable — they are playing already, and
+     nagging somebody mid-session is worse than a serial number. */
+  async function offerRename(){
+    const name=await askAnglerName({
+      title:'Pick a proper name',
+      blurb:'You are signed in as <b>'+esc(RFNet.user)+'</b>, which is a serial number, not a name. '
+        +'Choose what the isles should call you — unique, and only once.',
+      allowSkip:true,
+      submit:n=>RFNet.setUsername(n)});
+    if(name){ msg('You are '+name+' now.','good'); paint(); }
+  }
   if($('acctGuest'))$('acctGuest').onclick=async()=>{
     msg('Setting up a guest island…');
-    try{ await RFNet.guestLogin(); await afterAuth('Playing as '+RFNet.user+' · this browser keeps your progress.'); }
+    try{
+      const d=await RFNet.guestLogin();
+      await afterAuth('Playing as '+RFNet.user+' · this browser keeps your progress.');
+      if(d&&d.needsName)offerRename();
+    }
     catch(e){ msg(e.message||'Guest sign-in failed','bad'); } };
   // boot: is a backend reachable, and is our token still good?
   (async()=>{ if(!window.RFNet)return;

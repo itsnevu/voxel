@@ -30,6 +30,7 @@ it, never add a file, never add a tag.**
 | `12-boot.js` | `12-boot` | the boot experience and capability checks |
 | `13-audio.js` | `13-audio` | the living soundscape |
 | `14-npc.js` | `14-npc` | the people of the isle |
+| `15-nft.js` | `15-nft` | the on-chain wardrobe: wear the Reel Fortune Angler NFT you own (ownership checked by the server) |
 
 ```js
 /* ============================================================================
@@ -168,6 +169,7 @@ RF.on('keydown', e => {
 | `12-boot` | *(none)* |
 | `13-audio` | *(none — its settings live in `10-comfort`)* |
 | `14-npc` | `KeyR` |
+| `15-nft` | `KeyK` |
 
 Nothing else. If you want a second binding, put it behind a modifier of a key you
 already own (`Shift+M`), never on a bare key another slot holds.

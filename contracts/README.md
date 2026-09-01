@@ -297,3 +297,122 @@ Yurisdiksi lain punya rezim lisensi masing-masing (UKGC, MGA, dst.) yang biayany
 > Ringkasnya: kontrak ini didesain supaya **piagam tetap piagam**. Kalau kamu tergoda membuatnya bisa dijual, berhenti dulu — pertanyaannya bukan lagi soal teknis, tapi soal apakah kamu siap menjalankan (dan melisensikan) sebuah kasino.
 
 **Disclaimer:** dokumen ini bukan nasihat hukum. Kalau kamu berencana membawa proyek ini ke mainnet atau menambahkan elemen bernilai uang, konsultasikan dengan penasihat hukum yang kompeten di yurisdiksimu terlebih dahulu.
+
+---
+
+# Reel Fortune Anglers — Koleksi NFT (ERC-721, BISA dipindahtangankan)
+
+File: `ReelFortuneAnglers.sol` · tes: `test/ReelFortuneAnglers.t.sol` · ABI: `ReelFortuneAnglers.abi.json` · deploy: `deploy.sh` · config Foundry: `foundry.toml`.
+
+Ini kontrak **kedua** di folder ini dan sengaja **berbeda total** dari Isle Ledger Deeds di atas. Anglers adalah koleksi PFP 1000 karakter (hero Reel Fortune 3D versi pixel/voxel, digenerate HashLips) yang **dibeli** lewat halaman `mint.html`, lalu boleh dipindahtangankan/dijual seperti ERC-721 pada umumnya.
+
+## Kenapa boleh transferable, padahal deed di atas soulbound?
+
+Semua argumen di bagian (a) dan (e) di atas **tetap berlaku 100 %** — untuk deed. Kuncinya ada di *cara token itu didapat*:
+
+| | Isle Ledger Deeds | Reel Fortune Anglers |
+|---|---|---|
+| Cara dapat | pencapaian in-game, ditandatangani backend | **dibeli** dengan harga tetap di mint page |
+| Hasil acak di game? | tidak pernah | **tidak pernah**, dan tidak akan pernah |
+| Transfer | diblokir (`Soulbound()`) | bebas (ERC-721 penuh) |
+| Payable / withdraw | tidak ada | ada (`mint()` bayar, `withdraw()` ke owner) |
+| Hubungan ke `coins`/`pearls`/roulette/kiosk | tidak ada | **tidak ada** |
+
+Yang menjadikan sesuatu "judi" adalah *mekanik acak di game yang membayar barang bernilai uang*. Anglers tidak pernah keluar dari roulette, kiosk, drop ikan, atau roll apa pun — satu-satunya jalur mint adalah `mint()` (bayar harga tetap, tanpa unsur acak) dan `ownerMint()` (cadangan tim). Jadi ia setara dengan membeli skin/merch: barang koleksi kosmetik yang harganya ditentukan pasar, bukan hadiah taruhan. Kalau suatu hari Anglers dipakai sebagai kosmetik di game (topi, warna vest), itu masih aman **selama** kepemilikannya tidak pernah menjadi *hadiah* mekanik acak dan tidak ada jembatan ke ekonomi in-game. Peringatan (e) di atas tetap jadi garis merah.
+
+## Ringkasan kontrak
+
+- `pragma solidity ^0.8.20`, **tanpa import** (konvensi repo: semua helper di dalam file).
+- ERC-721 + Metadata + ERC-165 + ERC-2981 (royalti, default 5 % ke deployer, maksimum 10 %).
+- Id berurutan mulai **1** (HashLips mode ETH juga 1-indexed). Tidak ada burn → `totalSupply()` = id tertinggi.
+- `tokenURI(id)` = `baseURI + id + ".json"` → contoh `https://situs/nft/json/7.json` (dilayani situs game sendiri, folder `nft/`). `baseURI` kosong → `tokenURI` mengembalikan `""`.
+- `mint(quantity)` payable; urutan pengecekan **tetap** (mint page mengandalkan ini untuk menerjemahkan revert): `SaleNotActive` → `InvalidQuantity` (0 atau > `maxPerWallet`) → `SoldOut` → `WalletLimit` → `WrongPayment` (harus persis `mintPrice * quantity`).
+- `mint()` **tidak melakukan external call sama sekali** (tanpa hook `onERC721Received`). Alasannya: satu-satunya fungsi payable jadi bebas reentrancy, `eth_estimateGas` di mint page stabil, dan pembeli di page memang EOA. Contract wallet tetap bisa mint dan memindahkan tokennya belakangan dengan `safeTransferFrom`.
+- `ownerMint(to, qty)` — cadangan tim; hanya dibatasi `MAX_SUPPLY`, tidak menghitung `mintedBy`.
+- `tokensOfOwner(addr)` — untuk `eth_call` dari mint page ("Your Anglers"); memindai 1..totalSupply, murah untuk 1000 token. ERC-721 Enumerable sengaja **tidak** diklaim.
+- Admin (`owner()`, bisa `transferOwnership`): `setSaleActive`, `setMintPrice`, `setMaxPerWallet`, `setBaseURI`, `setRoyalty(receiver, bps ≤ 1000)`, `withdraw()` (seluruh saldo ke owner via `call`; gagal → `WithdrawFailed()`).
+- Pola checks-effects-interactions di semua fungsi. External call hanya ada di `safeTransferFrom` (setelah state berubah) dan `withdraw()` (ke owner saja).
+
+## Compile & tes (Foundry, tanpa forge-std)
+
+```bash
+cd contracts
+forge build          # solc diunduh otomatis oleh forge
+forge test -vv       # 36 tes, semua pakai require + interface Vm buatan sendiri
+forge inspect ReelFortuneAnglers abi --json > ReelFortuneAnglers.abi.json   # regenerasi ABI kalau kontrak berubah
+```
+
+`foundry.toml` di folder ini: `src = "."`, `test = "test"`, `libs = []` (tidak ada dependency), optimizer 200 runs. Folder `out/`, `cache/`, `broadcast/` sudah di-gitignore.
+
+## Deploy
+
+`deploy.sh` memakai `forge create` biasa (forge ≥ 1.0 butuh `--broadcast`, sudah di dalam skrip). Variabel:
+
+| Env | Default | Keterangan |
+|---|---|---|
+| `RPC_URL` | `http://127.0.0.1:8545` | endpoint JSON-RPC |
+| `PRIVATE_KEY` | *(wajib)* | key deployer → jadi `owner()` |
+| `MAX_SUPPLY` | `1000` | ukuran koleksi |
+| `MINT_PRICE_WEI` | `5000000000000000` | 0.005 ether |
+| `MAX_PER_WALLET` | `5` | cap per wallet untuk `mint()` |
+| `BASE_URI` | *(wajib)* | contoh `https://situs/nft/json/` — **pakai slash di akhir** |
+| `ACTIVATE=1` | off | langsung `setSaleActive(true)` |
+
+Skrip mencetak alamat kontrak, hasil `cast call` sanity, baris `cast send` untuk `setSaleActive` / `setBaseURI` / `withdraw`, dan baris `contract: '0x…'` yang tinggal ditempel ke `mint/config.js`.
+
+### 1. Anvil (lokal, chain id 31337)
+
+```bash
+# terminal 1
+anvil
+
+# terminal 2
+cd contracts
+RPC_URL=http://127.0.0.1:8545 \
+PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+BASE_URI=http://localhost:8000/nft/json/ \
+ACTIVATE=1 ./deploy.sh
+```
+
+Key itu = akun #0 anvil (`0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`, 10 000 ETH). Kontrak pertama yang ia deploy (nonce 0) **selalu** mendarat di `0x5FbDB2315678afecb367f032d93F642f64180aa3`, dan alamat itu sudah tertulis untuk chain 31337 di `mint/config.js`. Kalau anvil di-restart, deploy ulang dan alamatnya sama lagi.
+
+Coba mint dari akun #1 lewat `cast`:
+
+```bash
+A=0x5FbDB2315678afecb367f032d93F642f64180aa3
+cast send $A "mint(uint256)" 2 --value 10000000000000000 --rpc-url http://127.0.0.1:8545 \
+  --private-key 0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
+cast call $A "totalSupply()(uint256)" --rpc-url http://127.0.0.1:8545
+cast call $A "ownerOf(uint256)(address)" 1 --rpc-url http://127.0.0.1:8545
+cast call $A "tokenURI(uint256)(string)" 1 --rpc-url http://127.0.0.1:8545
+```
+
+### 2. Base Sepolia (testnet, chain id 84532)
+
+1. Isi wallet deployer dengan ETH Base Sepolia (faucet Coinbase / Alchemy / QuickNode).
+2. Deploy: `RPC_URL=https://sepolia.base.org PRIVATE_KEY=0x… BASE_URI=https://situs-kamu/nft/json/ ./deploy.sh`
+3. Tempel alamatnya ke `mint/config.js` → `chains[84532].contract`, set `chainId: 84532` (atau buka `mint.html?chain=84532`).
+4. Aktifkan penjualan saat siap: `cast send <ADDR> "setSaleActive(bool)" true --rpc-url https://sepolia.base.org --private-key 0x…`
+5. (Opsional) verifikasi: `forge verify-contract <ADDR> ReelFortuneAnglers.sol:ReelFortuneAnglers --chain 84532 --constructor-args $(cast abi-encode "constructor(uint256,uint256,uint256,string)" 1000 5000000000000000 5 "https://situs-kamu/nft/json/") --etherscan-api-key <KEY>`
+
+### 3. Base mainnet (chain id 8453)
+
+Sama seperti testnet dengan `RPC_URL=https://mainnet.base.org` dan `chains[8453]` di `mint/config.js`. Sebelum mainnet:
+
+- `nft/` (gambar + JSON) sudah online di `BASE_URI` dan bisa dibuka publik (`curl https://situs/nft/json/1.json`).
+- `owner()` sebaiknya hardware wallet / multisig — `transferOwnership()` setelah deploy kalau deployer-nya key sekali pakai.
+- `setRoyalty()` kalau ingin penerima royalti bukan deployer.
+- Baca ulang peringatan (e) di atas: Anglers **tidak boleh** dijadikan hadiah mekanik acak apa pun.
+
+## MetaMask untuk anvil
+
+1. MetaMask → Settings → Networks → **Add a network manually**:
+   - Network name: `Anvil (local)`
+   - RPC URL: `http://127.0.0.1:8545`
+   - Chain ID: `31337`
+   - Currency symbol: `ETH`
+2. Import akun #0: Account menu → **Import account** → private key `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80` (atau akun #1 `0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d` supaya pembeli ≠ owner).
+3. Kalau anvil di-restart dan transaksi "stuck"/nonce salah: Settings → Advanced → **Clear activity tab data**.
+4. Jalankan situs (`python3 -m http.server 8000` dari root repo) dan buka `http://localhost:8000/mint.html`. Halaman ini juga bisa memanggil `wallet_addEthereumChain` sendiri kalau jaringan 31337 belum ada di MetaMask.
+
+> **Jangan pernah** memakai key anvil di atas di jaringan sungguhan — key itu publik dan semua orang tahu.

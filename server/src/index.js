@@ -31,6 +31,7 @@ import cors from 'cors';
 import * as DB from './db.js';
 import { requireAuth, mountAuth } from './auth.js';
 import { mountWalletAuth } from './wallet.js';
+import { mountNft, ownsToken } from './nft.js';
 import * as EV from './events.js';
 import { HANDLERS, RATE } from './game/actions.js';
 import { newState, normalizeState, int0, BOATS, boatSeats, crewSlots, MAX_BOAT } from './game/rules.js';
@@ -40,7 +41,7 @@ import { payDividends, mktEpochNow } from './game/economy.js';
 // hook and a presence listing under several plausible names, so handing it the
 // whole module means the console gains those the day realtime.js grows them).
 import * as RT from './realtime.js';
-import { attach, onlineTotal, roomCount, broadcast, announceAll, closeAllSockets } from './realtime.js';
+import { attach, onlineTotal, roomCount, broadcast, announceAll, announceChar, closeAllSockets } from './realtime.js';
 import { log, child, logLevel } from './log.js';
 import {
   requestId, securityHeaders, accessLog, notFoundJson, errorHandler,
@@ -442,6 +443,11 @@ function refuseUnreadable(res) {
  * Request-scoped loadState: answers 503 and returns null when the save is
  * unreadable, so handlers can bail with `if (!state) return;`.
  */
+/* express 4 ignores a rejected promise from a handler: an async route that
+   throws would hang the request instead of reaching errorHandler. Same wrapper
+   auth.js and wallet.js use, for the same reason. */
+const wrapAsync = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
 function loadStateFor(req, res) {
   try {
     return loadState(req.userId);
@@ -572,6 +578,7 @@ function requireNotBanned(req, res, next) {
    ========================================================================== */
 mountAuth(app);
 mountWalletAuth(app);
+mountNft(app);
 
 /* ============================================================================
    GET /api/state — the client's only way to learn what it owns.
@@ -845,6 +852,72 @@ app.post('/api/save', requireAuth, requireNotBanned, (req, res) => {
   if (touched) saves.put(req.userId, state);
   res.json(stateEnvelope(state, { ok: true, saved: touched }));
 });
+
+/* ============================================================================
+   POST /api/nft/equip — wear one of your Anglers, or { tokenId: 0 } to go back
+   to the default hero.
+   ----------------------------------------------------------------------------
+   Separate from /api/save because it is the one cosmetic the client cannot be
+   trusted about at all: the others are bounded numbers, this one is a claim of
+   ownership. So the token id in the body is never believed — it is checked
+   against the chain, for the address SIWE proved for THIS account, before it is
+   written. A guest or password account has no address and so can only ever be
+   the default hero, which is exactly the rule we want.
+   ========================================================================== */
+app.post('/api/nft/equip', requireAuth, requireNotBanned, wrapAsync(async (req, res) => {
+  /* Typed before it is converted. Number(null) is 0 and 0 is the "take it off"
+     path, so a coercing read would turn a malformed body into a silent unequip
+     — the player presses wear, something is wrong with the request, and the
+     server cheerfully undresses them and reports success. */
+  const raw = req.body ? req.body.tokenId : undefined;
+  const tokenId = typeof raw === 'number' ? raw
+    : (typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN);
+  if (!Number.isInteger(tokenId) || tokenId < 0) {
+    return res.status(400).json({ error: 'bad token id', code: 'BAD_TOKEN' });
+  }
+
+  const state = loadStateFor(req, res);
+  if (!state) return;
+
+  // 0 is "take it off" and needs no chain call: undressing is always allowed,
+  // including for a player whose wallet has since been emptied.
+  if (tokenId === 0) {
+    if (state.charTokenId !== 0) {
+      state.charTokenId = 0;
+      saves.put(req.userId, state);
+      try { announceChar(req.userId); } catch (e) { log.warn({ msg: 'skin announce failed', err: String(e) }); }
+    }
+    return res.json(stateEnvelope(state, { ok: true, charTokenId: 0 }));
+  }
+
+  const row = DB.users.findById(req.userId);
+  const addr = row && row.wallet ? String(row.wallet).toLowerCase() : '';
+  if (!addr) {
+    return res.status(403).json({
+      error: 'connect a wallet to wear an Angler',
+      code: 'NO_WALLET',
+    });
+  }
+
+  if (!(await ownsToken(addr, tokenId))) {
+    /* Covers three cases with one answer on purpose — not yours, does not
+       exist, and chain unreachable all mean "not right now", and telling them
+       apart would let anyone probe the collection through this route. */
+    return res.status(403).json({
+      error: 'that Angler is not in this wallet',
+      code: 'NOT_OWNED',
+    });
+  }
+
+  if (state.charTokenId !== tokenId) {
+    state.charTokenId = tokenId;
+    saves.put(req.userId, state);
+    // Saved first, then announced: announceChar re-reads the save, so the write
+    // has to have landed or the isle would be told the old token.
+    try { announceChar(req.userId); } catch (e) { log.warn({ msg: 'skin announce failed', err: String(e) }); }
+  }
+  res.json(stateEnvelope(state, { ok: true, charTokenId: tokenId }));
+}));
 
 /* ============================================================================
    GET /api/leaderboard — public, cached 30s.
@@ -1639,6 +1712,19 @@ const BLOCKED_PATH = /^\/(?:server|node_modules|\.git|\.env|contracts)(?:\/|$)/i
 app.use((req, res, next) => {
   if (BLOCKED_PATH.test(req.path)) return httpErr(res, 403, 'FORBIDDEN', 'forbidden');
   next();
+});
+
+/* /mint serves mint.html — ".html" in a URL people type and share is an
+   implementation detail leaking into the product.
+
+   It needs its own route rather than express.static's `extensions` option
+   because the repo has BOTH a mint.html file and a mint/ directory (the page's
+   scripts). Static's directory handling wins that race and 301s to "/mint/",
+   which has no index and 404s. An explicit route settles it in one place, and
+   /mint.html keeps working, so no link anybody has already shared can break. */
+app.get('/mint', (req, res, next) => {
+  res.sendFile(path.join(GAME_DIR, 'mint.html'), { headers: { 'Cache-Control': 'no-cache' } },
+    (err) => { if (err) next(); });
 });
 
 app.use(express.static(GAME_DIR, {

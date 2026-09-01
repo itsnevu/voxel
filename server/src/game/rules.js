@@ -386,6 +386,9 @@ export function newState() {
     stocks: { own: {}, basis: {}, lastDiv: null, lastShareEpoch: 0, gotFirst: 0 },
     pearls: 0, pearlsLife: 0,
     wardrobe: {}, titleId: '', ownedT: {}, ownedW: {},
+    // 0 = the default hero everyone starts as; anything else is an owned Angler
+    // token id, and only /api/nft/equip may set it (after an on-chain check).
+    charTokenId: 0,
     /* one-off Pearl Kiosk unlocks (game.js:1604) — flags, not counters:
        `pet` is the Spirit Fish that follows you, `charm` the Lucky Charm that
        re-rolls one losing spin in five. Both are 0/1 and never spent. */
@@ -516,6 +519,11 @@ export function normalizeState(raw) {
   if (obj(s.ownedT)) st.ownedT = s.ownedT;
   if (obj(s.deeds)) st.deeds = s.deeds;
   st.titleId = typeof s.titleId === 'string' ? s.titleId.slice(0, 40) : '';
+
+  /* Carried through a normalize so an equipped Angler survives a reload, but
+     never widened here: this is the sanitiser, not the authority. Ownership is
+     re-checked on the chain by /api/nft/equip every time it is set. */
+  st.charTokenId = Number.isInteger(s.charTokenId) && s.charTokenId > 0 ? s.charTokenId : 0;
   st.bucketTier = clamp(int0(s.bucketTier), 0, 4);
   const bait = obj(s.bait);
   if (bait) for (const k of BAIT_ORDER) {

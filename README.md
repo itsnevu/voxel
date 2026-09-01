@@ -1,4 +1,4 @@
-# 🎣 Reel Fortune 3D
+# 🎣 Reel Fortune
 
 A voxel (Minecraft-style) fishing, mining & gambling adventure across four themed islands — built with **Three.js**. Fish the shores, mine the quarry, chop the woods, play a living market with its own stock exchange, upgrade your gear, and gamble your best catch at a real 3D roulette table. **Double your fish or lose it.**
 
@@ -105,7 +105,10 @@ ReelFortune3D/
 │   ├── deploy/           ← nginx, systemd unit, backup script
 │   └── README.md         ← full VPS install guide (in Indonesian)
 ├── contracts/            ← IsleLedger.sol — the deed wall. A trophy, never a payment rail
-├── .github/workflows/    ← CI: every push runs the whole suite on Node 18 and 20
+│                            ReelFortuneAnglers.sol — the Anglers NFT (ERC-721) + forge tests + deploy.sh
+├── mint.html · mint/     ← the self-hosted mint page: connect a wallet, mint an Angler, no marketplace
+├── nft/                  ← the generated collection: 1000 images + metadata + rarity, served as-is
+├── .github/workflows/    ← CI: every push runs the whole suite on Node 18 and 20, plus forge test
 ├── sw.js · manifest.webmanifest · icon*.svg/png · og-card.jpg  ← installable + share card
 └── README.md
 ```
@@ -115,6 +118,42 @@ Two of those are genuinely optional. **`mods/`** is a layer: every file hangs it
 caught and reported instead of taking the game down. **`server/`** is a separate program — the
 game never needs it, but when it is there and you are signed in, it becomes the authority on
 every roll and every coin, and the console can no longer mint anything.
+
+## 🧬 Reel Fortune Anglers — the NFT
+
+**1000 unique voxel anglers** — the game's own hero, re-rolled: 13 trait layers (island
+background, aura, backpack, pants, outfit, skin, eyes, mouth, hair, neckwear, headwear, tool,
+companion) with real rarity weights. Minted **from this site**, at [`mint.html`](mint.html), on the
+chain in [`mint/config.js`](mint/config.js) — no OpenSea, no marketplace in the loop.
+
+| Piece | Where | What |
+|-------|-------|------|
+| Art engine | `../hashlips_art_engine-main/reelfortune/` | draws the hero as a voxel box-model into transparent layer PNGs; HashLips rolls the DNA, rarity and metadata |
+| Collection | [`nft/`](nft/) | `images/N.png`, `json/N.json` (ERC-721 metadata), `rarity.json`, `collection.json` |
+| Contract | [`contracts/ReelFortuneAnglers.sol`](contracts/ReelFortuneAnglers.sol) | dependency-free ERC-721 + ERC-2981: `mint(quantity)` payable, supply cap, per-wallet cap, owner reserve, `withdraw()` |
+| Mint page | [`mint.html`](mint.html) + [`mint/`](mint/) | wallet connect, chain switch, live supply, mint, "your anglers" gallery, trait rarity — zero dependencies |
+
+Regenerate the collection (engine repo), then deploy and point the page at it:
+
+```bash
+cd ../hashlips_art_engine-main
+npm run rf:layers                                     # draw every trait layer PNG
+npm run rf:build -- --force                           # roll 1000 unique editions
+npm run rf:export -- --public-url https://your.site   # → ReelFortune3D/nft/
+
+cd ../ReelFortune3D/contracts
+forge test                                            # the contract suite
+RPC_URL=... PRIVATE_KEY=... BASE_URI=https://your.site/nft/json/ ACTIVATE=1 bash deploy.sh
+# paste the printed address into mint/config.js, set chainId — done
+```
+
+Local dry run: `anvil` in one terminal, `deploy.sh` against it (the address is deterministic, and
+already in `mint/config.js`), serve the folder, open `mint.html`, add the anvil network to MetaMask.
+[`contracts/README.md`](contracts/README.md) and [`mint/README.md`](mint/README.md) walk through it.
+
+An Angler is a **cosmetic collectible you buy**. It is never paid out by a roll, a spin, a catch or
+a drop — the soulbound argument in `contracts/README.md` for the deed wall still stands, and the
+game's economy does not know the collection exists.
 
 ## 🛠️ Editing
 

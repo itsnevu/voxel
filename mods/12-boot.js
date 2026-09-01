@@ -57,7 +57,7 @@ function clearModStores() {
 
 function miniDiag() {
   var L = [], R = window.RF;
-  L.push('Reel Fortune 3D · rescue report');
+  L.push('Reel Fortune · rescue report');
   L.push('when    ' + new Date().toISOString());
   L.push('page    ' + String(location.href).slice(0, 200));
   L.push('agent   ' + navigator.userAgent);
@@ -464,7 +464,7 @@ RF.mod('12-boot', function (RF) {
   const worst = list => list.reduce((a, c) => c.status === 'fail' ? 'fail' : (c.status === 'warn' && a === 'ok') ? 'warn' : a, 'ok');
 
   function reportText() {
-    const L = ['Reel Fortune 3D · capability report', 'when   ' + new Date().toISOString(),
+    const L = ['Reel Fortune · capability report', 'when   ' + new Date().toISOString(),
       'origin ' + PROTO + '//' + (location.host || '(local folder)')];
     const all = originRow ? CHECKS.concat([originRow]) : CHECKS;
     for (const c of all) L.push(('  ' + c.label + '                 ').slice(0, 20) +
@@ -568,7 +568,7 @@ RF.mod('12-boot', function (RF) {
       'Fourteen new systems landed on the isle at once. Here is the whole of it, one line each.',
       e.lines.map(l => '<div class="rfb-nrow"><span class="rfb-ni">' + pix(l[0], 15) + '</span>' +
         '<span><b>' + esc(l[1]) + '</b><span>' + esc(l[2]) + '</span></span></div>').join(''),
-      '<span class="rfb-note">Reel Fortune 3D · v' + esc(VER) + '</span>' +
+      '<span class="rfb-note">Reel Fortune · v' + esc(VER) + '</span>' +
       '<button class="rfb-btn" type="button" data-a="tour">Show me around</button>' +
       '<button class="rfb-btn" type="button" data-a="showreport">System check</button>' +
       '<button class="rfb-btn pri" type="button" data-a="dismissnews">Ready</button>');

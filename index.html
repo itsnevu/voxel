@@ -3,11 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Reel Fortune 3D · Voxel Fishing &amp; Mining Isle</title>
+<title>Reel Fortune</title>
 <meta name="description" content="A voxel fishing, mining and gambling adventure across four themed islands. Fish the shores, work a living market, and gamble your best catch at a real 3D roulette table.">
 <meta name="theme-color" content="#0a1418">
-<link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="32x32" href="icon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -19,22 +20,25 @@
      og:image and twitter:image ABSOLUTE (https://your.domain/og-card.jpg) —
      a few scrapers still refuse to resolve a relative one. -->
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="Reel Fortune 3D">
-<meta property="og:title" content="Reel Fortune 3D">
+<meta property="og:site_name" content="Reel Fortune">
+<meta property="og:title" content="Reel Fortune">
 <meta property="og:description" content="Fish four islands, work a living market, and gamble your best catch at a real 3D roulette table. Double your fish — or the eel eats it.">
 <meta property="og:image" content="og-card.jpg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="Reel Fortune 3D — a teal voxel fish beside the game's title.">
+<meta property="og:image:alt" content="Reel Fortune — a teal voxel fish beside the game's title.">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Reel Fortune 3D">
+<meta name="twitter:title" content="Reel Fortune">
 <meta name="twitter:description" content="Fish four islands, work a living market, and gamble your best catch at a real 3D roulette table. Double your fish — or the eel eats it.">
 <meta name="twitter:image" content="og-card.jpg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- from file:// this request never resolves, so it must never hold up first paint: the
-     stack in --f-disp/--f-mono is what actually renders until (and unless) it lands -->
-<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@700;800;900&family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+     stack in --f-disp/--f-mono is what actually renders until (and unless) it lands.
+     fonts.js flips media to "all" on load — an inline onload would be blocked by the
+     server's script-src 'self' CSP. -->
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@700;800;900&family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" media="print" data-font>
+<script src="fonts.js"></script>
 <noscript><link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@700;800;900&family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet"></noscript>
 <style>
   :root{
@@ -589,16 +593,30 @@
   @keyframes sheen{to{left:120%;}}
   #acct{margin-top:15px;padding-top:9px;border-top:1px dashed rgba(255,207,92,.28);
     display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:4px 12px;}
-  #acctStatus{font-size:10.5px;color:var(--muted);letter-spacing:.06em;}
+  /* full width so it sits ABOVE the mint button rather than beside it — the
+     flex row was pairing them off and it read like a label for that button */
+  #acctStatus{font-size:10.5px;color:var(--muted);letter-spacing:.06em;width:100%;text-align:center;}
   #acctStatus.on{color:var(--teal);}
   #acctForm{display:flex;gap:7px;justify-content:center;flex-wrap:wrap;margin-top:4px;width:100%;}
   #acctForm input{font-family:var(--f-mono);font-size:12px;color:var(--ink);background:var(--glass-row);
     border:1px solid var(--glass-bd-soft);border-radius:9px;padding:7px 10px;width:140px;outline:none;}
   #acctForm input:focus{border-color:rgba(57,215,196,.6);}
   #acctForm .btn{padding:8px 13px;font-size:12px;background:rgba(57,215,196,.08);border-color:rgba(57,215,196,.45);color:var(--teal);}
-  #acctWays{display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin:0;}
+  #acctWays{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:14px 0 0;}
   #acctWays .btn{padding:5px 10px;font-size:10px;border-radius:8px;transition:transform .08s,border-color .12s,box-shadow .12s;}
   #acctWays .btn:hover:not(:disabled){transform:translateY(-1px);}
+  /* Two doors at cta scale. Smaller type and padding than the single PLAY they
+     replace, so the pair occupies the same block of the dock rather than
+     doubling its height. */
+  #acctWays .cta{font-size:14px;padding:15px 22px;letter-spacing:.04em;animation:none;flex:1 1 auto;
+    min-width:200px;max-width:260px;white-space:nowrap;}
+  @media (max-width:520px){ #acctWays .cta{font-size:13px;padding:14px 16px;min-width:0;} }
+  .cta-wallet{background:linear-gradient(180deg,#b9a6ff,#9f8cff 55%,#8875f0);color:#140b2e;
+    box-shadow:0 5px 0 #6a58c4,0 12px 30px rgba(3,10,12,.5),inset 0 1px 0 rgba(255,255,255,.45);}
+  .cta-wallet:hover{box-shadow:0 5px 0 #6a58c4,0 12px 34px rgba(3,10,12,.45),0 0 34px rgba(159,140,255,.5),inset 0 1px 0 rgba(255,255,255,.45);}
+  .cta-guest{background:linear-gradient(180deg,#5b6f78,#48606a 55%,#3b525c);color:#eaf6f4;
+    box-shadow:0 5px 0 #2a3d45,0 12px 30px rgba(3,10,12,.5),inset 0 1px 0 rgba(255,255,255,.18);}
+  .cta-guest:hover{box-shadow:0 5px 0 #2a3d45,0 12px 34px rgba(3,10,12,.45),inset 0 1px 0 rgba(255,255,255,.18);}
   .wbtn{border-color:rgba(159,140,255,.65)!important;color:#c3b4ff!important;
     box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 0 14px rgba(159,140,255,.18)!important;}
   .wbtn:hover:not(:disabled){border-color:#b6a4ff!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 0 20px rgba(159,140,255,.35)!important;}
@@ -610,6 +628,13 @@
   .loadnote button:hover{color:var(--rose);}
   .loadnote #wipe{opacity:.5;font-size:9px;}
   .loadnote #wipe:hover{opacity:1;}
+  .loadnote a{color:var(--teal);text-decoration:underline;font-size:10px;}
+  .loadnote a:hover{color:var(--gold);}
+  /* the mint door — gold so it reads as the other thing on offer, not a repeat
+     of the two teal sign-in buttons above it */
+  .mintbtn{display:block;margin:7px auto 0;width:max-content;text-decoration:none;
+    border-color:rgba(255,207,92,.55);color:var(--gold);letter-spacing:.06em;}
+  .mintbtn:hover{background:rgba(255,207,92,.14);border-color:var(--gold);}
   #err{position:fixed;inset:0;z-index:40;display:none;align-items:center;justify-content:center;background:#0a1418;color:#ff9db0;
     font-family:var(--f-mono);font-size:14px;text-align:center;padding:40px;line-height:1.7;}
   /* the casino chips and several rows are focusable divs, not buttons — they need the ring too */
@@ -870,13 +895,22 @@
     <div class="dock">
       <div id="worldRow"></div>
       <div id="worldCap"></div>
-      <button class="cta" id="startBtn" type="button" style="margin-top:12px;">PLAY</button>
+      <!-- Two doors, both the same size, because they are the same decision:
+           how do you want to be known. The old screen had one giant PLAY and a
+           pair of 10px sign-in buttons underneath, which read as "play" and
+           "some settings" rather than as two ways in — so nobody connected a
+           wallet. startBtn survives as the offline escape hatch below. -->
+      <div id="acctWays">
+        <button class="cta cta-wallet" id="acctWallet" type="button">◆ CONNECT WALLET</button>
+        <button class="cta cta-guest" id="acctGuest" type="button">PLAY AS GUEST</button>
+      </div>
       <div id="acct">
         <div id="acctStatus">playing offline · progress saved in browser</div>
-        <div id="acctWays">
-          <button class="btn wbtn" id="acctWallet" type="button">◆ CONNECT WALLET</button>
-          <button class="btn" id="acctGuest" type="button">PLAY AS GUEST</button>
-        </div>
+        <button class="cta" id="startBtn" type="button" style="display:none;margin-top:12px;">SET SAIL</button>
+        <!-- The collection is half the reason to connect a wallet at all, and as a
+             10px footnote nobody found it. Given its own row, in gold, it reads as
+             a second thing you can do here rather than fine print. -->
+        <a class="btn mintbtn" id="mintLink" href="mint.html">◆ MINT AN ANGLER NFT</a>
         <div id="acctForm" style="display:none">
           <input id="acctUser" type="text" placeholder="username" autocomplete="username" maxlength="20">
           <input id="acctPass" type="password" placeholder="password" autocomplete="current-password" maxlength="72">
@@ -886,6 +920,7 @@
         <div id="acctMsg"></div>
         <div class="loadnote">
           <button id="acctToggle" type="button">use username</button> ·
+          <button id="playOffline" type="button">play offline</button> ·
           <button id="wipe" type="button">wipe save</button>
         </div>
       </div>
@@ -923,19 +958,9 @@
 <script src="mods/12-boot.js"></script>
 <script src="mods/13-audio.js"></script>
 <script src="mods/14-npc.js"></script>
-<script>
-/* The offline rescue (sw.js) — strictly an add-on. A service worker needs a
-   secure context, so a file:// or plain-http page simply never asks for one and
-   plays exactly as it always has. Any failure is swallowed on purpose: nothing
-   about this game may depend on it. */
-if ('serviceWorker' in navigator &&
-    (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
-  addEventListener('load', function () {
-    navigator.serviceWorker.register('sw.js').catch(function (e) {
-      if (window.RF && RF.err) RF.err('sw:register', e, 'warn');
-    });
-  });
-}
-</script>
+<script src="mods/15-nft.js"></script>
+<!-- The offline rescue (sw.js). Lives in its own file because the server's CSP
+     (script-src 'self') blocks inline scripts — see sw-register.js. -->
+<script src="sw-register.js"></script>
 </body>
 </html>

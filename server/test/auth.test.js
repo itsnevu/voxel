@@ -204,16 +204,117 @@ describe('auth', () => {
       assert.equal(nonce.body.address, wallet.address);
       assert.ok(nonce.body.message.toLowerCase().includes(wallet.address.toLowerCase()));
 
+      /* A good signature proves the address and NOTHING ELSE. No account is
+         created yet and no token is issued: the player still has to say what
+         to call themselves. */
       const verify = await server.post('/api/auth/wallet/verify', {
         body: { address: wallet.address, signature: signMessage(wallet.priv, nonce.body.message) },
       });
       assert.equal(verify.status, 200);
       assert.equal(verify.body.wallet, wallet.address.toLowerCase());
-      assert.match(verify.body.username, /^w_[0-9a-f]{6}/);
+      assert.equal(verify.body.needsName, true);
+      assert.equal(typeof verify.body.claim, 'string');
+      assert.equal(verify.body.token, undefined);
 
-      const me = await server.get('/api/auth/me', { token: verify.body.token });
+      const name = uniqueName('angler');
+      const claimed = await server.post('/api/auth/wallet/claim', {
+        body: { claim: verify.body.claim, username: name },
+      });
+      assert.equal(claimed.status, 201);
+      assert.equal(claimed.body.username, name);
+      assert.equal(claimed.body.wallet, wallet.address.toLowerCase());
+      assert.equal(claimed.body.needsName, false);
+
+      const me = await server.get('/api/auth/me', { token: claimed.body.token });
       assert.equal(me.status, 200);
-      assert.equal(me.body.user.username, verify.body.username);
+      assert.equal(me.body.user.username, name);
+    });
+
+    it('refuses a name that another angler already wears', async () => {
+      const first = newWallet();
+      const second = newWallet();
+      const name = uniqueName('taken');
+
+      await signIn(server, first, name);
+
+      const nonce = await server.get(`/api/auth/wallet/nonce?address=${second.address}`);
+      const verify = await server.post('/api/auth/wallet/verify', {
+        body: { address: second.address, signature: signMessage(second.priv, nonce.body.message) },
+      });
+      assert.equal(verify.body.needsName, true);
+
+      // Same name, different case: usernames are UNIQUE COLLATE NOCASE, so this
+      // is the same name and must be refused as one.
+      const clash = await server.post('/api/auth/wallet/claim', {
+        body: { claim: verify.body.claim, username: name.toUpperCase() },
+      });
+      assert.equal(clash.status, 409);
+      assert.equal(clash.body.code, 'USERNAME_TAKEN');
+
+      // The ticket survives a rejected name, so no second signature is needed.
+      const retry = await server.post('/api/auth/wallet/claim', {
+        body: { claim: verify.body.claim, username: uniqueName('angler') },
+      });
+      assert.equal(retry.status, 201);
+    });
+
+    it('refuses names shaped like the ones the server mints for itself', async () => {
+      const wallet = newWallet();
+      const nonce = await server.get(`/api/auth/wallet/nonce?address=${wallet.address}`);
+      const verify = await server.post('/api/auth/wallet/verify', {
+        body: { address: wallet.address, signature: signMessage(wallet.priv, nonce.body.message) },
+      });
+
+      for (const name of ['guest_abc123', 'w_1a2b3c', 'admin_navy']) {
+        const res = await server.post('/api/auth/wallet/claim', {
+          body: { claim: verify.body.claim, username: name },
+        });
+        assert.equal(res.status, 400, `${name} should be reserved`);
+        assert.equal(res.body.code, 'RESERVED_USERNAME');
+      }
+    });
+
+    it('will not let a spent claim ticket name a second account', async () => {
+      const wallet = newWallet();
+      const nonce = await server.get(`/api/auth/wallet/nonce?address=${wallet.address}`);
+      const verify = await server.post('/api/auth/wallet/verify', {
+        body: { address: wallet.address, signature: signMessage(wallet.priv, nonce.body.message) },
+      });
+
+      const first = await server.post('/api/auth/wallet/claim', {
+        body: { claim: verify.body.claim, username: uniqueName('angler') },
+      });
+      assert.equal(first.status, 201);
+
+      const again = await server.post('/api/auth/wallet/claim', {
+        body: { claim: verify.body.claim, username: uniqueName('angler') },
+      });
+      assert.equal(again.status, 400);
+      assert.equal(again.body.code, 'CLAIM_EXPIRED');
+    });
+
+    it('lets a guest trade its serial number for a real name, exactly once', async () => {
+      const guest = await server.post('/api/auth/guest', {});
+      assert.equal(guest.status, 200);
+      assert.match(guest.body.username, /^guest_/);
+      assert.equal(guest.body.needsName, true);
+
+      const name = uniqueName('deckhand');
+      const set = await server.post('/api/auth/username', {
+        token: guest.body.token, body: { username: name },
+      });
+      assert.equal(set.status, 200);
+      assert.equal(set.body.username, name);
+
+      const me = await server.get('/api/auth/me', { token: guest.body.token });
+      assert.equal(me.body.user.username, name);
+
+      // The latch: a naming route, not a free rename.
+      const again = await server.post('/api/auth/username', {
+        token: guest.body.token, body: { username: uniqueName('angler') },
+      });
+      assert.equal(again.status, 409);
+      assert.equal(again.body.code, 'NAME_ALREADY_SET');
     });
 
     it('returns the same account when the same wallet signs in again', async () => {
@@ -401,11 +502,22 @@ describe('auth', () => {
 });
 
 /** Nonce -> signature -> token, the whole wallet handshake in one call. */
-async function signIn(server, wallet) {
+/**
+ * Sign in with a wallet, naming the angler when the address is new. Returns the
+ * body that carries the session token — from verify for a known wallet, from
+ * claim for a first-time one.
+ */
+async function signIn(server, wallet, username) {
   const nonce = await server.get(`/api/auth/wallet/nonce?address=${wallet.address}`);
   const res = await server.post('/api/auth/wallet/verify', {
     body: { address: wallet.address, signature: signMessage(wallet.priv, nonce.body.message) },
   });
   assert.equal(res.status, 200, `wallet sign-in failed: ${res.text}`);
-  return res.body;
+  if (!res.body.needsName) return res.body;
+
+  const claimed = await server.post('/api/auth/wallet/claim', {
+    body: { claim: res.body.claim, username: username || uniqueName('angler') },
+  });
+  assert.equal(claimed.status, 201, `name claim failed: ${claimed.text}`);
+  return claimed.body;
 }

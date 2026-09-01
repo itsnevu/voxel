@@ -12,7 +12,7 @@ import { randomBytes } from 'node:crypto';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { keccak_256 } from '@noble/hashes/sha3';
 import { users, sessions, wallets } from './db.js';
-import { hashPassword } from './auth.js';
+import { hashPassword, usernameProblem, requireAuth } from './auth.js';
 import { isBanned } from './admin.js';
 import { ipRateLimit } from './middleware.js';
 
@@ -209,33 +209,58 @@ function randChars(n) {
   return out;
 }
 
+/* ----------------------------------------------------------------------------
+   NAME CLAIMS
+   ----------------------------------------------------------------------------
+   A verified signature proves who you are; it does not say what to call you.
+   The address used to be minted straight into a machine name ("w_1a2b3c"),
+   which meant every wallet player wore a serial number and two of them were
+   told apart only by hex. So verify no longer creates anything for a brand-new
+   address: it hands back a claim ticket, the player picks a name, and the
+   account is created at that moment with the name they chose.
+
+   The ticket lives in memory next to the nonces and for the same reason: it is
+   short-lived, single-use, and this is a single-process server. Losing them on
+   a restart costs a signature, not an account.
+   -------------------------------------------------------------------------- */
+const CLAIM_TTL_MS = 10 * 60 * 1000;
+const CLAIM_RE = /^[0-9a-f]{32}$/;
+const pendingClaims = new Map();   // claim id -> { addr, exp }
+
+function pruneClaims(now) {
+  for (const [id, rec] of pendingClaims) if (rec.exp <= now) pendingClaims.delete(id);
+}
+
+/** Issue the ticket that trades a proven address for a named account. */
+function issueClaim(addrLower, now) {
+  pruneClaims(now);
+  // One live claim per address: asking twice replaces the first rather than
+  // stacking, so a player who reloads mid-naming cannot leave tickets behind.
+  for (const [id, rec] of pendingClaims) if (rec.addr === addrLower) pendingClaims.delete(id);
+  const id = randomBytes(16).toString('hex');
+  pendingClaims.set(id, { addr: addrLower, exp: now + CLAIM_TTL_MS });
+  return id;
+}
+
 /**
- * Create the account for a freshly verified wallet and bind the address.
- * Username is "w_" + first 6 hex chars of the address (already lowercase, so
- * it passes the 3-20 [a-z0-9_] username rule), with a numeric suffix when the
- * name is taken. The password is random 32-byte noise nobody ever sees:
- * wallet accounts sign in by signature, not by password.
+ * Create the account for a freshly verified wallet under the name the player
+ * chose, and bind the address. The password is random 32-byte noise nobody ever
+ * sees: wallet accounts sign in by signature, not by password.
+ *
+ * Returns null when the name was taken between the availability check and here.
  */
-async function createWalletUser(addrLower) {
-  const base = `w_${addrLower.slice(2, 8)}`;
-  // Awaited up front so the create/attach pair below stays one synchronous run
-  // of better-sqlite3 calls, exactly as it was.
+async function createWalletUser(addrLower, username) {
   const passHash = await hashPassword(randomBytes(32).toString('hex'));
-  for (let i = 0; i < 1000; i++) {
-    const name = i === 0 ? base : `${base}${i + 1}`;
-    if (users.findByName(name)) continue;
-    let id;
-    try {
-      id = users.create(name, passHash);
-    } catch (err) {
-      // Lost a race against a concurrent registration of the same name.
-      if (String(err?.code || '').includes('SQLITE_CONSTRAINT')) continue;
-      throw err;
-    }
-    wallets.attach(id, addrLower);
-    return id;
+  let id;
+  try {
+    id = users.create(username, passHash, 1);
+  } catch (err) {
+    // Lost a race against a concurrent registration of the same name.
+    if (String(err?.code || '').includes('SQLITE_CONSTRAINT')) return null;
+    throw err;
   }
-  throw new Error('could not allocate wallet username');
+  wallets.attach(id, addrLower);
+  return id;
 }
 
 /* express 4 ignores a rejected promise from a handler, so an async one that
@@ -366,17 +391,14 @@ export function mountWalletAuth(app) {
       return res.status(403).json({ error: 'this origin may not sign in here', code: 'BAD_ORIGIN' });
     }
 
-    let row = wallets.findUser(addrLower);
+    const row = wallets.findUser(addrLower);
     if (!row) {
-      // better-sqlite3 is synchronous and createWalletUser awaits its one hash
-      // before touching the database, so create+attach still cannot interleave;
-      // the catch is belt-and-braces for the unique wallet index anyway.
-      try {
-        row = users.findById(await createWalletUser(addrLower));
-      } catch (err) {
-        row = wallets.findUser(addrLower);
-        if (!row) throw err;
-      }
+      /* Proven, but nameless. No account exists yet and none is created here —
+         the player names the angler at /api/auth/wallet/claim and the row is
+         born with that name. Answering 200 (not 401) matters: the signature
+         WAS good, and the client needs to tell "sign again" apart from "you
+         are in, now choose a name". */
+      return res.json({ needsName: true, claim: issueClaim(addrLower, now), wallet: addrLower });
     }
 
     // The second front door gets the same bouncer as the first, and for the
@@ -384,8 +406,100 @@ export function mountWalletAuth(app) {
     if (suspended(res, row.id)) return;
 
     const token = sessions.create(row.id);
-    res.json({ token, username: row.username, wallet: addrLower });
+    /* Accounts minted by the old auto-naming path still carry "w_1a2b3c". They
+       are signed in — the token is real — but the client is told to ask for a
+       name once, which POST /api/auth/username then sets. */
+    res.json({
+      token,
+      username: row.username,
+      wallet: addrLower,
+      needsName: !row.name_chosen,
+    });
   }));
+
+  /* Step 3, first sign-in only: the name. The claim ticket is the proof that a
+     signature for this address was checked minutes ago, so no second signing
+     prompt is needed — and because it is single-use and address-bound, holding
+     one cannot name anybody else's account. */
+  app.post('/api/auth/wallet/claim', walletLimit, json, wrap(async (req, res) => {
+    const body = req.body || {};
+    const claimId = typeof body.claim === 'string' ? body.claim.trim().toLowerCase() : '';
+    const username = typeof body.username === 'string' ? body.username.trim() : '';
+
+    if (!CLAIM_RE.test(claimId)) {
+      return res.status(400).json({ error: 'sign in again to pick a name', code: 'CLAIM_EXPIRED' });
+    }
+
+    const problem = usernameProblem(username);
+    if (problem) return res.status(400).json(problem);
+
+    const now = Date.now();
+    pruneClaims(now);
+    const rec = pendingClaims.get(claimId);
+    if (!rec || rec.exp <= now) {
+      return res.status(400).json({ error: 'sign in again to pick a name', code: 'CLAIM_EXPIRED' });
+    }
+
+    /* Checked before the ticket is spent, so a player who picks a taken name
+       gets to try again on the same ticket instead of re-signing. The insert
+       below is still the real arbiter — see the null return. */
+    if (users.findByName(username)) {
+      return res.status(409).json({ error: 'that name is taken · pick another', code: 'USERNAME_TAKEN' });
+    }
+
+    // The address may have been claimed by another tab holding its own ticket.
+    const existing = wallets.findUser(rec.addr);
+    if (existing) {
+      pendingClaims.delete(claimId);
+      if (suspended(res, existing.id)) return;
+      const token = sessions.create(existing.id);
+      return res.json({ token, username: existing.username, wallet: rec.addr, needsName: !existing.name_chosen });
+    }
+
+    const id = await createWalletUser(rec.addr, username);
+    if (id === null) {
+      // Someone took the name in the last millisecond. Ticket survives.
+      return res.status(409).json({ error: 'that name is taken · pick another', code: 'USERNAME_TAKEN' });
+    }
+    pendingClaims.delete(claimId);
+
+    if (suspended(res, id)) return;
+    const token = sessions.create(id);
+    res.status(201).json({ token, username, wallet: rec.addr, needsName: false });
+  }));
+
+  /* The same naming step for an account that is already signed in: the wallet
+     players who were auto-named before this existed, and guests who want to
+     stop being "guest_ab12cd". One shot — name_chosen is the latch, so this is
+     a naming route, not a free rename. */
+  app.post('/api/auth/username', walletLimit, json, requireAuth, wrap(async (req, res) => {
+    const username = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
+    const problem = usernameProblem(username);
+    if (problem) return res.status(400).json(problem);
+
+    const row = users.findById(req.userId);
+    if (!row) return res.status(401).json({ error: 'not authenticated', code: 'UNAUTHENTICATED' });
+    if (row.name_chosen) {
+      return res.status(409).json({ error: 'this account already has its name', code: 'NAME_ALREADY_SET' });
+    }
+    if (users.findByName(username)) {
+      return res.status(409).json({ error: 'that name is taken · pick another', code: 'USERNAME_TAKEN' });
+    }
+    if (!users.claimName(req.userId, username)) {
+      return res.status(409).json({ error: 'that name is taken · pick another', code: 'USERNAME_TAKEN' });
+    }
+    res.json({ username, needsName: false });
+  }));
+
+  /* What the name field types against. It does leak which names exist, but so
+     does register's 409 and so must any picker that can say "taken" before you
+     commit; the per-IP ceiling is what keeps it from being a scraper. */
+  app.get('/api/auth/username/available', walletLimit, (req, res) => {
+    const username = typeof req.query.name === 'string' ? req.query.name.trim() : '';
+    const problem = usernameProblem(username);
+    if (problem) return res.json({ name: username, available: false, ...problem });
+    res.json({ name: username, available: !users.findByName(username) });
+  });
 
   // One-click guest account. The random password is returned exactly once as
   // guestKey; the client stores it and uses the normal login route afterwards.
@@ -399,7 +513,9 @@ export function mountWalletAuth(app) {
       username = `guest_${randChars(6)}`;
       if (users.findByName(username)) continue;
       try {
-        id = users.create(username, passHash);
+        // name_chosen = 0: "guest_ab12cd" is a serial number, not a name. The
+        // client may offer POST /api/auth/username once to replace it.
+        id = users.create(username, passHash, 0);
       } catch (err) {
         if (String(err?.code || '').includes('SQLITE_CONSTRAINT')) continue;
         throw err;
@@ -410,6 +526,6 @@ export function mountWalletAuth(app) {
     }
 
     const token = sessions.create(id);
-    res.json({ token, username, guestKey });
+    res.json({ token, username, guestKey, needsName: true });
   }));
 }

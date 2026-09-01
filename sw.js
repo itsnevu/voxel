@@ -27,14 +27,17 @@ const SHELL = [
   'index.html',
   'game.js',
   'net.js',
+  'fonts.js',
   'lib/three.min.js',
-  'icon.svg',
+  'icon-32.png',
+  'apple-touch-icon.png',
+  'reels.png',
   'icon-192.png',
   'manifest.webmanifest',
   'mods/00-notify.js', 'mods/01-angler.js', 'mods/02-hud.js', 'mods/03-panels.js',
   'mods/04-world.js', 'mods/05-progress.js', 'mods/06-content.js', 'mods/07-juice.js',
   'mods/08-fortune.js', 'mods/09-social.js', 'mods/10-comfort.js', 'mods/11-touch.js',
-  'mods/12-boot.js', 'mods/13-audio.js', 'mods/14-npc.js',
+  'mods/12-boot.js', 'mods/13-audio.js', 'mods/14-npc.js', 'mods/15-nft.js',
 ];
 
 self.addEventListener('install', (e) => {

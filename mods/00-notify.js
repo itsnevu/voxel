@@ -525,7 +525,7 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
   function flash(msg, level) { notify({ level: level || 'success', title: msg, ttl: 2600, tag: 'rf-copy' }); }
 
   function copyCard(c) {
-    const lines = ['Reel Fortune 3D · ' + LNAME[c.level],
+    const lines = ['Reel Fortune · ' + LNAME[c.level],
       c.title + (c.body ? ' · ' + c.body : ''),
       'when   ' + new Date(c.t).toISOString() + (c.count > 1 ? '  (×' + c.count + ')' : '')];
     if (c.where) lines.push('where  ' + c.where);
@@ -548,7 +548,7 @@ if (window.RF && RF.mod) RF.mod('00-notify', function (RF) {
 
   function diagnostics() {
     const L = [];
-    L.push('Reel Fortune 3D · diagnostics report');
+    L.push('Reel Fortune · diagnostics report');
     L.push('generated  ' + new Date().toISOString());
     L.push('build      RF host v' + RF.version + ' · three ' + ((RF.THREE && RF.THREE.REVISION) ? 'r' + RF.THREE.REVISION : '?'));
     L.push('world      ' + safeWorld() + ' · weather ' + RF.weather + ' · day ' + RF.dayCount);

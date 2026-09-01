@@ -262,7 +262,14 @@ RF.mod('09-social', function (RF) {
      4. STYLE
      ====================================================================== */
   RF.css(`
-  #rf-social-hud{position:fixed;bottom:48px;right:12px;z-index:28;display:none;align-items:center;gap:8px;}
+  /* The bottom-right corner is a STACK, 32px to a rung, and every mod that
+     parks something there has to take the next one up:
+        14  #mute (SOUND)        46  #rf-comfort-gear (OPTIONS)
+        78  this pill           110  #rf-comfort-fps / #rf-comfort-perf
+     This sat at 48 — two pixels off the gear's 46 — so the two drew on top of
+     each other and the pill was only visible as a sliver poking out behind
+     OPTIONS. */
+  #rf-social-hud{position:fixed;bottom:78px;right:12px;z-index:28;display:none;align-items:center;gap:8px;}
   #rf-social-hud.on{display:flex;}
   body.photo #rf-social-hud,body.photo #rf-social-unread{display:none!important;}
   .rf-social-pill{display:flex;align-items:center;gap:7px;cursor:pointer;

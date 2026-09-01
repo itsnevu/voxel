@@ -1,0 +1,14 @@
+# Foundry config for the ReelFortune3D contracts folder.
+# Run every forge/cast command from inside `contracts/` (or pass --root contracts).
+# No libs (no forge-std, no OpenZeppelin): every contract here is dependency-free.
+[profile.default]
+src = "."
+test = "test"
+out = "out"
+libs = []
+optimizer = true
+optimizer_runs = 200
+# Pin the compiler so the deployed bytecode is reproducible and `forge
+# verify-contract` matches byte-for-byte on Basescan/Etherscan. Bump the pin
+# and re-verify deliberately, never by accident.
+solc_version = "0.8.24"

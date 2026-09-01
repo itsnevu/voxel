@@ -28,6 +28,32 @@ const KEY_LEN = 64;
 const SALT_LEN = 16;
 
 const USERNAME_RE = /^[A-Za-z0-9_]{3,20}$/;
+
+/* Names the server hands out to itself. A player who could type "guest_ab12cd"
+   or "w_1a2b3c" would be wearing the shape of a machine-minted account, and in
+   chat and on the leaderboard there is nothing to tell the two apart. Reserved
+   as PREFIXES, matched case-insensitively, because usernames are UNIQUE COLLATE
+   NOCASE and a rule that only blocked the lowercase form would block nothing. */
+const RESERVED_PREFIXES = ['guest_', 'w_', 'admin', 'mod_', 'system', 'server', 'rf_'];
+
+/**
+ * Shared by every door that accepts a name: register, and the wallet name-claim
+ * in wallet.js. Returns null when the name is fine, or the { error, code } body
+ * to send back, so the two callers cannot drift apart on the rules.
+ */
+export function usernameProblem(username) {
+  if (!USERNAME_RE.test(username)) {
+    return {
+      error: 'name must be 3-20 characters: letters, numbers, or underscore',
+      code: 'BAD_USERNAME',
+    };
+  }
+  const low = username.toLowerCase();
+  if (RESERVED_PREFIXES.some((p) => low.startsWith(p))) {
+    return { error: 'that name is reserved · pick another', code: 'RESERVED_USERNAME' };
+  }
+  return null;
+}
 const MIN_PASSWORD = 8;
 const MAX_PASSWORD = 200; // refuse absurd inputs: scrypt cost scales with length
 
@@ -161,12 +187,8 @@ export function mountAuth(app) {
     const username = typeof body.username === 'string' ? body.username.trim() : '';
     const password = typeof body.password === 'string' ? body.password : '';
 
-    if (!USERNAME_RE.test(username)) {
-      return res.status(400).json({
-        error: 'username must be 3-20 characters: letters, numbers, or underscore',
-        code: 'BAD_USERNAME',
-      });
-    }
+    const nameProblem = usernameProblem(username);
+    if (nameProblem) return res.status(400).json(nameProblem);
     if (password.length < MIN_PASSWORD || password.length > MAX_PASSWORD) {
       return res.status(400).json({
         error: `password must be at least ${MIN_PASSWORD} characters`,

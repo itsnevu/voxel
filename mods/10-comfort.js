@@ -119,14 +119,15 @@ RF.mod('10-comfort', function (RF) {
   #rf-comfort-gear:hover{border-color:var(--teal);color:var(--ink);}
   #rf-comfort-gear .rfc-cog{display:inline-block;width:8px;height:8px;margin-right:6px;vertical-align:0;
     border:2px solid currentColor;border-radius:2px;transform:rotate(45deg);}
-  #rf-comfort-fps{bottom:78px;display:none;font-family:"Chakra Petch",sans-serif;font-weight:700;
+  /* rung 110: 78 now belongs to social's pill (see the stack note there) */
+  #rf-comfort-fps{bottom:110px;display:none;font-family:"Chakra Petch",sans-serif;font-weight:700;
     font-variant-numeric:tabular-nums;color:var(--teal);cursor:default;}
   #rf-comfort-fps.on{display:block;}
   #rf-comfort-fps.warn{color:var(--gold);}#rf-comfort-fps.bad{color:var(--rose);}
   body.photo #rf-comfort-gear,body.photo #rf-comfort-fps,body.photo #rf-comfort-perf,
   body.capcam #rf-comfort-gear,body.capcam #rf-comfort-fps,body.capcam #rf-comfort-perf{display:none!important;}
 
-  #rf-comfort-perf{position:fixed;right:12px;bottom:78px;z-index:28;display:none;width:236px;
+  #rf-comfort-perf{position:fixed;right:12px;bottom:110px;z-index:28;display:none;width:236px;
     background:var(--glass-sheen),var(--glass-hud);backdrop-filter:blur(14px) saturate(1.6);
     -webkit-backdrop-filter:blur(14px) saturate(1.6);border:1px solid var(--glass-bd);border-radius:12px;
     padding:10px 12px 11px;box-shadow:var(--glass-hi),0 8px 24px rgba(2,8,10,.35);}
@@ -560,7 +561,9 @@ RF.mod('10-comfort', function (RF) {
       + row('Ambience', 'surf, wind, weather · read by the soundscape when it is loaded', rg('volAmb', 0, 1.2, 0.05))
       + row('Mute', 'the same switch as the chip in the corner, but this one is remembered', sw('mute'))
       + sec('pause')
-      + row('Pause when the window loses focus', 'walk away mid-cast and nothing eats your bait', sw('pauseBlur'))
+      + row('Pause when the window loses focus',
+        multiplayer() ? 'offline only — at sea the isle carries on without you'
+                      : 'walk away mid-cast and nothing eats your bait', sw('pauseBlur'))
       + row('Silence while paused', 'suspends the audio clock outright', sw('pauseAudio'));
   }
 
@@ -611,7 +614,11 @@ RF.mod('10-comfort', function (RF) {
       + row('Remember my zoom', 'boots at the distance you left it', sw('zoomKeep'))
       + row('Reset the camera', 'back to the shipped framing', bt('cam', 'RESET'))
       + sec('pause')
-      + row('Pause the world', 'holds the render loop itself — nothing ages while you are away', bt('pause', 'PAUSE · `'));
+      + row('Pause the world',
+        multiplayer()
+          ? 'offline only — signed in, the isle keeps its own time whatever this tab does'
+          : 'holds the render loop itself — nothing ages while you are away',
+        bt('pause', 'PAUSE · `'));
   }
 
   function paneSave() {
@@ -861,9 +868,29 @@ RF.mod('10-comfort', function (RF) {
       return origRAF(cb);
     };
   }
+  /* Pausing is a SINGLE-PLAYER comfort. Signed in, the server keeps its own
+     time no matter what this tab does: other anglers walk about, the market
+     turns its epoch, dividends accrue, the sun crosses the sky. Holding the
+     render loop would stop the picture and nothing else, while the overlay
+     promised "nothing ages while you are away" — a promise this client is in
+     no position to keep. So online, there is no pause at all. */
+  /* RF.online is what the rest of this file already asks (see the import and
+     restore guards below), so this asks it too rather than inventing a second
+     way to spell "signed in". */
+  const multiplayer = () => !!RF.online;
+
   function pause() {
     if (paused || !RF.running || RF.panelOpen) return;
-    paused = true; hardPause = true; rafSeen = 0; heldCb = null; pauseClock = RF.clock;
+    if (multiplayer()) {
+      say({ level: 'warn', tag: 'rf-comfort-nopause', ttl: 5000,
+        title: 'No pausing at sea',
+        body: 'You are signed in, and the isle keeps its own time — other anglers, '
+          + 'the market and the tide all carry on. Sign out to play offline if you '
+          + 'need the world to hold still.' });
+      return;
+    }
+    paused = true; RF.paused = true;   // core reads this to stop the wheel zooming
+    hardPause = true; rafSeen = 0; heldCb = null; pauseClock = RF.clock;
     patchRAF(); stopWalking();
     show(pauseOv, PAUSE);
     if (S.pauseAudio) { try { const c = RF.audio && RF.audio.ctx; if (c && c.state === 'running') c.suspend(); } catch (e) { } }
@@ -878,13 +905,17 @@ RF.mod('10-comfort', function (RF) {
   }
   function resume() {
     if (!paused) return;
-    paused = false;
+    paused = false; RF.paused = false;
     hide(pauseOv, PAUSE);
     if (S.pauseAudio) { try { const c = RF.audio && RF.audio.ctx; if (c && c.state === 'suspended') c.resume(); } catch (e) { } }
     if (heldCb) { const cb = heldCb; heldCb = null; try { origRAF(cb); } catch (e) { RF.err('comfort:resume', e); try { window.requestAnimationFrame(cb); } catch (_) { } } }
   }
   function togglePause() { if (paused) resume(); else pause(); }
-  addEventListener('blur', () => { if (S.pauseBlur && RF.running && !paused && !RF.panelOpen && !uiOpen()) pause(); });
+  /* multiplayer() again rather than leaning on pause()'s own guard: alt-tabbing
+     is not a request to be told off, so this one stays silent. */
+  addEventListener('blur', () => {
+    if (S.pauseBlur && RF.running && !paused && !RF.panelOpen && !uiOpen() && !multiplayer()) pause();
+  });
 
   /* ------------------------------------------------------------ perf meter */
   const HIST = 120, hist = new Float32Array(HIST);

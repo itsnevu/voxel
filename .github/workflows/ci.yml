@@ -52,3 +52,29 @@ jobs:
       - name: Test
         working-directory: server
         run: npm test
+
+  # The Anglers NFT contract and the mint page that hard-codes its selectors.
+  # Foundry gives us forge (tests) and cast (the selector cross-check) in one go.
+  contracts:
+    name: contracts · forge test + mint selectors
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Forge tests
+        working-directory: contracts
+        run: forge test -vv
+
+      # Every selector mint/eth.js hard-codes is re-derived with `cast sig` and
+      # checked against the committed ABI, so a renamed function fails here
+      # instead of on a player's wallet.
+      - name: Mint page selectors
+        run: node mint/test/selectors.test.js

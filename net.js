@@ -185,10 +185,44 @@ const Net={
     const {message}=await req('/api/auth/wallet/nonce?address='+encodeURIComponent(address),{auth:false});
     const signature=await window.ethereum.request({method:'personal_sign',params:[message,address]});
     const d=await req('/api/auth/wallet/verify',{method:'POST',auth:false,body:{address,signature}});
+    /* A brand-new address comes back proven but nameless: no token, just a
+       claim ticket. The caller shows the name picker and finishes with
+       claimName(). Nothing is stored yet — there is no account to store. */
+    if(d.needsName&&d.claim){ if(d.wallet)store('rf-wallet',d.wallet); return d; }
     token=d.token; user=d.username||address.slice(0,8); store(LS_TOK,token); store(LS_USER,user);
     if(d.wallet)store('rf-wallet',d.wallet);
     adopted=true; return d;
   },
+  /* Finish a first-time wallet sign-in by naming the angler. Throws with
+     .data.code = USERNAME_TAKEN / RESERVED_USERNAME / BAD_USERNAME so the
+     picker can say which, and the ticket survives all three — only a fresh
+     signature is needed if it actually expires. */
+  async claimName(claim,username){
+    const d=await req('/api/auth/wallet/claim',{method:'POST',auth:false,body:{claim,username}});
+    token=d.token; user=d.username; store(LS_TOK,token); store(LS_USER,user);
+    if(d.wallet)store('rf-wallet',d.wallet);
+    adopted=true; return d;
+  },
+  /* The same step for an account that is already signed in and still wearing a
+     machine name (an old w_ account, or a guest). One shot, server-latched. */
+  async setUsername(username){
+    const d=await req('/api/auth/username',{method:'POST',body:{username}});
+    user=d.username; store(LS_USER,user); return d;
+  },
+  /* What the name field types against. Best-effort: a failed check must not
+     block the player from simply trying the name for real. */
+  async nameFree(username){
+    try{ const d=await req('/api/auth/username/available?name='+encodeURIComponent(username),{auth:false});
+      return !!d.available; }
+    catch(e){ return null; }
+  },
+
+  /* ---- NFT characters. Ownership is decided by the server against the chain;
+     nothing here is trusted to say what it owns. ---- */
+  nftConfig(){ return req('/api/nft/config',{auth:false}); },
+  nftCharacters(fresh){ return req('/api/nft/characters'+(fresh?'?fresh=1':'')); },
+  /* tokenId 0 puts the default hero back on. */
+  nftEquip(tokenId){ return req('/api/nft/equip',{method:'POST',body:{tokenId:tokenId|0}}); },
   /* ---- Guest: a real server account with a generated key kept in this browser,
      so a guest keeps their island across reloads without ever signing up. ---- */
   async guestLogin(){
@@ -197,7 +231,7 @@ const Net={
     const d=await req('/api/auth/guest',{method:'POST',auth:false,body:{}});
     token=d.token; user=d.username; store(LS_TOK,token); store(LS_USER,user);
     try{ localStorage.setItem('rf-guest',JSON.stringify({u:d.username,k:d.guestKey})); }catch(e){}
-    adopted=true; return d;
+    adopted=true; return d;   // d.needsName: the guest may swap guest_ab12cd for a real name
   },
   get wallet(){ return localStorage.getItem('rf-wallet')||''; },
 
