@@ -142,6 +142,96 @@ h1,h2,h3{font-family:var(--f-disp);font-weight:900;letter-spacing:-.02em;line-he
 @media (prefers-reduced-motion:reduce){.tile,.tile.out{transition:none}.tile.in{animation:none}}
 
 /* ==========================================================================
+   PREVIEW — a tile clicked open. The artwork flies from the tile it came from
+   into the panel; both are squares, so a plain translate+scale never distorts
+   it. Escape, the backdrop, or ← → once it is open.
+   ========================================================================== */
+.tile{cursor:zoom-in}
+.tile:focus-visible{outline:var(--edge) solid var(--gold);outline-offset:3px}
+
+.pv[hidden]{display:none}
+.pv{position:fixed;inset:0;z-index:80;display:grid;place-items:center;padding:20px}
+.pv-veil{position:absolute;inset:0;background:rgba(5,25,28,.74)}
+
+.pv-card{position:relative;width:min(880px,100%);max-width:100%;min-width:0;
+  max-height:min(calc(100vh - 40px),600px);
+  display:grid;grid-template-columns:minmax(0,42%) minmax(0,1fr);
+  grid-template-rows:minmax(0,1fr);overflow:hidden;
+  background:var(--paper);border:var(--edge) solid var(--ink);border-radius:22px;
+  box-shadow:var(--shadow-lg)}
+
+/* left column: the art, square, with the browse controls filling what is left */
+.pv-side{display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--paper-2);
+  border-right:var(--edge) solid var(--ink)}
+.pv-art{position:relative;flex:0 0 auto;border-bottom:var(--edge) solid var(--ink)}
+.pv-art img{display:block;width:100%;aspect-ratio:1/1;height:auto;object-fit:cover;
+  image-rendering:pixelated}
+.pv-side-foot{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;
+  justify-content:space-between;gap:11px;padding:13px;font-family:var(--f-mono);font-size:11px}
+.pv-side-ctl{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+/* the one trait that makes this angler worth more than the next one */
+.pv-rarest{background:var(--paper);border:2px solid var(--ink);border-radius:13px;
+  padding:9px 11px;box-shadow:var(--shadow-sm)}
+.pv-rarest .rk{display:block;font-size:9px;letter-spacing:.13em;text-transform:uppercase;opacity:.55}
+.pv-rarest .rv{display:block;font-family:var(--f-ui);font-weight:700;font-size:14px;
+  line-height:1.2;margin-top:3px}
+.pv-rarest .rp{display:inline-block;margin-top:6px;font-weight:700;font-size:10.5px;
+  border:2px solid var(--ink);border-radius:999px;padding:1px 8px;background:var(--paper-2)}
+.pv-rarest.legendary .rp{background:var(--gold)}
+.pv-rarest.epic .rp{background:var(--violet)}
+.pv-rarest.rare .rp{background:#8fd4ff}
+.pv-rarest.uncommon .rp{background:#b7f0c4}
+.pv-nav{display:flex;gap:7px}
+.pv-nav button{width:32px;height:32px;border-radius:10px;background:var(--paper);
+  border:var(--edge) solid var(--ink);box-shadow:var(--shadow-sm);cursor:pointer;
+  font-family:var(--f-mono);font-weight:700;font-size:13px;display:grid;place-items:center;
+  padding:0;transition:transform .12s}
+
+/* right column: it scrolls, the card does not grow */
+.pv-body{min-height:0;min-width:0;overflow:auto;padding:18px 20px 20px;display:flex;
+  flex-direction:column;gap:12px}
+.pv-kicker{font-family:var(--f-mono);font-size:9.5px;letter-spacing:.13em;
+  text-transform:uppercase;opacity:.6}
+.pv-name{font-family:var(--f-disp);font-weight:900;font-size:24px;line-height:1.02;
+  margin:2px 0 0;overflow-wrap:anywhere}
+.pv-traits{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.pv-traits li{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;
+  background:var(--paper-2);border:2px solid var(--ink);border-radius:11px;padding:6px 11px}
+.pv-traits li.skel{display:block;font-family:var(--f-mono);font-size:11px;opacity:.55}
+.pv-traits li > span{min-width:0}   /* grid items default to min-content; let them shrink */
+.pv-traits .tt{display:block;font-family:var(--f-mono);font-size:9px;letter-spacing:.13em;
+  text-transform:uppercase;opacity:.6}
+.pv-traits .tv{font-weight:700;font-size:14px;line-height:1.25;overflow-wrap:anywhere}
+.pv-traits .tp{font-family:var(--f-mono);font-size:10.5px;font-weight:700;white-space:nowrap;
+  border:2px solid var(--ink);border-radius:999px;padding:1px 8px;background:var(--paper)}
+.pv-traits li.legendary .tp{background:var(--gold)}
+.pv-traits li.epic     .tp{background:var(--violet)}
+.pv-traits li.rare     .tp{background:#8fd4ff}
+.pv-traits li.uncommon .tp{background:#b7f0c4}
+
+.pv-x{position:absolute;top:11px;right:11px;z-index:3;width:34px;height:34px;
+  border-radius:999px;background:var(--paper);border:var(--edge) solid var(--ink);
+  box-shadow:var(--shadow-sm);font-family:var(--f-disp);font-weight:900;font-size:14px;
+  line-height:1;cursor:pointer;display:grid;place-items:center;padding:0;transition:transform .12s}
+.pv-x:hover,.pv-nav button:hover{transform:translate(-2px,-2px)}
+
+@media (max-width:720px){
+  .pv{padding:12px}
+  .pv-card{grid-template-columns:1fr;grid-template-rows:auto auto;
+    max-height:calc(100vh - 24px);overflow:auto}
+  .pv-side{border-right:0;border-bottom:var(--edge) solid var(--ink)}
+  .pv-body{overflow:visible}
+}
+
+/* the copy that flies between tile and panel; it lands exactly on the real art,
+   which is never hidden — if this stalls the panel still shows the angler */
+.pv-fly{position:fixed;z-index:90;margin:0;pointer-events:none;overflow:hidden;
+  transform-origin:0 0;border:var(--edge) solid var(--ink);background:var(--paper-2)}
+.pv-fly img{width:100%;height:100%;object-fit:cover;image-rendering:pixelated;display:block}
+
+@media (prefers-reduced-motion:reduce){.pv-x,.pv-nav button{transition:none}}
+
+/* ==========================================================================
    HERO — the pitch, now that the art has already spoken.
    ========================================================================== */
 .hero{display:grid;grid-template-columns:1.15fr .85fr;gap:26px;align-items:start;padding:34px 0 40px}
@@ -532,6 +622,33 @@ a:focus-visible,button:focus-visible{outline:3px solid var(--ink);outline-offset
     </div>
   </div>
 </footer>
+
+<div class="pv" id="preview" hidden role="dialog" aria-modal="true" aria-labelledby="pvName">
+  <div class="pv-veil" id="pvVeil"></div>
+  <div class="pv-card">
+    <button class="pv-x" id="pvClose" type="button" aria-label="Close preview">&#10005;</button>
+    <div class="pv-side">
+      <div class="pv-art" id="pvArt"><img id="pvImg" alt="" src=""></div>
+      <div class="pv-side-foot">
+        <div class="pv-rarest" id="pvRarest" hidden></div>
+        <div class="pv-side-ctl">
+          <div class="pv-nav">
+            <button type="button" id="pvPrev" aria-label="Previous angler">&#8592;</button>
+            <button type="button" id="pvNext" aria-label="Next angler">&#8594;</button>
+          </div>
+          <a id="pvJson" href="#" target="_blank" rel="noopener">Metadata &#8599;</a>
+        </div>
+      </div>
+    </div>
+    <div class="pv-body">
+      <div>
+        <span class="pv-kicker" id="pvKicker">&#8212;</span>
+        <h2 class="pv-name" id="pvName">&#8212;</h2>
+      </div>
+      <ul class="pv-traits" id="pvTraits"></ul>
+    </div>
+  </div>
+</div>
 
 <script src="fonts.js"></script>
 <script src="mint-gate.js"></script>

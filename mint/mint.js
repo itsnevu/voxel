@@ -44,7 +44,7 @@
 
   // one lazily-loaded tile that degrades to a labelled placeholder when nft/ is empty
   function tileHtml(id, extraClass) {
-    return '<figure class="tile ' + (extraClass || '') + '" data-id="' + id + '">' +
+    return '<figure class="tile ' + (extraClass || '') + '" data-id="' + id + '" tabindex="0" role="button" aria-label="Preview Reel Fortune Angler #' + id + '">' +
       '<img loading="lazy" decoding="async" alt="Reel Fortune Angler #' + id + '" src="' + imgUrl(id) + '">' +
       '<figcaption><span>#' + id + '</span></figcaption></figure>';
   }
@@ -414,7 +414,7 @@
   function startCycle() {
     if (strip.timer) return;
     strip.timer = setInterval(function () {
-      if (document.hidden) return;
+      if (document.hidden || strip.paused) return;
       var el = $('strip'); if (!el) return;
       var slot = Math.floor(strip.rand() * strip.ids.length);
       var id; do { id = 1 + Math.floor(strip.rand() * SIZE); } while (strip.ids.indexOf(id) >= 0);
@@ -459,6 +459,172 @@
   function loadRarity() {
     return Promise.all([fetchJson(CFG.assets.rarity).catch(function () { return null; }), fetchJson(CFG.assets.collection).catch(function () { return null; })])
       .then(function (r) { state.rarity = r[0]; state.collection = r[1]; renderRarity(); emit('rarity', { ok: !!r[0] }); });
+  }
+
+  // ---- preview -------------------------------------------------------------
+  /* A tile clicked open. The artwork itself flies from the tile to the panel —
+     both are squares, so translate+scale never distorts it — while the card
+     lands behind it. The strip cycle pauses so the tile it flew from is still
+     there to fly back to. */
+  var pv = { open: false, id: null, from: null, lastFocus: null, meta: {} };
+
+  function traitPct(trait, value) {
+    var r = state.rarity;
+    var e = r && r.traits && r.traits[trait] && r.traits[trait][value];
+    return e && typeof e.pct === 'number' ? e.pct : null;
+  }
+
+  function pvTraits(meta) {
+    var ul = $('pvTraits'); if (!ul) return;
+    var attrs = (meta && meta.attributes) || [];
+    if (!attrs.length) { ul.innerHTML = '<li class="skel">No traits in this metadata.</li>'; return; }
+    ul.innerHTML = attrs.map(function (a) {
+      var p = traitPct(a.trait_type, a.value);
+      return '<li class="' + (p == null ? '' : pctTier(p)) + '">' +
+        '<span><span class="tt">' + esc(a.trait_type) + '</span>' +
+        '<span class="tv">' + esc(a.value) + '</span></span>' +
+        '<span class="tp">' + (p == null ? '—' : fmtPct(p)) + '</span></li>';
+    }).join('');
+    // the rarest trait it carries — the one number a collector actually looks for
+    var box = $('pvRarest');
+    if (box) {
+      var best = null;
+      attrs.forEach(function (a) {
+        var p = traitPct(a.trait_type, a.value);
+        if (p != null && (!best || p < best.p)) best = { p: p, t: a.trait_type, v: a.value };
+      });
+      if (!best) { box.hidden = true; }
+      else {
+        box.hidden = false;
+        box.className = 'pv-rarest ' + pctTier(best.p);
+        box.innerHTML = '<span class="rk">Rarest trait &middot; ' + esc(best.t) + '</span>' +
+          '<span class="rv">' + esc(best.v) + '</span>' +
+          '<span class="rp">' + fmtPct(best.p) + ' of 1000</span>';
+        if (!reduceMotion && box.animate) {
+          box.animate([{ opacity: 0, transform: 'scale(.96)' }, { opacity: 1, transform: 'none' }],
+            { duration: 260, easing: 'cubic-bezier(.2,.9,.25,1.06)' });
+        }
+      }
+    }
+    if (reduceMotion) return;
+    Array.prototype.forEach.call(ul.children, function (li, i) {
+      li.animate([{ opacity: 0, transform: 'translateY(7px)' }, { opacity: 1, transform: 'none' }],
+        { duration: 220, delay: i * 26, easing: 'cubic-bezier(.2,.8,.3,1)', fill: 'backwards' });
+    });
+  }
+
+  function pvRender(id) {
+    var name = 'Reel Fortune Angler #' + id;
+    var n = $('pvName'); if (n) n.textContent = name;
+    var k = $('pvKicker'); if (k) k.textContent = 'Token ' + id + ' of ' + SIZE;
+    var img = $('pvImg'); if (img) { img.src = imgUrl(id); img.alt = name; }
+    var j = $('pvJson'); if (j) j.href = jsonUrl(id);
+    var ul = $('pvTraits'); if (ul) ul.innerHTML = '<li class="skel">reading traits…</li>';
+    if (pv.meta[id]) return pvTraits(pv.meta[id]);
+    fetchJson(jsonUrl(id))
+      .then(function (m) { pv.meta[id] = m; if (pv.id === id) pvTraits(m); })
+      .catch(function () { if (pv.id === id && ul) ul.innerHTML = '<li class="skel">Metadata not reachable.</li>'; });
+  }
+
+  /* Animate a copy of the art from rect a to rect b. Both rects are square, so
+     the x and y scale stay equal and nothing stretches on the way. */
+  function pvFly(a, b, id) {
+    if (reduceMotion || !a || !b || !a.width || !b.width || !document.body.animate) return Promise.resolve();
+    var fly = document.createElement('figure');
+    fly.className = 'pv-fly';
+    fly.style.cssText = 'left:' + a.left + 'px;top:' + a.top + 'px;width:' + a.width + 'px;height:' + a.height + 'px';
+    fly.innerHTML = '<img alt="" src="' + imgUrl(id) + '">';
+    document.body.appendChild(fly);
+    var sx = b.width / a.width, sy = b.height / a.height;
+    var an = fly.animate([
+      { transform: 'none', borderRadius: '16px' },
+      { transform: 'translate(' + (b.left - a.left) + 'px,' + (b.top - a.top) + 'px) scale(' + sx + ',' + sy + ')',
+        borderRadius: (16 / sx).toFixed(2) + 'px' }
+    ], { duration: 360, easing: 'cubic-bezier(.22,1,.32,1)', fill: 'forwards' });
+    var gone = false, drop = function () { if (!gone) { gone = true; fly.remove(); } };
+    an.onfinish = drop; an.oncancel = drop;
+    setTimeout(drop, 900);   // WAAPI promises can stall in odd contexts; the clone must not
+    return (an.finished || Promise.resolve()).catch(function () {}).then(drop);
+  }
+
+  function openPreview(id, fromEl) {
+    var el = $('preview'); if (!el || pv.open) return;
+    pv.open = true; pv.id = id; strip.paused = true;
+    pv.lastFocus = document.activeElement;
+    pv.from = fromEl ? fromEl.getBoundingClientRect() : null;
+    el.hidden = false;
+    pvRender(id);
+    document.documentElement.style.overflow = 'hidden';
+    requestAnimationFrame(function () {
+      var card = el.querySelector('.pv-card'), veil = $('pvVeil');
+      if (!reduceMotion && card && card.animate) {
+        if (veil) veil.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200, easing: 'ease-out' });
+        card.animate([{ opacity: 0, transform: 'scale(.94)' }, { opacity: 1, transform: 'none' }],
+          { duration: 300, easing: 'cubic-bezier(.2,.9,.25,1.06)' });
+      }
+      var im = $('pvImg');
+      if (im && pv.from && !reduceMotion) pvFly(pv.from, im.getBoundingClientRect(), id);
+      var x = $('pvClose'); if (x) x.focus();
+      emit('preview', { id: id, open: true });
+    });
+  }
+
+  function closePreview() {
+    var el = $('preview'); if (!el || !pv.open) return;
+    pv.open = false; strip.paused = false;
+    var card = el.querySelector('.pv-card'), veil = $('pvVeil');
+    if (veil && veil.animate && !reduceMotion) veil.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 190, easing: 'ease-in', fill: 'forwards' });
+    var im = $('pvImg');
+    if (im && pv.from && !reduceMotion) pvFly(im.getBoundingClientRect(), pv.from, pv.id);
+    var done = (!reduceMotion && card && card.animate)
+      ? (card.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(.96)' }],
+          { duration: 190, easing: 'ease-in', fill: 'forwards' }).finished || Promise.resolve()).catch(function () {})
+      : Promise.resolve();
+    return done.then(function () {
+      el.hidden = true;
+      document.documentElement.style.overflow = '';
+      if (pv.lastFocus && pv.lastFocus.focus) pv.lastFocus.focus();
+      emit('preview', { id: pv.id, open: false });
+    });
+  }
+
+  function pvStep(d) {
+    if (!pv.open) return;
+    var list = state.strip || [], i = list.indexOf(pv.id), id;
+    if (i >= 0) id = list[(i + d + list.length) % list.length];
+    else { id = pv.id + d; if (id < 1) id = SIZE; if (id > SIZE) id = 1; }
+    pv.id = id;
+    var t = document.querySelector('.tile[data-id="' + id + '"]');
+    if (t) pv.from = t.getBoundingClientRect();
+    pvRender(id);
+    var im2 = $('pvImg');
+    if (im2 && im2.animate && !reduceMotion) {
+      im2.animate([{ opacity: .2, transform: 'scale(.97)' }, { opacity: 1, transform: 'none' }],
+        { duration: 240, easing: 'cubic-bezier(.2,.8,.3,1)' });
+    }
+  }
+
+  function wirePreview() {
+    document.addEventListener('click', function (e) {
+      var t = e.target.closest && e.target.closest('.tile[data-id]');
+      if (t && !pv.open) openPreview(Number(t.dataset.id), t);
+    });
+    var x = $('pvClose'); if (x) x.addEventListener('click', closePreview);
+    var v = $('pvVeil'); if (v) v.addEventListener('click', closePreview);
+    var p = $('pvPrev'); if (p) p.addEventListener('click', function () { pvStep(-1); });
+    var nx = $('pvNext'); if (nx) nx.addEventListener('click', function () { pvStep(1); });
+    document.addEventListener('keydown', function (e) {
+      if (pv.open) {
+        if (e.key === 'Escape') { e.preventDefault(); closePreview(); }
+        else if (e.key === 'ArrowRight') { e.preventDefault(); pvStep(1); }
+        else if (e.key === 'ArrowLeft') { e.preventDefault(); pvStep(-1); }
+        return;
+      }
+      var a = document.activeElement;
+      if ((e.key === 'Enter' || e.key === ' ') && a && a.classList && a.classList.contains('tile')) {
+        e.preventDefault(); openPreview(Number(a.dataset.id), a);
+      }
+    });
   }
 
   // ---- wiring --------------------------------------------------------------
@@ -508,11 +674,11 @@
   }
 
   function boot() {
-    wire(); renderAll(); buildStrip(); loadUsdRate();
+    wire(); wirePreview(); renderAll(); buildStrip(); loadUsdRate();
     var t = $('titleChain'); if (t) t.textContent = chain.name;
     Promise.all([loadRarity(), readChain()]).then(function () { emit('ready', { rpcOk: state.rpcOk }); });
   }
 
-  window.RFMint = { connect: connect, refresh: refresh, mint: mint, setQty: setQty, state: state, events: events, chain: chain, chainId: chainId };
+  window.RFMint = { connect: connect, refresh: refresh, mint: mint, setQty: setQty, openPreview: openPreview, closePreview: closePreview, preview: pv, state: state, events: events, chain: chain, chainId: chainId };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();
