@@ -1,0 +1,72 @@
+# ============================================================================
+# Caddyfile.reelfortune — the reelfortune.xyz site block, and ONLY that block.
+# ----------------------------------------------------------------------------
+# This is not a whole Caddyfile. The VPS serves several other sites from the
+# same one, so paste this over the existing `reelfortune.xyz { ... }` block and
+# leave every other block alone.
+#
+# WHY IT EXISTS
+#   Caddy was proxying every request to Node, so express.static was serving
+#   1000 NFT PNGs, three.min.js and a 386 KB game.js through the very same
+#   event loop that rolls fish, settles the economy and pumps the WebSocket.
+#   Measured TTFB was ~600 ms per file against an RTT of ~180 ms. Below, files
+#   that exist on disk never reach Node at all.
+#
+# INSTALL
+#   cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak   # always
+#   # edit /etc/caddy/Caddyfile, replace the reelfortune.xyz block with this
+#   caddy validate --config /etc/caddy/Caddyfile       # must pass BEFORE reload
+#   systemctl reload caddy
+#
+# ROLLBACK
+#   cp /etc/caddy/Caddyfile.bak /etc/caddy/Caddyfile && systemctl reload caddy
+# ============================================================================
+
+reelfortune.xyz, www.reelfortune.xyz {
+	encode zstd gzip
+
+	root * /srv/reelfortune
+
+	# ---- the app owns these, always ---------------------------------------
+	# Never let file_server answer an API path: /api/state has to be computed,
+	# and a stray file of that name on disk would silently shadow the route.
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	# Caddy upgrades WebSockets on its own; the long read timeout is what the
+	# realtime ping interval needs.
+	handle /ws {
+		reverse_proxy 127.0.0.1:8787 {
+			flush_interval -1
+		}
+	}
+
+	# ---- everything else --------------------------------------------------
+	handle {
+		# Server code, contracts, deps and secrets are inside the served root
+		# because GAME_DIR is the project root. express.static refused these;
+		# now Caddy has to, and it does it before any other rule can match.
+		@private path /server/* /contracts/* /node_modules/* /.git/* /.env /.env.* /mods/SPEC.md /mods/RF-API.txt
+		respond @private 404
+
+		# A minted angler's PNG and its metadata never change once generated,
+		# and three.min.js is pinned at r128. A year, no revalidation.
+		@immutable path /nft/images/* /nft/json/* /lib/*
+		header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+		# Client code has no content hash in its name yet, so it must be
+		# revalidated or players run stale game logic after a deploy.
+		@client path /index.html /mint.html /game.js /net.js /fonts.js /sw.js /mint-gate.js /mods/*.js /mint/*.js
+		header @client Cache-Control "no-cache"
+
+		# On disk → Caddy answers and Node never hears about it. Not on disk →
+		# pass_thru falls through to the app, which still owns /mint (the
+		# extensionless route), the 404 JSON and anything added later.
+		file_server {
+			pass_thru
+		}
+
+		reverse_proxy 127.0.0.1:8787
+	}
+}

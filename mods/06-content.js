@@ -2,7 +2,8 @@
    06-content — the ship's papers. A persisted journal of everything that
    happens, an almanac of every species in every sea, and a board of personal
    bests. The isle used to forget a legendary catch the moment the toast faded;
-   from here on it keeps the receipts.
+   from here on it keeps the receipts — and turns the best of them into a
+   1200x675 card a player can actually post (Shift+J).
    ========================================================================== */
 RF.mod('06-content', function (RF) {
   'use strict';
@@ -970,6 +971,385 @@ body.rf-reduced #rf-content *{transition:none!important;}
     } catch (err) { RF.err('06-content:key', err); }
   });
 
+
+  /* ==========================================================================
+     THE CATCH CARD — a landed fish, drawn as a shareable 1200x675 PNG.
+
+     The journal already keeps every receipt; this turns one of them into
+     something a player can actually post. 1200x675 because that is the aspect
+     a timeline crops to without cutting the fish in half.
+
+     Everything is Canvas 2D. The mod contract forbids new files and this repo
+     has no build step, so a rasteriser dependency was never an option — and
+     the game's own art is SVG, which draws into a canvas through an Image and
+     a data: URL without tainting it.
+     ========================================================================== */
+  const CARD_W = 1200, CARD_H = 675;
+
+  /* Only offer a card for a catch worth posting. A common sardine with a card
+     button next to it teaches players to ignore the button. */
+  function cardWorthy(f, info) {
+    if (!f) return false;
+    if (f.rar === 'legendary') return true;
+    if (f.shiny) return true;
+    if (info && info.isNew) return true;
+    if (info && info.isRec && (f.rar === 'rare' || f.rar === 'epic')) return true;
+    return false;
+  }
+
+  /* The angler's name, from whichever layer knows it. Signed out, the card
+     says Islander rather than an empty space where a name should be. */
+  function anglerName() {
+    try {
+      const s = RF.api && RF.api.social && RF.api.social.me && RF.api.social.me();
+      if (s && s.username) return String(s.username);
+    } catch (e) { /* social mod absent or not signed in */ }
+    try {
+      const n = RF.state && (RF.state.username || RF.state.name);
+      if (n) return String(n);
+    } catch (e) { /* pre-ready */ }
+    return 'Islander';
+  }
+
+  function isleName() {
+    try { if (RF.WORLD && RF.WORLD.name) return String(RF.WORLD.name); } catch (e) { }
+    try { if (RF.worldKey) return String(RF.worldKey); } catch (e) { }
+    return 'the isle';
+  }
+
+  /* SVG string -> drawable Image. Resolves with null rather than rejecting:
+     a card without the fish drawn on it is still a card worth handing over.
+
+     Two things the engine's SVG does not need until now. Inline in the HTML an
+     `xmlns` is optional, but an <img> pointed at a data: URL parses the string
+     as XML and refuses it without one. And pixSVG already writes width/height
+     from its size argument, so adding a second pair produces duplicate
+     attributes — invalid XML, and a silent onerror. Ask for the size you want
+     when you call pixFish, and only fill in the namespace here. */
+  function svgImage(svg) {
+    return new Promise(resolve => {
+      try {
+        let sized = String(svg);
+        if (!/\sxmlns=/.test(sized)) sized = sized.replace(/<svg\b/, '<svg xmlns="http://www.w3.org/2000/svg"');
+        const img = new Image();
+        const done = ok => { img.onload = img.onerror = null; resolve(ok ? img : null); };
+        img.onload = () => done(true);
+        img.onerror = () => done(false);
+        img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(sized);
+        /* A decode that never settles must not hang the caller. */
+        setTimeout(() => done(!!img.width), 1500);
+      } catch (e) { resolve(null); }
+    });
+  }
+
+  const rarLabel = r => String(r || 'common').toUpperCase();
+
+  function roundRect(g, x, y, w, h, r) {
+    g.beginPath();
+    g.moveTo(x + r, y);
+    g.arcTo(x + w, y, x + w, y + h, r);
+    g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r);
+    g.arcTo(x, y, x + w, y, r);
+    g.closePath();
+  }
+
+  /* Draws the card. Async only because the fish art has to decode first. */
+  async function drawCard(c) {
+    const cv = document.createElement('canvas');
+    cv.width = CARD_W; cv.height = CARD_H;
+    const g = cv.getContext('2d');
+    if (!g) throw new Error('no 2d context');
+
+    const accent = rarCol(c.rar) === 'var(--muted)' ? '#b9c6c4' : rarCol(c.rar);
+
+    /* ---- ground ---- */
+    const bg = g.createLinearGradient(0, 0, CARD_W, CARD_H);
+    bg.addColorStop(0, '#0a1418');
+    bg.addColorStop(1, '#122029');
+    g.fillStyle = bg; g.fillRect(0, 0, CARD_W, CARD_H);
+
+    /* A wash of the rarity colour behind the fish, so a legendary reads gold
+       from across a timeline before a single word is read. */
+    const glow = g.createRadialGradient(330, 340, 20, 330, 340, 400);
+    glow.addColorStop(0, accent + '55');
+    glow.addColorStop(1, accent + '00');
+    g.fillStyle = glow; g.fillRect(0, 0, 760, CARD_H);
+
+    /* pixel grid, very faint — the game's own texture */
+    g.strokeStyle = 'rgba(255,255,255,0.03)'; g.lineWidth = 1;
+    for (let x = 0; x <= CARD_W; x += 30) { g.beginPath(); g.moveTo(x + .5, 0); g.lineTo(x + .5, CARD_H); g.stroke(); }
+    for (let y = 0; y <= CARD_H; y += 30) { g.beginPath(); g.moveTo(0, y + .5); g.lineTo(CARD_W, y + .5); g.stroke(); }
+
+    g.strokeStyle = accent; g.lineWidth = 6;
+    g.strokeRect(3, 3, CARD_W - 6, CARD_H - 6);
+
+    /* ---- the fish ---- */
+    let art = null;
+    try { art = await svgImage(RF.fn.pixFish(accent, 320)); } catch (e) { art = null; }
+    if (art) {
+      g.imageSmoothingEnabled = false;
+      g.drawImage(art, 170, 180, 320, 320);
+    } else {
+      /* Fallback silhouette: a body and a tail, in the rarity colour. The card
+         must never come back empty because an SVG failed to decode. */
+      g.fillStyle = accent;
+      g.beginPath(); g.ellipse(330, 340, 130, 78, 0, 0, Math.PI * 2); g.fill();
+      g.beginPath(); g.moveTo(455, 340); g.lineTo(530, 280); g.lineTo(530, 400); g.closePath(); g.fill();
+      g.fillStyle = '#0a1418';
+      g.beginPath(); g.arc(268, 322, 13, 0, Math.PI * 2); g.fill();
+    }
+
+    /* ---- badges ---- */
+    const badges = [];
+    if (c.shiny) badges.push('SHINY x5');
+    if (c.isNew) badges.push('NEW SPECIES');
+    if (c.isRec) badges.push('PERSONAL BEST');
+    if (c.auto) badges.push('AUTO-RIG');
+    let bx = 640;
+    g.font = '700 20px ui-monospace, SFMono-Regular, Menlo, monospace';
+    for (const b of badges.slice(0, 3)) {
+      const w = g.measureText(b).width + 28;
+      g.fillStyle = accent; roundRect(g, bx, 78, w, 38, 19); g.fill();
+      g.fillStyle = '#0a1418';
+      g.fillText(b, bx + 14, 104);
+      bx += w + 12;
+      if (bx > CARD_W - 160) break;
+    }
+
+    /* ---- the text column ---- */
+    g.fillStyle = accent;
+    g.font = '700 24px ui-monospace, SFMono-Regular, Menlo, monospace';
+    g.fillText(rarLabel(c.rar), 640, badges.length ? 162 : 112);
+
+    /* The species name gets the space it needs — long names step down a size
+       rather than running off the edge. */
+    let size = 76;
+    g.fillStyle = '#f2f7f6';
+    do {
+      g.font = '800 ' + size + 'px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif';
+      size -= 4;
+    } while (g.measureText(c.name).width > CARD_W - 700 && size > 34);
+    g.fillText(c.name, 640, badges.length ? 240 : 190);
+
+    g.fillStyle = '#f2f7f6';
+    g.font = '800 60px ui-monospace, SFMono-Regular, Menlo, monospace';
+    g.fillText(c.kg + ' kg', 640, 340);
+
+    g.fillStyle = '#9fb3b0';
+    g.font = '500 30px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif';
+    g.fillText('worth ' + String.fromCharCode(0x25c8) + ' ' + fmt(c.val), 640, 392);
+    g.fillText(isleName(), 640, 436);
+
+    /* ---- footer ---- */
+    g.strokeStyle = 'rgba(255,255,255,0.10)'; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(60, 566); g.lineTo(CARD_W - 60, 566); g.stroke();
+
+    g.fillStyle = '#f2f7f6';
+    g.font = '700 28px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif';
+    g.fillText(c.angler, 60, 616);
+
+    g.fillStyle = '#6f8a87';
+    g.font = '500 24px ui-monospace, SFMono-Regular, Menlo, monospace';
+    const stamp = new Date(c.t || Date.now());
+    const date = stamp.getFullYear() + '-' + two(stamp.getMonth() + 1) + '-' + two(stamp.getDate());
+    g.fillText(date, 60, 650);
+
+    g.fillStyle = accent;
+    g.font = '700 26px ui-monospace, SFMono-Regular, Menlo, monospace';
+    const mark = 'reelfortune.xyz';
+    g.fillText(mark, CARD_W - 60 - g.measureText(mark).width, 630);
+
+    return cv;
+  }
+
+  const cardBlob = cv => new Promise(res => {
+    try { cv.toBlob(b => res(b), 'image/png'); } catch (e) { res(null); }
+  });
+
+  const cardFile = c => 'reel-fortune-' + plain(c.name).toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + c.kg + 'kg.png';
+
+  /* The line that goes in the post. Deliberately the shape of the tweet that
+     inspired it: a flat statement, no hashtags, no exclamation marks. */
+  function cardText(c) {
+    const bits = [];
+    if (c.shiny) bits.push('shiny');
+    if (c.isNew) bits.push('first of its kind');
+    if (c.isRec) bits.push('a personal best');
+    const tail = bits.length ? ' — ' + bits.join(', ') : '';
+    return 'Landed ' + an(c.name) + c.name + ', ' + c.kg + ' kg, off ' + isleName() + tail
+      + '\n\nreelfortune.xyz';
+  }
+
+  /* ---- the card overlay -------------------------------------------------- */
+  RF.css(`
+#rf-card{position:fixed;inset:0;z-index:27;display:none;align-items:center;justify-content:center;
+  background:rgba(4,10,13,.78);backdrop-filter:blur(6px);padding:2vmin;}
+#rf-card.on{display:flex;}
+#rf-card .rf-card-box{max-width:min(96vw,980px);width:100%;display:flex;flex-direction:column;gap:1em;}
+#rf-card canvas{width:100%;height:auto;display:block;border-radius:10px;
+  box-shadow:0 24px 60px rgba(0,0,0,.55);image-rendering:pixelated;}
+#rf-card .rf-card-bar{display:flex;gap:.6em;flex-wrap:wrap;justify-content:center;}
+#rf-card button{font:600 14px/1 ui-sans-serif,system-ui,sans-serif;padding:.75em 1.1em;border-radius:8px;
+  border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.07);color:#f2f7f6;cursor:pointer;}
+#rf-card button:hover{background:rgba(255,255,255,.14);}
+#rf-card button.rf-card-x{background:#f2f7f6;color:#0a1418;border-color:#f2f7f6;}
+#rf-card .rf-card-hint{text-align:center;color:#8fa5a2;font:500 12px/1.5 ui-sans-serif,system-ui,sans-serif;}
+body.photo #rf-card{display:none!important;}
+`);
+
+  let cardEl = null, cardCv = null, cardCur = null;
+  /* The most recent catch good enough for a card — what Shift+J reaches for. */
+  let lastCardable = null;
+
+  function cardShell() {
+    if (cardEl) return cardEl;
+    cardEl = document.createElement('div');
+    cardEl.id = 'rf-card';
+    cardEl.innerHTML =
+      '<div class="rf-card-box">' +
+      '<div class="rf-card-slot"></div>' +
+      '<div class="rf-card-bar">' +
+      '<button data-a="save">Save PNG</button>' +
+      '<button data-a="copy">Copy image</button>' +
+      '<button data-a="text">Copy caption</button>' +
+      '<button data-a="x" class="rf-card-x">Post on X</button>' +
+      '<button data-a="close">Close</button>' +
+      '</div>' +
+      '<div class="rf-card-hint"></div>' +
+      '</div>';
+    cardEl.addEventListener('click', e => {
+      if (e.target === cardEl) return closeCard();
+      const b = e.target.closest('button[data-a]');
+      if (b) cardAction(b.getAttribute('data-a'));
+    });
+    document.body.appendChild(cardEl);
+    return cardEl;
+  }
+
+  const cardHint = t => { try { cardShell().querySelector('.rf-card-hint').textContent = t || ''; } catch (e) { } };
+
+  function closeCard() { if (cardEl) cardEl.classList.remove('on'); }
+
+  /* X has no way to attach an image through a share link, and pretending
+     otherwise would hand players an empty post. So the image goes to the
+     clipboard first and the composer opens with the caption already written —
+     one paste, and the card is in the post. */
+  function cardAction(a) {
+    if (!cardCur || !cardCv) return;
+    if (a === 'close') return closeCard();
+
+    if (a === 'save') {
+      cardBlob(cardCv).then(b => {
+        if (!b) return cardHint('This browser would not encode the PNG · try Copy image');
+        const url = URL.createObjectURL(b);
+        const link = document.createElement('a');
+        link.href = url; link.download = cardFile(cardCur);
+        document.body.appendChild(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        cardHint('Saved · ' + cardFile(cardCur));
+      });
+      return;
+    }
+
+    if (a === 'copy' || a === 'x') {
+      cardBlob(cardCv).then(b => {
+        const openX = () => {
+          if (a !== 'x') return;
+          try {
+            window.open('https://x.com/intent/post?text=' + encodeURIComponent(cardText(cardCur)),
+              '_blank', 'noopener');
+          } catch (e) { RF.err('06-content:card-x', e); }
+        };
+        if (!b || !navigator.clipboard || !window.ClipboardItem) {
+          cardHint(a === 'x'
+            ? 'Caption ready in the composer · save the PNG and attach it by hand'
+            : 'This browser cannot copy images · use Save PNG');
+          openX();
+          return;
+        }
+        navigator.clipboard.write([new ClipboardItem({ 'image/png': b })]).then(() => {
+          cardHint(a === 'x' ? 'Card copied · paste it into the post' : 'Card copied to the clipboard');
+          openX();
+        }, () => {
+          cardHint('Clipboard refused the image · use Save PNG');
+          openX();
+        });
+      });
+      return;
+    }
+
+    if (a === 'text') {
+      copyOut(cardText(cardCur), 'the caption');
+      cardHint('Caption copied · the image still needs Copy image or Save PNG');
+    }
+  }
+
+  /* Open the card for one catch. Safe to call with a journal row, with the
+     live catch payload, or with nothing sensible at all. */
+  function showCard(entry) {
+    if (!entry) return Promise.resolve(false);
+    const c = {
+      name: plain(entry.name || ''),
+      kg: +entry.kg || 0,
+      val: +entry.val || 0,
+      rar: entry.rar || 'common',
+      shiny: !!entry.shiny,
+      isNew: !!entry.isNew,
+      isRec: !!entry.isRec,
+      auto: !!entry.auto,
+      t: entry.t || Date.now(),
+      angler: anglerName()
+    };
+    if (!c.name) return Promise.resolve(false);
+
+    return drawCard(c).then(cv => {
+      cardCur = c; cardCv = cv;
+      const shell = cardShell();
+      const slot = shell.querySelector('.rf-card-slot');
+      slot.textContent = '';
+      slot.appendChild(cv);
+      cardHint('');
+      shell.classList.add('on');
+      return true;
+    }).catch(e => { RF.err('06-content:card', e); return false; });
+  }
+
+  /* Esc closes the card before the journal sees the key. */
+  RF.on('keydown', e => {
+    if (e.code === 'Escape' && cardEl && cardEl.classList.contains('on')) {
+      closeCard();
+      return true;
+    }
+  }, -10);
+
+  /* The offer. Never a modal — a card that interrupts the cast it came from
+     would be worse than no card. The notification carries the button, and the
+     catch is in the journal either way. */
+  RF.on('catch', (f, info) => {
+    if (!cardWorthy(f, info)) return;
+    const entry = {
+      name: f.name, kg: +f.kg || 0, val: +f.val || 0, rar: f.rar,
+      shiny: !!f.shiny, isNew: !!(info && info.isNew), isRec: !!(info && info.isRec),
+      auto: !!(info && info.auto), t: Date.now()
+    };
+    lastCardable = entry;
+    say({
+      level: 'good', title: 'Worth a card', tag: 'rf-content-card', ttl: 9000,
+      body: plain(f.name) + ' · ' + entry.kg + ' kg · Shift+J for a card',
+    });
+  });
+
+  RF.on('keydown', e => {
+    if (typing() || !(e.code === 'KeyJ' && e.shiftKey)) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault();
+    const src = lastCardable || (ses.best ? { ...ses.best, t: Date.now() } : null);
+    if (!src) { RF.fn.toast('Nothing to put on a card yet · land something first', 'bad'); return true; }
+    showCard(src);
+    return true;
+  });
+
   /* --------------------------------------------------------------- public */
   const API = {
     log: (kind, summary, payload) => log(kind, summary, payload),
@@ -978,6 +1358,7 @@ body.rf-reduced #rf-content *{transition:none!important;}
     records: () => JSON.parse(JSON.stringify(meta.rec)),
     almanac: () => SPECIES.map(sp => ({ name: sp.name, rar: sp.rar, val: sp.val, isles: sp.isles.slice(), cond: sp.cond, n: caughtN(sp.name), best: bestKg(sp.name) })),
     open: t => open(t), close: close,
+    card: e => showCard(e), cardWorthy: (f, i) => cardWorthy(f, i),
     flush: () => flush(true)
   };
   RF.api = RF.api || {};
