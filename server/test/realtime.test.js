@@ -25,6 +25,7 @@ import assert from 'node:assert/strict';
 import { startServer, registerUser, sleep } from './helpers.js';
 
 const CHAT_GAP = 1200;          // realtime.js CHAT_GAP
+const HELLO_GAP = 1000;         // realtime.js HELLO_GAP — a second hello inside this is ignored
 const CLOSE_AUTH = 4401;        // bad or expired session token
 const CLOSE_REPLACED = 4409;    // the same account opened a newer socket
 
@@ -342,6 +343,21 @@ describe('realtime', () => {
     await sleep(150);
   });
 
+  it('will not put an uninvited angler on the exclusive isle', async () => {
+    /* Neon Shoals is chartered, not asked for. Nothing about being seen there is
+       cosmetic — it is what the isle sells — so a hello naming it from an account
+       with no charter lands on the starting isle instead, exactly like a stale
+       key would. The ordinary isles are deliberately NOT checked this way. */
+    const sock = server.socket(carol.token);
+    const welcome = await enter(sock, 'neon');
+
+    assert.equal(welcome.world, 'isle', 'an unchartered exclusive isle let a stranger in');
+
+    sock.close();
+    await sock.closed;
+    await sleep(150);
+  });
+
   it('will not conjure a private room out of an unknown world name', async () => {
     /* A stale localStorage key must still land the player somewhere real —
        rooms are worlds, and worlds are a closed set. */
@@ -365,5 +381,52 @@ describe('realtime', () => {
 
     const leave = await b.waitFor((m) => m.t === 'leave' && m.id === aliceId);
     assert.equal(leave.id, aliceId);
+  });
+  /* ================================================================= boats */
+
+  describe('boats', () => {
+    it('shows the hull the account owns, not the one the client asks for', async () => {
+      const s1 = server.socket(alice.token);
+      await enter(s1, 'isle');
+
+      const s2 = server.socket(bob.token);
+      await enter(s2, 'isle');
+      await s1.waitFor((m) => m.t === 'join');
+
+      /* Alice owns no boat, so climbing aboard announces nothing at all —
+         there is no hull to draw and the message is dropped rather than
+         broadcast as a raft she does not have. */
+      s1.send({ t: 'boat', on: true });
+      await sleep(250);
+      assert.equal(s2.seen((m) => m.t === 'boat'), false,
+        'a player with no boat must not appear afloat');
+    });
+
+    it('never lets the client choose which hull it is seen in', async () => {
+      const s3 = server.socket(alice.token);
+      await enter(s3, 'isle');
+
+      /* The wire has no field for it, but a client could still try. The level
+         is read from the save, so anything sent here is ignored outright. */
+      s3.send({ t: 'boat', on: true, lvl: 4, b: 4, boat: 4 });
+      await sleep(250);
+      assert.equal(s3.seen((m) => m.t === 'boat' && m.lvl > 0), false,
+        'a claimed hull level must never reach the room');
+    });
+
+    it('puts the skipper back ashore when they sail to another isle', async () => {
+      const s4 = server.socket(alice.token);
+      await enter(s4, 'isle');
+      /* Sailing is a second hello on the same socket, and the server rate-limits
+         those: sent inside HELLO_GAP it is dropped on the floor and no welcome
+         ever comes back. Waiting the gap out is what a real client does too —
+         travel reloads the page, which takes far longer than a second. */
+      await sleep(HELLO_GAP + 100);
+      await enter(s4, 'cove');
+      await sleep(HELLO_GAP + 100);
+      const w = await enter(s4, 'isle');
+      assert.ok(!(w.peers || []).some((p) => p.boat),
+        'a hull must not survive a change of isle');
+    });
   });
 });

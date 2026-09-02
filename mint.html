@@ -317,6 +317,17 @@ footer code{word-break:break-all}
 .foot-in .right{text-align:right;max-width:42ch}
 @media (max-width:700px){.foot-in .right{text-align:left}}
 
+/* ---- sale closed ----------------------------------------------------------
+   Set by mint-gate.js from the server's switch. The gallery, traits and rarity
+   stay exactly as they are — only the buying stops. */
+body.mint-closed #mintBtn{background:var(--paper-2);color:rgba(5,25,28,.45);
+  box-shadow:var(--shadow-sm);cursor:not-allowed;pointer-events:none;}
+body.mint-closed .stepper{opacity:.45;pointer-events:none;}
+body.mint-closed #mintbox::before{content:"NOT OPEN YET";display:block;
+  margin:0 0 14px;padding:9px 12px;border:2px solid var(--ink);border-radius:12px;
+  background:var(--gold);font-family:var(--f-disp);font-weight:800;font-size:11px;
+  letter-spacing:.14em;text-align:center;}
+
 /* Focus must stay visible on every interactive thing — the hard shadows make a
    subtle ring impossible to see, so it is a solid offset outline instead. */
 a:focus-visible,button:focus-visible{outline:3px solid var(--ink);outline-offset:3px;border-radius:4px}
@@ -519,6 +530,7 @@ a:focus-visible,button:focus-visible{outline:3px solid var(--ink);outline-offset
 </footer>
 
 <script src="fonts.js"></script>
+<script src="mint-gate.js"></script>
 <script src="mint/config.js"></script>
 <script src="mint/eth.js"></script>
 <script src="mint/mint.js"></script>

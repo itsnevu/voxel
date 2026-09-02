@@ -1172,7 +1172,8 @@ RF.mod('07-juice', function (RF) {
       mine:    { root: 220.00, sc: [0, 3, 5, 7, 10], step: 0.27 },  // A minor pentatonic
       volcano: { root: 293.66, sc: [0, 1, 5, 7, 8],  step: 0.20 },  // D phrygian: the isle's own threat
       frost:   { root: 293.66, sc: [0, 2, 5, 7, 10], step: 0.32 },
-      cave:    { root: 261.63, sc: [0, 3, 5, 7, 10], step: 0.30 }
+      cave:    { root: 261.63, sc: [0, 3, 5, 7, 10], step: 0.30 },
+      neon:    { root: 220.00, sc: [0, 3, 5, 6, 10], step: 0.22 }   // A blues: the city's own scale
     };
     const K = KEYS[RF.worldKey] || KEYS.isle;
     const semi = n => Math.pow(2, n / 12);

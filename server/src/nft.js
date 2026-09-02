@@ -65,7 +65,13 @@ export function nftConfigured() {
 }
 
 export function nftConfig() {
-  return { chainId: CHAIN_ID, contract: CONTRACT, configured: nftConfigured() };
+  return {
+    chainId: CHAIN_ID,
+    contract: CONTRACT,
+    configured: nftConfigured(),
+    // the site switch, so the client can drop its own link to a closed door
+    mintOpen: (process.env.MINT_OPEN === undefined ? '1' : process.env.MINT_OPEN).trim() !== '0',
+  };
 }
 
 /** 32-byte left-padded hex body for an address argument, no 0x. */

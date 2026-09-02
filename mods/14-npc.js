@@ -509,8 +509,12 @@ RF.mod('14-npc', function (RF) {
       { k: 'sail', t: 'Where I can send you', f: () => {
         const owned = RF.state.worlds || [], here = RF.worldKey;
         const rows = RF.WORLD_ORDER.map(k => { const w = RF.WORLDS[k], has = owned.indexOf(k) >= 0;
-          return `<span>${k === here ? '▸ ' : ''}<b>${esc(w.name)}</b> · ${esc(w.sub)} · ${has ? '<b style="color:var(--teal)">unlocked</b>' : '◈' + fmt(w.cost)}</span>`; });
-        return `Four isles above the water and one below it. Fish are worth <b>${RF.WORLD.fishMul}×</b> here.<div class="rf-npc-list">${rows.join('')}</div>`; } },
+          /* An Angler-only isle prices itself in more than coins, so the row says so
+             rather than showing a number the coins alone can never satisfy. */
+          const price = has ? '<b style="color:var(--teal)">unlocked</b>'
+            : w.nft ? `◈${fmt(w.cost)} · <b style="color:var(--gold)">Anglers only</b>` : '◈' + fmt(w.cost);
+          return `<span>${k === here ? '▸ ' : ''}<b>${esc(w.name)}</b> · ${esc(w.sub)} · ${price}</span>`; });
+        return `${RF.WORLD_ORDER.length} isles above the water and one below it. Fish are worth <b>${RF.WORLD.fishMul}×</b> here.<div class="rf-npc-list">${rows.join('')}</div>`; } },
       { k: 'weather', t: 'Reading the sky', f: RUM.weather, deep: 1 },
       { k: 'me', t: 'The third plank', f: () => 'I set the third plank wrong in my first year and have left it wrong ever since. '
         + 'A pier that is perfect is a pier nobody remembers. Mind your step and think of me.', deep: 2 }],

@@ -215,9 +215,30 @@ const WORLDS={
     grass:['#3f5a4c','#37503f',['#4a685a','#2f4638','#557767','#283d30']],
     leaf:['#3fae9c',['#35998a','#4cc4b0','#2b8578','#5cd8c4']],
     sand:['#5a5248',['#4e463c','#665e54','#423a30']],
-    stone:['#3c4148',['#464b52','#32373e','#50555c']]}};
-const WORLD_ORDER=['isle','mine','volcano','frost'];
-let worldKey='isle'; try{ const wk=localStorage.getItem('reelfortune3d-world'); if(wk&&WORLDS[wk])worldKey=wk; }catch(e){}
+    stone:['#3c4148',['#464b52','#32373e','#50555c']]},
+  /* Neon Shoals — a drowned city, and the only isle you cannot simply save up for:
+     `nft` means the Harbor opens it to an account WEARING an Angler and nobody
+     else, checked on the server against the chain (actions.js travel). `night`
+     pins the sky the way `cave` does, but the weather still runs — rain on neon
+     is the whole look, and its two best fish only bite in it. */
+  neon:{name:'Neon Shoals',sub:'world 5 · anglers only',cost:30000,seed:909,hMul:1.05,stoneH:5,fishMul:6,oreN:18,oreYield:2,
+    night:true,nft:true,
+    sky:0x140a2e,water:0x1fd6c8,pink:0.42,treeMax:10,
+    grass:['#2c2a4a','#262441',['#3a3760','#211f38','#443f6e','#1c1a30']],
+    leaf:['#ff3d9a',['#e0308a','#ff5cae','#c92878','#ff7ac0']],
+    sand:['#4a4660',['#403c54','#565270','#36324a']],
+    stone:['#2a2740',['#332f4c','#211e34','#3c3858']]}};
+const WORLD_ORDER=['isle','mine','volcano','frost','neon'];
+/* The stored isle is only a bookmark, never a key: an isle costs coins at the
+   Harbor, so the saved `worlds` list has to name it too. Otherwise editing one
+   localStorage entry would sail you to Frostbite for free. (The server checks
+   the same thing on its side — see realtime.js onHello and actions.js travel.) */
+let worldKey='isle';
+try{ const wk=localStorage.getItem('reelfortune3d-world');
+  if(wk&&WORLDS[wk]&&(WORLDS[wk].cost===0||(function(){
+    try{ const s=JSON.parse(localStorage.getItem('reelfortune3d-v1')||'{}');
+      return Array.isArray(s.worlds)&&s.worlds.indexOf(wk)>=0; }catch(e){ return false; } })()))worldKey=wk;
+}catch(e){}
 const WORLD=WORLDS[worldKey];
 SKY=WORLD.sky; scene.fog.color.setHex(SKY);
 { const c0=new THREE.Color(SKY); paintSky(c0,c0); } // seed the gradient before the first skyUpdate
@@ -1226,6 +1247,113 @@ if(worldKey==='frost'){
       spike.rotation.set(rand(-0.2,0.2),rand(0,TAU),rand(-0.2,0.2)); spike.castShadow=true; scene.add(spike); n2++; } }
 }
 
+/* Neon Shoals: a city the sea took back. Towers are stacked boxes with emissive
+   window bands, the signs are thin glowing slabs bolted to their faces, and the
+   whole lot is placed off the same seeded PRNG as everything else — two players
+   standing on the same street have to see the same street. Nothing here blocks a
+   cell the game already claimed (decorOK), so the pier, the casino and the ore
+   still land exactly where the shared rules put them. */
+if(worldKey==='neon'){
+  const NEON=[0xff2f8e,0x2fe8ff,0xb44bff,0x3dff9a,0xffc83d];  // the five signs the city is lit by
+  /* Light enough to read as MASS against the ground. The first pass had the
+     towers almost the colour of the terrain, so all you saw were the lit bands
+     floating in the dark — glowing chevrons, not buildings. */
+  const concrete=new THREE.MeshLambertMaterial({color:0x4e4a72});
+  const darkGlass=new THREE.MeshLambertMaterial({color:0x35325e});
+  /* Window bands: one emissive strip per floor, wrapped around the tower as four
+     thin slabs. Cheaper than real windows and reads better at iso distance. */
+  const bandMat=(c)=>new THREE.MeshLambertMaterial({color:c,emissive:c,emissiveIntensity:0.8});
+  let built=0,tries=0;
+  while(built<36&&tries++<2000){   // 48 crowded the iso camera: towers hid the water you fish from
+    const i=3+((Math.random()*(N-6))|0), j=3+((Math.random()*(N-6))|0);
+    const h=heightMap[i][j];
+    if(h<3||!decorOK(i,j,1.7))continue;                       // dry land, and nothing else's cell
+    decorUsed.add(keyOf(i,j));
+    const g=new THREE.Group();
+    /* Height is drawn off distance from the middle: a real skyline has a downtown
+       and an outskirts, and a field of identical stumps reads as scenery, not city. */
+    const core=1-Math.min(1,Math.hypot(i-HALF,j-HALF)/34);
+    const floors=2+((Math.random()*3)|0)+((core*6)|0), w=rand(1.5,2.5), d=rand(1.5,2.5), fh=rand(1.0,1.5);
+    for(let f=0;f<floors;f++){
+      const slab=new THREE.Mesh(new THREE.BoxGeometry(w,fh,d),f%2?darkGlass:concrete);
+      slab.position.y=fh*(f+0.5); slab.castShadow=true; g.add(slab);
+      /* Four strips, one per FACE — not one plate wrapped around the tower. The
+         plate version reads as a flange sticking out at every floor; on the iso
+         camera it turned each building into a stack of glowing arrows. */
+      const c=NEON[(Math.random()*NEON.length)|0], bm=bandMat(c), by=fh*(f+1)-0.22;
+      let handle=null;
+      for(const sdx of[-1,1]){
+        const bx=new THREE.Mesh(new THREE.BoxGeometry(w*0.86,0.1,0.04),bm);
+        bx.position.set(0,by,sdx*(d/2+0.02)); g.add(bx); handle=bx;
+        const bz=new THREE.Mesh(new THREE.BoxGeometry(0.04,0.1,d*0.86),bm);
+        bz.position.set(sdx*(w/2+0.02),by,0); g.add(bz); }
+      // all four share one material, so one of them is enough to carry the pulse
+      lamps.push(handle);
+    }
+    // a vertical sign down one face — the tall kanji-style boards the look lives on
+    if(Math.random()<0.7){
+      const c=NEON[(Math.random()*NEON.length)|0];
+      const sm=new THREE.MeshLambertMaterial({color:c,emissive:c,emissiveIntensity:1});
+      const sign=new THREE.Mesh(new THREE.BoxGeometry(0.16,fh*floors*0.6,0.5),sm);
+      const side=Math.random()<0.5?1:-1;
+      sign.position.set(side*(w/2+0.1),fh*floors*0.55,0); g.add(sign); lamps.push(sign);
+      const halo=new THREE.PointLight(c,0.7,9,2); halo.position.copy(sign.position); g.add(halo);
+    }
+    // the aerial and its red beacon, so the skyline has a top edge
+    const mast=new THREE.Mesh(new THREE.BoxGeometry(0.08,rand(0.6,1.4),0.08),concrete);
+    mast.position.y=fh*floors+0.5; g.add(mast);
+    const beaconM=new THREE.MeshLambertMaterial({color:0xff3b3b,emissive:0xff3b3b,emissiveIntensity:1});
+    const beacon=new THREE.Mesh(new THREE.BoxGeometry(0.16,0.16,0.16),beaconM);
+    beacon.position.y=fh*floors+1.1; g.add(beacon); lamps.push(beacon);
+    g.position.set(i-HALF,h,j-HALF); g.rotation.y=(Math.random()*4|0)*(Math.PI/2);  // blocks stay grid-aligned
+    scene.add(g); built++;
+  }
+  // street lamps: a pole with a cyan head, hugging the walkable grass
+  { let n2=0,g2=0;
+    while(n2<14&&g2++<600){
+      const i=2+((Math.random()*(N-4))|0), j=2+((Math.random()*(N-4))|0);
+      const h=heightMap[i][j]; if(h<3||h>=WORLD.stoneH||!decorOK(i,j,1.6))continue;
+      decorUsed.add(keyOf(i,j));
+      const g=new THREE.Group();
+      const pole=new THREE.Mesh(new THREE.BoxGeometry(0.1,2.4,0.1),concrete); pole.position.y=1.2; g.add(pole);
+      const headM=new THREE.MeshLambertMaterial({color:0x2fe8ff,emissive:0x2fe8ff,emissiveIntensity:0.9});
+      const head=new THREE.Mesh(new THREE.BoxGeometry(0.36,0.12,0.36),headM); head.position.y=2.42;
+      g.add(head); lamps.push(head);
+      g.position.set(i-HALF,h,j-HALF); scene.add(g); n2++; }
+  }
+  // the streets themselves: a thin lit kerb strip on every other path cell, so the
+  // walkways read as neon-lined roads from the iso camera instead of bare dirt
+  { const kerbC=[0xff2f8e,0x2fe8ff];
+    let flip=0;
+    for(const key of pathSet){
+      if((flip++&1))continue;
+      const parts=key.split('_'), i=+parts[0], j=+parts[1];
+      if(!(i>0&&j>0&&i<N&&j<N))continue;
+      const h=heightMap[i][j]; if(h<3)continue;
+      const c=kerbC[(i+j)&1];
+      const km=new THREE.MeshLambertMaterial({color:c,emissive:c,emissiveIntensity:0.55});
+      const strip=new THREE.Mesh(new THREE.BoxGeometry(0.92,0.05,0.14),km);
+      strip.position.set(i-HALF,h+0.03,j-HALF+((i+j)&1?0.42:-0.42));
+      strip.rotation.y=((i+j)&3)===0?Math.PI/2:0;
+      scene.add(strip); lamps.push(strip); } }
+  // half-sunk billboards out on the water — the drowned half of the city
+  { let n3=0,g3=0;
+    while(n3<7&&g3++<600){
+      const i=2+((Math.random()*(N-4))|0), j=2+((Math.random()*(N-4))|0);
+      if(heightMap[i][j]>1)continue; const dd=Math.hypot(i-HALF,j-HALF); if(dd<26||dd>44)continue;
+      const c=NEON[(Math.random()*NEON.length)|0];
+      const g=new THREE.Group();
+      const frame=new THREE.Mesh(new THREE.BoxGeometry(2.6,1.6,0.14),new THREE.MeshLambertMaterial({color:0x1b1930}));
+      frame.position.y=WATER_TOP+1.5; g.add(frame);
+      const faceM=new THREE.MeshLambertMaterial({color:c,emissive:c,emissiveIntensity:0.85});
+      const face=new THREE.Mesh(new THREE.BoxGeometry(2.3,1.3,0.06),faceM);
+      face.position.set(0,WATER_TOP+1.5,0.1); g.add(face); lamps.push(face);
+      for(const sdx of[-1,1]){ const leg=new THREE.Mesh(new THREE.BoxGeometry(0.12,1.6,0.12),concrete);
+        leg.position.set(sdx*1.0,WATER_TOP+0.7,0); g.add(leg); }
+      g.position.set(i-HALF,0,j-HALF); g.rotation.y=rand(0,TAU); scene.add(g); n3++; }
+  }
+}
+
 // world construction finished — hand randomness back for gameplay rolls
 Math.random=REAL_RANDOM;
 // stable ids let the server say "node 17 is depleted" and every client agree which one
@@ -1568,7 +1696,16 @@ const MUSIC={
     lift:[1,1,2,1],hush:[16,16,16,12],                         // bar 3 answers itself an octave up
     tick:{f:1568,every:16,at:11,type:'sine',vol:0.04,dur:0.08},
     drone:{f:41,gain:0.12},
-    amb:{cut:250,gain:0.20,lfo:0.04,wob:0.16}}};
+    amb:{cut:250,gain:0.20,lfo:0.04,wob:0.16}},
+  // Neon Shoals — synthwave: a driving saw ostinato in A minor, one bright lead
+  // over it, and a sub that never leaves. The city hums whether you fish or not.
+  neon:{step:0.22,bars:4,
+    bass:[110,0,110,0, 110,0,87,0, 98,0,98,0, 87,0,82,87],bassType:'sawtooth',bassVol:0.34,bassDur:0.9,
+    lead:[880,0,1046,0, 1318,0,1046,880, 0,987,0,784, 880,0,1046,0],leadType:'square',leadVol:0.14,leadDur:0.75,
+    lift:[1,1,1,1.5],hush:[16,16,14,16],
+    tick:{f:2093,every:4,at:3,type:'square',vol:0.05,dur:0.04},
+    drone:{f:55,gain:0.14},
+    amb:{cut:700,gain:0.22,lfo:0.09,wob:0.18}}};
 function musNote(t,f,dur,type,vol){ if(!f)return; const o=AC.createOscillator(),g=AC.createGain();
   o.type=type; o.frequency.value=f; g.gain.value=0.0001; o.connect(g); g.connect(musMaster);
   g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(vol,t+0.02);
@@ -2128,6 +2265,8 @@ const state={coins:0,bucket:[],ores:{wood:0,coal:0,iron:0,gold:0,diamond:0},rodL
   rigLvl:1,   // everybody owns the Driftwood Rig; the Kiosk sells the two above it
   bait:{},baitId:'',
   pet:0,charm:0,jackpot:0,bounty:null,bountyEpoch:0,
+  charTokenId:0,   // the Angler this account is WEARING — written by the server alone (see mods/15-nft.js)
+
   stats:{caught:0,mined:0,wood:0,earned:0,bestWin:0,spins:0,winsCt:0,losses:0,divEarned:0,rare:0}};
 const cap=()=>CAP_BASE+2*(state.bucketTier||0);
 /* ---- server bridge: when signed in, the SERVER owns the economy ----
@@ -2259,7 +2398,8 @@ function weatherAt(world,epoch){
   return r<m.clear?'clear':r<m.storm?m.wet:'storm'; }
 // time-of-day + weather globals — read every frame by skyUpdate, seeded here so a
 // query made before the first frame (the HUD, a mod's boot hook) is already honest
-let dayT=WORLD.cave?0.02:dayPhaseAt(Date.now()), dayCount=lunarDayAt(Date.now()); // dayCount drives the 8-day lunar phase
+const DARK_WORLD=!!(WORLD.cave||WORLD.night);   // no day cycle here: the sky is pinned
+let dayT=DARK_WORLD?0.02:dayPhaseAt(Date.now()), dayCount=lunarDayAt(Date.now()); // dayCount drives the 8-day lunar phase
 let wEpoch=weatherEpochNow(), wState=weatherAt(worldKey,wEpoch);
 const isNight=()=>dayT<NIGHT_END||dayT>NIGHT_START;
 // entries: [species, weight, cond?] — cond gates when it can bite
@@ -2300,6 +2440,15 @@ WORLDS.cave.fish=[[F('Cave Guppy','common',10),40],[F('Blind Perch','common',14)
   [F('Dweller Eel','rare',78),12],[F('Moonfin','rare',95),8],[F('Crystal Koi','rare',150),6],
   [F('Midnight Koi','epic',210),5],[F('Fossil Sturgeon','epic',170),4],
   [F('Abyss Anglerfish','legendary',900),2],[F('Wyrm Eel','legendary',850),1]];
+// neon: permanent night, so it has no night-only entries — its glow fish are the
+// everyday population, and the rain the city never stops getting is where the money is
+WORLDS.neon.fish=[[F('Chrome Sardine','common',12),38],[F('Static Perch','common',16),32],
+  [F('Fiberfin','uncommon',30),24],[F('Circuit Snapper','uncommon',42),18],
+  [F('Voltage Eel','rare',90),12],[F('Datastream Tuna','rare',120),9],
+  [F('Hologram Koi','epic',240),5],[F('Reactor Sturgeon','epic',260),4],
+  [F('Neon Leviathan','legendary',1100),2],
+  [F('Acid Rainrunner','uncommon',55),11,'rain'],[F('Sodium Carp','rare',130),6,'rain'],
+  [F('Blackout Eel','epic',320),4,'storm'],[F('Skyline Marlin','legendary',1200),1,'storm']];
 // combined species list (unique by name) — drives the Fishdex and completion achievements
 const ALL_FISH=[]; { const seenF=new Set();
   for(const k in WORLDS){ const wf=WORLDS[k].fish; if(!wf)continue;
@@ -2458,7 +2607,7 @@ const BOATS=[
 const boatSeats=lvl=>(BOATS[clamp(lvl|0,0,BOATS.length-1)]||BOATS[0]).seats;
 const crewSlots=lvl=>Math.max(0,boatSeats(lvl)-1);
 const seatLabel=lvl=>{ const n=boatSeats(lvl); return n===1?'sails alone · 1 seat':`seats ${n} · ${n-1} crew`; };
-const BOAT_REQ={isle:0,mine:1,volcano:2,frost:3}; // boat level needed to UNLOCK each isle
+const BOAT_REQ={isle:0,mine:1,volcano:2,frost:3,neon:4}; // boat level needed to UNLOCK each isle
 const ROD_BASE=250, PICK_BASE=200, AXE_BASE=180;
 const AXE_NAMES=['','Dull Axe','Stone Axe','Iron Axe','Steel Axe','Golden Axe','Crystal Axe','Obsidian Axe','Mythril Axe','Dragon Axe','Titan Axe'];
 const upCost=(base,lvl)=>Math.round(base*Math.pow(1.75,lvl-1)); // cost lvl -> lvl+1
@@ -2607,7 +2756,15 @@ function renderWorldRows(){
     if(k===worldKey){ h+=`<div class="fishrow"><span class="nm">${pixSVG('island',15)} ${w.name} <span style="color:var(--faint)">${w.sub}</span></span><span class="rr" style="color:var(--teal)">YOU ARE HERE</span></div>`; }
     else if(state.worlds.includes(k)){ h+=`<div class="fishrow"><span class="nm">${pixSVG('island',15)} ${w.name} <span style="color:var(--faint)">${w.sub}</span></span><button class="btn" data-world="${k}">SAIL</button></div>`; }
     else { const br=BOAT_REQ[k]||0, okBoat=state.boatLvl>=br;
-      h+=`<div class="fishrow"><span class="nm">${pixSVG('lock',15)} ${w.name} <span style="color:var(--faint)">${w.sub}${okBoat?'':` · needs ${BOATS[br].name}`}</span></span><span class="vv">◈ ${fmt(w.cost)}</span><button class="btn gold" data-world="${k}" ${state.coins<w.cost||!okBoat?'disabled':''}>Unlock</button></div>`; } }
+      /* An `nft` isle has a second lock the coins cannot open. The button is
+         disabled either way, but the row says WHICH lock is holding — a greyed
+         Unlock with the coins in hand and no reason given is the worst version
+         of this. The server decides for real (actions.js travel); this is the
+         same rule drawn honestly. */
+      const okNft=!w.nft||state.charTokenId>0;
+      const why=!okBoat?` · needs ${BOATS[br].name}`
+        :!okNft?` · <span style="color:var(--gold)">wear an Angler to charter</span>`:'';
+      h+=`<div class="fishrow"><span class="nm">${pixSVG('lock',15)} ${w.name} <span style="color:var(--faint)">${w.sub}${why}</span></span><span class="vv">◈ ${fmt(w.cost)}</span><button class="btn gold" data-world="${k}" ${state.coins<w.cost||!okBoat||!okNft?'disabled':''}>Unlock</button></div>`; } }
   return h; }
 function buyOrSail(k){ const w=WORLDS[k]; if(!w||k===worldKey)return;
   if(SRV.on){ SRV.act('travel',{world:k}).then(r=>{ if(!r)return;
@@ -2618,6 +2775,10 @@ function buyOrSail(k){ const w=WORLDS[k]; if(!w||k===worldKey)return;
     return; }
   if(!state.worlds.includes(k)){
     const br=BOAT_REQ[k]||0;
+    /* Offline there is no chain to ask and no server to ask it, so an Angler-only
+       isle simply cannot be chartered here — granting it locally would mean the
+       one thing this isle exists to be, exclusive, is a browser edit away. */
+    if(w.nft){ sfx.deny(); toast(w.name+' is for Angler holders · sign in with your wallet','bad'); return; }
     if(state.boatLvl<br){ sfx.deny(); toast('Your '+BOATS[state.boatLvl].name+" can't make that voyage · see the Harbor dock",'bad'); return; }
     if(state.coins<w.cost){ sfx.deny(); return; }
     state.coins-=w.cost; state.worlds.push(k); sfx.win(); addShake(0.1);
@@ -4244,7 +4405,11 @@ function skyUpdate(dt){
   // the day is read off the wall clock, never accumulated: a backgrounded tab
   // comes back to the same sky everyone else is under, and the moon rides the
   // whole part of the same division rather than a counter we could drop frames on
-  { const now=Date.now(); dayT=dayPhaseAt(now); dayCount=lunarDayAt(now); }
+  /* Neon Shoals never sees morning. The clock still runs the moon and the
+     weather — rain on the signs is the point of the place — but the sun is
+     pinned just past midnight, so DAYKEYS hands the same deep segment forever
+     and every light below stays night-lit without a second code path. */
+  { const now=Date.now(); dayT=WORLD.night?0.86:dayPhaseAt(now); dayCount=lunarDayAt(now); }
   let seg=null;
   for(let k=0;k<DAYKEYS.length-1;k++){ if(dayT>=DAYKEYS[k][0]&&dayT<=DAYKEYS[k+1][0]){seg=[DAYKEYS[k],DAYKEYS[k+1]];break;} }
   if(!seg)seg=[DAYKEYS[0],DAYKEYS[1]];
@@ -4261,6 +4426,9 @@ function skyUpdate(dt){
   else if(wxKind==='snow'){ cA.lerp(cB.setHex(0xc8d8e4),0.4*wxAmt); sunI*=1-0.30*wxAmt; }
   else if(wxKind==='ash'){ cA.lerp(cB.setHex(0x6a4a42),0.42*wxAmt); sunI*=1-0.40*wxAmt; }
   if(flashT>0){ flashT-=dt; sunI+=1.0; cA.lerp(cB.setHex(0xffffff),0.25); }
+  // a pinned-night isle keeps its own colour: DAYKEYS' generic navy pulled most
+  // of the way to the violet the city is lit in, fog and skybox together
+  if(WORLD.night)cA.lerp(cB.setHex(WORLD.sky),0.66);
   scene.fog.color.copy(cA);
   sun.intensity=sunI; hemiL.intensity=hemiI;
 
@@ -4404,9 +4572,10 @@ function drawSkyDial(){ if(!skyDialX)return;
   g.fillStyle='rgba(10,20,26,.85)'; g.fillRect(0,HZ,W,H-HZ);            // ground band
   g.fillStyle=night?'#57b7ff':'#ffcf5c'; g.font='bold 9px monospace'; g.textBaseline='middle';
   // how long until the light flips — the number a night-fisher actually wants
-  const toNight=((0.76-dayT)+1)%1, toDay=((0.12-dayT)+1)%1;
-  const secs=Math.round((night?toDay:toNight)*DAY_LEN);
-  g.fillText((night?'☾ dawn ':'☀ dusk ')+Math.floor(secs/60)+':'+String(secs%60).padStart(2,'0'),4,H-5);
+  if(WORLD.night){ g.fillText('☾ no dawn',4,H-5); }   // the clock is pinned: a countdown here would be a lie
+  else { const toNight=((0.76-dayT)+1)%1, toDay=((0.12-dayT)+1)%1;
+    const secs=Math.round((night?toDay:toNight)*DAY_LEN);
+    g.fillText((night?'☾ dawn ':'☀ dusk ')+Math.floor(secs/60)+':'+String(secs%60).padStart(2,'0'),4,H-5); }
   if(wState!=='clear'){ g.fillStyle=wState==='storm'?'#ff5d7a':wState==='snow'?'#dff0ff':wState==='ash'?'#c9a08a':'#9fd4ff';
     g.fillText(wState.toUpperCase(),W-4-g.measureText(wState.toUpperCase()).width,H-5); } }
 function chipUpdate(){ drawSkyDial(); if(!timeIco)return;
@@ -4723,6 +4892,16 @@ document.getElementById('startBtn').onclick=start;
    doors, so this one has to exist somewhere or a player with no server (or no
    interest in one) has nothing to press. */
 { const off=document.getElementById('playOffline'); if(off)off.onclick=start; }
+/* Take the mint link away when the sale is closed. Asked of the server rather
+   than assumed, so opening and closing the door is an env change and a restart
+   — never a release. Failure leaves the link alone: a mint page that answers
+   503 is a far better outcome than a title screen that lost a button because a
+   fetch blipped. */
+(async()=>{ const a=document.getElementById('mintLink'); if(!a)return;
+  try{ if(!(window.RFNet&&RFNet.base))return;
+    const c=await RFNet.nftConfig();
+    if(c&&c.mintOpen===false)a.style.display='none';
+  }catch(e){} })();
 
 /* ========================================================================
    16. MULTIPLAYER — other anglers on the same isle
@@ -4776,6 +4955,25 @@ function applyPeerSkin(id,tokenId){
   }).catch(e=>RF.err('peer:skin',e,'warn'));
 }
 
+/* ---- a peer's boat ---------------------------------------------------------
+   The hull is a sibling of the hero, not a child: the hero bobs and steps with
+   its own animation, and a boat inheriting that would pitch like a rocking
+   horse. Both are simply placed at the peer's position each frame, the hull on
+   the waterline and the angler above it. */
+function setPeerBoat(id,lvl){
+  const q=peers.get(id); if(!q)return;
+  const want=Math.max(0,lvl|0);
+  if(q.boatLvl===want)return;
+  q.boatLvl=want;
+  if(q.boat){ scene.remove(q.boat); disposeTree(q.boat); q.boat=null; }
+  if(!want)return;
+  try{
+    q.boat=makeBoat(want);
+    q.boat.rotation.order='YXZ';
+    scene.add(q.boat);
+  }catch(e){ q.boat=null; q.boatLvl=0; RF.err('peer:boat',e,'warn'); }
+}
+
 function addPeer(p){ if(!p||p.id==null||peers.has(p.id))return;
   const g=makeHero(); g.rotation.order='YXZ'; peerColors(g,p.wardrobe);
   g.position.set(p.x||0,p.y||0,p.z||0); scene.add(g);
@@ -4785,11 +4983,13 @@ function addPeer(p){ if(!p||p.id==null||peers.has(p.id))return;
   peers.set(p.id,{g,tag,sub,name:p.name||'angler',
     x:p.x||0,y:p.y||0,z:p.z||0,tx:p.x||0,ty:p.y||0,tz:p.z||0,
     face:p.face||0,tface:p.face||0,act:p.act||'',step:0,
-    wardrobe:p.wardrobe||{},charTokenId:p.charTokenId||0});
+    wardrobe:p.wardrobe||{},charTokenId:p.charTokenId||0,boat:null,boatLvl:0});
   if(p.charTokenId)applyPeerSkin(p.id,p.charTokenId);
+  if(p.boat)setPeerBoat(p.id,p.boat);
   toast(`${p.name} is on the isle`,'good'); }
 function dropPeer(id){ const q=peers.get(id); if(!q)return;
   scene.remove(q.g); scene.remove(q.tag); if(q.sub)scene.remove(q.sub);
+  if(q.boat){ scene.remove(q.boat); disposeTree(q.boat); q.boat=null; }
   disposeTree(q.g); disposeTree(q.tag); if(q.sub)disposeTree(q.sub);
   peers.delete(id); }
 function clearPeers(){ for(const id of Array.from(peers.keys()))dropPeer(id); }
@@ -4808,6 +5008,12 @@ function updatePeers(dt){ if(!peers.size)return;
       pd.armR.rotation.x=q.act==='fish'?-0.85+Math.sin(clock*2)*0.05
         :(q.act==='mine'||q.act==='chop'||q.act==='dig')?-1.15+Math.sin(clock*13)*0.6:0;
       if(pd.legL){pd.legL.rotation.x=0;pd.legR.rotation.x=0;} }
+    /* The hull sits on the WATERLINE, at a constant height — never at q.y.
+       A sailing peer's y is the top of their DECK (hullOrigin + the deck height
+       for that hull), so placing the boat there would float it a deck above
+       the sea with its skipper standing on the mast. The hero keeps its own y
+       and therefore lands on the deck exactly where it belongs. */
+    if(q.boat){ q.boat.position.set(q.x,WATER_TOP+0.03,q.z); q.boat.rotation.y=q.face; }
     q.tag.position.set(q.x,q.y+2.75,q.z);
     if(q.sub)q.sub.position.set(q.x,q.y+3.15,q.z); } }
 
@@ -4942,6 +5148,14 @@ function startRealtime(){
   RFNet.on('welcome',d=>{ clearPeers();
     (d.peers||[]).forEach(addPeer);
     applyNodeSnapshot(d);
+    /* Re-assert that we are aboard. The boat message is sent once, when you
+       climb on — so a socket that opens LATER (signing in from the water, or a
+       reconnect after a flap) would have missed it, and the isle would see a
+       skipper standing on the waves. The mod may be absent, so this asks
+       carefully and does nothing if it cannot. */
+    try{ const helm=window.RF&&RF.api&&RF.api.angler&&RF.api.angler.helm&&RF.api.angler.helm();
+      if(helm&&helm.aboard)RFNet.send({t:'boat',on:true}); }
+    catch(e){ RF.err('boat:rejoin',e,'warn'); }
     chatPush('','· connected to '+(WORLD.name)+' · press T to chat ·','sys'); })
   .on('join',d=>addPeer(d.p))
   .on('leave',d=>{ const q=peers.get(d.id); if(q)toast(q.name+' sailed off'); dropPeer(d.id); })
@@ -4949,6 +5163,9 @@ function startRealtime(){
      has re-checked ownership on chain, so the token is one they really hold. */
   .on('skin',d=>{ if(!d||d.id==null)return; const q=peers.get(d.id); if(!q)return;
     q.charTokenId=d.charTokenId||0; applyPeerSkin(d.id,q.charTokenId); })
+  /* Aboard or ashore. The level is the server's, read from that account's save,
+     so a raft owner cannot appear to the isle in a galleon. */
+  .on('boat',d=>{ if(!d||d.id==null)return; setPeerBoat(d.id,d.lvl||0); })
   .on('snap',d=>{ for(const a of d.a||[]){ const q=peers.get(a[0]); if(!q)continue;
       q.tx=a[1]; q.ty=a[2]; q.tz=a[3]; q.tface=a[4]; q.act=a[5]||''; } })
   .on('chat',d=>chatPush(d.name,d.m,'',d.id))

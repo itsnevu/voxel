@@ -191,6 +191,19 @@ const CAVE_FISH = [
   [F('Abyss Anglerfish', 'legendary', 900), 2], [F('Wyrm Eel', 'legendary', 850), 1]
 ];
 
+/* Neon Shoals: a drowned city under permanent night, so like the cave it has no
+   night-only species — its glow fish ARE the everyday population. Weather still
+   runs, and the rain-fed and storm-fed entries are where its best money is. */
+const NEON_FISH = [
+  [F('Chrome Sardine', 'common', 12), 38], [F('Static Perch', 'common', 16), 32],
+  [F('Fiberfin', 'uncommon', 30), 24], [F('Circuit Snapper', 'uncommon', 42), 18],
+  [F('Voltage Eel', 'rare', 90), 12], [F('Datastream Tuna', 'rare', 120), 9],
+  [F('Hologram Koi', 'epic', 240), 5], [F('Reactor Sturgeon', 'epic', 260), 4],
+  [F('Neon Leviathan', 'legendary', 1100), 2],
+  [F('Acid Rainrunner', 'uncommon', 55), 11, 'rain'], [F('Sodium Carp', 'rare', 130), 6, 'rain'],
+  [F('Blackout Eel', 'epic', 320), 4, 'storm'], [F('Skyline Marlin', 'legendary', 1200), 1, 'storm']
+];
+
 /* ============================================================================
    WORLDS — themed islands unlocked at the Harbor.
    Render-only fields (palettes, sky/water hex) are intentionally omitted; the
@@ -202,10 +215,16 @@ export const WORLDS = {
   mine:    { name: 'The Great Mine', sub: 'world 2 · ore ×2',       cost: 2500,  seed: 57,  hMul: 1.3,  stoneH: 5, fishMul: 1.1, oreN: 30, oreYield: 2, treeMax: 40, fish: MINE_FISH },
   volcano: { name: 'Cinder Atoll',  sub: 'world 3 · danger pays',   cost: 8000,  seed: 191, hMul: 1.45, stoneH: 5, fishMul: 2.2, oreN: 22, oreYield: 1, treeMax: 26, fish: VOLCANO_FISH },
   frost:   { name: 'Frostbite Isle', sub: 'world 4 · frozen riches', cost: 15000, seed: 311, hMul: 1.2, stoneH: 6, fishMul: 4,   oreN: 26, oreYield: 1, treeMax: 60, fish: FROST_FISH },
-  cave:    { name: 'The Undermine', sub: 'the mining cave',         cost: 750,   seed: 777, hMul: 1.15, stoneH: 5, fishMul: 2,   oreN: 40, oreYield: 1, treeMax: 16, cave: true, fish: CAVE_FISH }
+  cave:    { name: 'The Undermine', sub: 'the mining cave',         cost: 750,   seed: 777, hMul: 1.15, stoneH: 5, fishMul: 2,   oreN: 40, oreYield: 1, treeMax: 16, cave: true, fish: CAVE_FISH },
+  /* The exclusive one. `nft` is the gate: only an account WEARING an Angler may
+     charter it, and charTokenId is written by /api/nft/equip alone, after the
+     chain has answered for the address SIWE proved. `night` is render-only on
+     the client but is carried here too, because the fish table depends on it —
+     no 'night' conditions, since it is never anything else. */
+  neon:    { name: 'Neon Shoals',   sub: 'world 5 · anglers only',  cost: 30000, seed: 909, hMul: 1.05, stoneH: 5, fishMul: 6, oreN: 18, oreYield: 2, treeMax: 10, night: true, nft: true, fish: NEON_FISH }
 };
 /* Sailing order at the Harbor. `cave` is NOT here: it is reached by the shaft. */
-export const WORLD_ORDER = ['isle', 'mine', 'volcano', 'frost'];
+export const WORLD_ORDER = ['isle', 'mine', 'volcano', 'frost', 'neon'];
 export const WORLD_KEYS = Object.keys(WORLDS);
 
 /** Combined species list (unique by name) — drives Fishdex completion. */
@@ -356,7 +375,7 @@ export function boatSeats(lvl) {
 /** Berths a captain of `lvl` can hand out — seats minus their own. */
 export const crewSlots = (lvl) => Math.max(0, boatSeats(lvl) - 1);
 /** Boat level needed to UNLOCK each isle. */
-export const BOAT_REQ = { isle: 0, mine: 1, volcano: 2, frost: 3 };
+export const BOAT_REQ = { isle: 0, mine: 1, volcano: 2, frost: 3, neon: 4 };
 
 /** True when `ores` covers every ingredient in `req`. */
 export function haveOres(ores, req) {

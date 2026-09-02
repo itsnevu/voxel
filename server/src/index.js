@@ -31,10 +31,10 @@ import cors from 'cors';
 import * as DB from './db.js';
 import { requireAuth, mountAuth } from './auth.js';
 import { mountWalletAuth } from './wallet.js';
-import { mountNft, ownsToken } from './nft.js';
+import { mountNft, ownsToken, tokensOf } from './nft.js';
 import * as EV from './events.js';
 import { HANDLERS, RATE } from './game/actions.js';
-import { newState, normalizeState, int0, BOATS, boatSeats, crewSlots, MAX_BOAT } from './game/rules.js';
+import { newState, normalizeState, int0, BOATS, boatSeats, crewSlots, MAX_BOAT, WORLDS } from './game/rules.js';
 import { payDividends, mktEpochNow } from './game/economy.js';
 // Both forms of the same module: the named imports are what the routes call,
 // the namespace is what admin.js feature-detects against (it looks for a kick
@@ -613,8 +613,73 @@ const ANTI_MACRO_MAX = 60;             // …and allow at most this many of one 
    here rather than exported because a refusal carries nothing but its message. */
 const CONTENDED_REFUSAL = /vein is already stripped|already felled that tree|resetting the line/i;
 
-app.post('/api/action/:name', requireAuth, requireNotBanned, (req, res) => {
+/**
+ * The gate on an isle that opens only for Angler holders.
+ *
+ * actions.js already refuses an nft world to an account whose charTokenId is 0,
+ * and that field is honest as far as it goes: only /api/nft/equip writes it, and
+ * only after asking the chain. But it is a record of a PAST check. Nothing
+ * clears it when the token is sold, so the sequence
+ *
+ *     mint -> equip (chain says yes) -> sell the Angler -> unlock the isle
+ *
+ * passes a gate on ownership the player no longer has. For a one-time purchase
+ * of a permanent isle that is worth one more round trip to the chain.
+ *
+ * Only on the UNLOCK. Sailing back to an isle already chartered is not
+ * re-checked — the charter, once bought, stays bought, which is what the
+ * handler's own comment promises players.
+ *
+ * Fail CLOSED: an unreachable RPC refuses the unlock rather than opening the
+ * door on a shrug. The player loses nothing but a minute; the alternative is
+ * that anyone who can make the RPC time out walks in.
+ *
+ * Returns true to continue, or false having already answered.
+ */
+async function anglerIsleGate(req, res) {
+  const world = String((req.body && req.body.world) || '');
+  const w = Object.prototype.hasOwnProperty.call(WORLDS, world) ? WORLDS[world] : null;
+  if (!w || !w.nft) return true;                    // not an exclusive isle
+
+  let state;
+  try { state = loadState(req.userId); }
+  catch (e) { if (e instanceof SaveUnreadable) { refuseUnreadable(res); return false; } throw e; }
+  if (state && Array.isArray(state.worlds) && state.worlds.includes(world)) return true;  // already chartered
+
+  const row = DB.users.findById(req.userId);
+  const addr = row && row.wallet ? String(row.wallet).toLowerCase() : '';
+  if (!addr) {
+    httpErr(res, 403, 'NO_WALLET', `${w.name} only opens for an Angler · connect a wallet that holds one`);
+    return false;
+  }
+
+  // fresh: the 60s cache is fine for a wardrobe, not for a gate.
+  const held = await tokensOf(addr, { fresh: true });
+  if (!held.ok) {
+    httpErr(res, 503, 'CHAIN_UNREACHABLE', 'Cannot reach the chain to check your Angler · try again in a moment');
+    return false;
+  }
+  if (!held.ids.length) {
+    httpErr(res, 403, 'NOT_OWNED', `${w.name} only opens for an Angler · this wallet holds none`);
+    return false;
+  }
+  /* The chain said yes. actions.js is a pure state transition with no way to
+     ask anything, so the answer is handed to it here. */
+  req.body.anglerOwned = true;
+  return true;
+}
+
+app.post('/api/action/:name', requireAuth, requireNotBanned, wrapAsync(async (req, res) => {
   const name = String(req.params.name || '');
+
+  /* Done BEFORE anything below touches the database. The rest of this route is
+     a run of synchronous better-sqlite3 calls that must not be interleaved, and
+     awaiting a network round trip in the middle of it would do exactly that. */
+  /* Whatever the client sent under this name is discarded before the gate runs:
+     it is the gate's word, never the caller's. Deleted unconditionally so an
+     action that never reaches the gate cannot carry a forged one either. */
+  if (req.body && typeof req.body === 'object') delete req.body.anglerOwned;
+  if (name === 'travel' && !(await anglerIsleGate(req, res))) return;
 
   // hasOwnProperty guard: '/api/action/constructor' must not resolve.
   if (!Object.prototype.hasOwnProperty.call(HANDLERS, name) || typeof HANDLERS[name] !== 'function') {
@@ -779,7 +844,7 @@ app.post('/api/action/:name', requireAuth, requireNotBanned, (req, res) => {
     ...(earned && (earned.ach.length || earned.deeds.length) ? { earned } : null),
     ...(dividends > 0 ? { dividends } : null)
   }));
-});
+}));
 
 /* ============================================================================
    POST /api/save — cosmetics and preferences ONLY.

@@ -1087,6 +1087,27 @@ export const HANDLERS = {
         return err(`Your ${BOATS[state.boatLvl].name} can't make that voyage · `
           + `build a ${BOATS[need].name} at the Harbor dock`);
       }
+      /* The exclusive charter. `charTokenId` is the proof, and it is proof worth
+         trusting: nothing but /api/nft/equip writes it, and that route only
+         writes after asking the chain whether THIS account's SIWE-proved address
+         holds that token. So "wearing an Angler" is a fact the server established
+         itself — a client cannot assert its way onto this isle. Taking the
+         Angler off later does not evict you; the charter, once bought, is yours. */
+      /* OWNING an Angler, not wearing one. These are different facts with
+         different lifetimes, and this gate wants the first.
+
+         It used to read state.charTokenId — "which Angler is the hero dressed
+         in" — which fails both ways. A holder who has taken the costume off to
+         look like the default hero owns an Angler and was refused; and someone
+         who wore one, sold it, and came back still had a non-zero field, so
+         they were let in on a check that had expired.
+
+         index.js's anglerIsleGate asks the chain directly, before this runs and
+         before anything touches the database, and stamps the answer here. The
+         field is deleted from the body first, so a client cannot assert it. */
+      if (w.nft && body.anglerOwned !== true) {
+        return err(`${w.name} only opens for an Angler · connect a wallet that holds one`);
+      }
       const cost = int0(w.cost);
       if (state.coins < cost) return err(`Not enough coins · ${w.name} costs ${cost}`);
       state.coins -= cost;

@@ -226,7 +226,9 @@ RF.mod('13-audio', function (RF) {
     mine:    { surf: 0.70, wind: 0.95, rain: 1.00, life: 0.80, harbour: 0.90, air: 0.30 },
     volcano: { surf: 0.80, wind: 1.05, rain: 0.90, life: 0.22, harbour: 0.80, air: 0.24 },
     frost:   { surf: 0.55, wind: 1.20, rain: 0.85, life: 0.30, harbour: 0.80, air: 0.20 },
-    cave:    { surf: 0.30, wind: 0.10, rain: 0.00, life: 0.00, harbour: 0.00, air: 0.55 }
+    cave:    { surf: 0.30, wind: 0.10, rain: 0.00, life: 0.00, harbour: 0.00, air: 0.55 },
+    // the drowned city: no wildlife left, but the rain on the signs is the loudest thing here
+    neon:    { surf: 0.70, wind: 0.45, rain: 1.35, life: 0.12, harbour: 1.10, air: 0.30 }
   };
   const PRO = PROFILE[WK] || PROFILE.isle;
 

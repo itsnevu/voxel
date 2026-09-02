@@ -1389,4 +1389,202 @@ RF.mod('01-angler', function (RF) {
     try { candidates(); nextShoalAt = RF.clock + rnd(45, 90); }
     catch (e) { RF.err('angler:start', e, 'warn'); }
   });
+
+  /* ---------------------------------------------------------------------- */
+  /* 16. THE HELM — the dock boat, taken out                                */
+  /*                                                                        */
+  /* Five hulls stand at the pier and until now every one was furniture:    */
+  /* bought, admired, never boarded. This section puts the player at the    */
+  /* wheel — short sails inside home waters, fishing off the deck — while   */
+  /* touching nothing the server owns: position is not terrain-checked      */
+  /* server-side, and boat luck is computed from state.boatLvl on both      */
+  /* ends, so being aboard changes WHERE you cast from, never what the      */
+  /* water gives you. The moored prop itself is sailed (found by its        */
+  /* sail/lantern userData — core does not export dockBoat), so core's own  */
+  /* bobbing, roll and sail flutter keep animating the hull for free while  */
+  /* only x/z/yaw are ours.                                                 */
+  /*                                                                        */
+  /* Movement piggybacks on core's water rule instead of fighting it:       */
+  /* tryMove() rejects every step onto water, so with the hero on a water   */
+  /* cell core movement is naturally inert and the helm below is the only   */
+  /* thing that answers the keys — same keys, opposite element. pWorld.step */
+  /* is zeroed every tick so the stride counter never crosses pi: no        */
+  /* footfall sfx and no leg-pumping while standing at a wheel.             */
+  /* ---------------------------------------------------------------------- */
+  let hAboard = false, hBoat = null, hHome = null, hShore = null, hHead = 0,
+      hWakeAcc = 0, hLeashSaid = -99, hBtn = null;
+  /* top-of-deck height per hull, boat-local: raft logs, dinghy sole, sloop
+     deck plank, trawler deck, galleon main deck — read off makeBoat() */
+  const HDECK = [0.2, 0.3, 0.66, 0.8, 0.94];
+  const HFWD = new RF.THREE.Vector3(-1, 0, -1).normalize();
+  const HRIGHT = new RF.THREE.Vector3().crossVectors(HFWD, new RF.THREE.Vector3(0, 1, 0)).normalize();
+  const hDir = new RF.THREE.Vector3();
+  const hLvl = () => clamp(RF.state.boatLvl | 0, 0, 4);
+  /* the leash: "mid-sea but not far out" is the whole brief. A finer hull
+     ranges further — a reason to build one that is not luck or seats. */
+  const hLeash = () => 9 + hLvl() * 3;
+
+  /* the realtime side (reelfortune3d wire): one message on board and one on
+     ashore, never per frame. The server reads the LEVEL from its own save --
+     this only says whether the captain is at the wheel. Offline, it is a
+     no-op; a disconnect while at sea is the server's to notice. */
+  function hWire(on) {
+    try { if (window.RFNet && RFNet.online && typeof RFNet.send === 'function') RFNet.send({ t: 'boat', on: !!on }); }
+    catch (e) { RF.err('angler:helm:wire', e, 'warn'); }
+  }
+
+  /* the one top-level group in the scene with rigging: dockBoat, wherever
+     core moored it (the harbor preview hull lives in its own dockScene) */
+  function hFind() {
+    try {
+      const ch = RF.scene.children;
+      for (let i = 0; i < ch.length; i++) {
+        const o = ch[i];
+        if (o && o.userData && Array.isArray(o.userData.sails) && Array.isArray(o.userData.lanterns)) return o;
+      }
+    } catch (e) { RF.err('angler:helm:find', e, 'warn'); }
+    return null;
+  }
+
+  function hBoard() {
+    if (hAboard) return;
+    const b = hFind();
+    if (!b) { fn.toast('No hull at the pier', 'bad'); return; }
+    hBoat = b;
+    hHome = { x: b.position.x, z: b.position.z, yaw: b.rotation.y };   // the mooring pose, owed back
+    hShore = { x: RF.pWorld.x, z: RF.pWorld.z };                       // where the boots left land
+    hHead = b.rotation.y;
+    hAboard = true;
+    RF.pWorld.x = b.position.x; RF.pWorld.z = b.position.z; RF.pWorld.face = hHead;
+    hWire(true);
+    try { RF.sfx.sail(); } catch (e) {}
+    fn.toast(fn.pixSVG('boat', 13) + ' You take the helm · sail with <span class="key">WASD</span>', 'good');
+    hSyncBtn();
+  }
+
+  function hAshore() {
+    if (!hAboard) return;
+    hAboard = false;
+    if (hBoat && hHome) { hBoat.position.x = hHome.x; hBoat.position.z = hHome.z; hBoat.rotation.y = hHome.yaw; }
+    hWire(false);
+    if (hShore) { RF.pWorld.x = hShore.x; RF.pWorld.z = hShore.z; }
+    RF.pWorld.y = fn.heightAt(RF.pWorld.x, RF.pWorld.z);   // land the y-ease on ground, not mid-air off the deck
+    try { RF.sfx.step('sand'); } catch (e) {}
+    fn.toast('Back on solid ground', 'good');
+    hSyncBtn();
+  }
+
+  /* -- the way aboard: one row in the harbor panel, where the boat already
+        lives in the player's head. No new key, and no fight over the pier's
+        E — core's harbor prompt and a shore-side board prompt would want
+        the same press at the same spot. -- */
+  function hSyncBtn() {
+    if (!hBtn) return;
+    hBtn.textContent = hAboard ? 'RETURN TO THE PIER' : 'SET SAIL';
+    hBtn.className = 'btn ' + (hAboard ? 'rose' : 'gold');
+  }
+  function hMount() {
+    const cur = document.getElementById('boatCur');
+    if (!cur || document.getElementById('rf-angler-helm')) return;
+    const row = document.createElement('div');
+    row.id = 'rf-angler-helm'; row.className = 'fishrow';
+    row.innerHTML = '<span class="nm">' + fn.pixSVG('boat', 15) + ' Take the wheel '
+      + '<span style="color:var(--faint);font-size:11px">sail the home waters · fish from the deck · range <span id="rf-angler-helm-r"></span>m</span></span>';
+    hBtn = document.createElement('button'); hBtn.type = 'button';
+    hBtn.onclick = () => { try { if (hAboard) hAshore(); else { fn.closeHarbor(); hBoard(); } } catch (e) { RF.err('angler:helm:btn', e); } };
+    row.appendChild(hBtn);
+    cur.parentNode.insertBefore(row, cur.nextSibling);   // sibling of #boatCur: renderHarbor()'s innerHTML never clears it
+    hSyncBtn();
+  }
+  RF.on('panel', (name, open) => {
+    try {
+      if (name !== 'harbor') return;
+      if (open) {
+        hMount(); hSyncBtn();
+        const r = document.getElementById('rf-angler-helm-r'); if (r) r.textContent = String(hLeash());
+      } else if (hAboard) {
+        /* BUILD swaps the moored group for a fresh hull at the dock pose; if
+           that happened from the deck, adopt the new hull out here */
+        const b = hFind();
+        if (b && b !== hBoat) {
+          hHome = { x: b.position.x, z: b.position.z, yaw: b.rotation.y };
+          b.position.x = RF.pWorld.x; b.position.z = RF.pWorld.z; b.rotation.y = hHead;
+          hBoat = b;
+        }
+      }
+    } catch (e) { RF.err('angler:helm:panel', e, 'warn'); }
+  });
+
+  /* aboard near the pier, E means ashore — everywhere else at sea the claim
+     passes, and core's cast prompt plus this mod's charged cast rule as if
+     the deck were any other bank */
+  RF.on('interact', () => {
+    try {
+      if (!hAboard) return;
+      if (RF.fishing.state !== 'idle' || ph !== 'idle') return;
+      const hp = RF.HARBOR_POS;
+      if (hp && Math.hypot(RF.pWorld.x - hp.x, RF.pWorld.z - hp.z) < 3.4) {
+        fn.hint('<span class="key">E</span> Step ashore');
+        if (RF.actEdge) hAshore();
+        return true;
+      }
+    } catch (e) { RF.err('angler:helm:int', e, 'warn'); }
+  });
+
+  RF.on('tick', dt => {
+    try {
+      if (!hAboard) return;
+      if (dt > 0.25) dt = 0.25;
+      const P = RF.pWorld, lvl = hLvl();
+      const deckY = (hBoat ? hBoat.position.y : WT + 0.03) + HDECK[lvl];
+      /* core eased y toward the seabed and set player.position before this
+         hook fires; both writes below land before the render pass, so the
+         hero stands on the deck riding the same bob the hull does */
+      P.y = deckY; P.step = 0;
+      if (RF.player) { RF.player.position.x = P.x; RF.player.position.y = deckY; RF.player.position.z = P.z; }
+      const busy = RF.panelOpen || RF.chatOpen || RF.fishing.state !== 'idle' || ph !== 'idle';
+      if (!busy) {
+        const ix = (RF.keys.right ? 1 : 0) - (RF.keys.left ? 1 : 0),
+              iy = (RF.keys.up ? 1 : 0) - (RF.keys.down ? 1 : 0);
+        if (ix || iy) {
+          hDir.set(0, 0, 0).addScaledVector(HFWD, iy).addScaledVector(HRIGHT, ix);
+          if (hDir.lengthSq() > 1e-4) {
+            hDir.normalize();
+            const sp = 3.6 + lvl * 0.9;                    // a raft wallows, a galleon strides
+            const nx = P.x + hDir.x * sp * dt, nz = P.z + hDir.z * sp * dt;
+            const hp = RF.HARBOR_POS, R = hLeash();
+            let ok = fn.isWaterAt(nx, nz) && Math.abs(nx) < RF.HALF - 1.5 && Math.abs(nz) < RF.HALF - 1.5;
+            if (ok && hp) {
+              const dNew = Math.hypot(nx - hp.x, nz - hp.z);
+              if (dNew > R && dNew > Math.hypot(P.x - hp.x, P.z - hp.z)) {
+                ok = false;
+                if (RF.clock - hLeashSaid > 4) { hLeashSaid = RF.clock;
+                  fn.toast('Open sea ahead · your ' + esc(RF.BOATS[lvl].name) + ' keeps to home waters', ''); }
+              }
+            }
+            if (ok) {
+              P.x = nx; P.z = nz; P.face = Math.atan2(hDir.x, hDir.z); hHead = P.face;
+              if (!reduced && (hWakeAcc += dt) > 0.22) { hWakeAcc = 0;
+                try { fn.fxBurst(P.x - hDir.x * 1.2, WT + 0.12, P.z - hDir.z * 1.2,
+                  { n: 3, cols: [0x7fdcff, 0xffffff], speed: 1.1, up: 1.2, size: 0.6, grav: 5 }); } catch (e) {}
+              }
+            }
+          }
+        }
+      }
+      /* the hull follows the helm a beat behind; y, roll, pitch and the
+         sails stay core's to animate */
+      if (hBoat) {
+        const k = Math.min(1, dt * 8);
+        hBoat.position.x = lerp(hBoat.position.x, P.x, k);
+        hBoat.position.z = lerp(hBoat.position.z, P.z, k);
+        hBoat.rotation.y = fn.lerpAngle(hBoat.rotation.y, hHead, Math.min(1, dt * 5));
+      }
+    } catch (e) { RF.err('angler:helm', e); }
+  });
+
+  /* read-only, like the rest of RF.api.angler: the aboard-state another mod
+     or the presence payload can carry to other players */
+  if (RF.api && RF.api.angler) RF.api.angler.helm =
+    () => ({ aboard: hAboard, lvl: hLvl(), yaw: +hHead.toFixed(2), range: hLeash() });
 });

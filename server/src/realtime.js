@@ -41,7 +41,7 @@ import { WebSocketServer } from 'ws';
 import * as DB from './db.js';
 import { sessions, users, saves } from './db.js';
 import { isBanned, isMuted } from './admin.js';
-import { WORLDS } from './game/rules.js';
+import { WORLDS, MAX_BOAT } from './game/rules.js';
 
 /* ------------------------------------------------------------- tuning ----- */
 const TICK_MS = 100;                   // position broadcast cadence (10Hz)
@@ -387,6 +387,10 @@ function peerPayload(p) {
     // 0 = the default hero. Read from the save on the server (see onHello), so
     // this is a token the player demonstrably owns, not one they claimed.
     charTokenId: p.charTokenId || 0,
+    // 0 = on foot. Also from the save: whether you are ABOARD is yours to say,
+    // but WHICH HULL is a claim of property, and a raft owner must not appear
+    // to the isle in a galleon.
+    boat: p.boat || 0,
   };
 }
 
@@ -597,11 +601,40 @@ function allowPos(peer, t) {
   return true;
 }
 
+/**
+ * Climbing aboard, or stepping off.
+ *
+ * The client says WHETHER — that is ephemeral state the server has no way to
+ * know and no reason to doubt. The server says WHICH HULL, read from the save,
+ * for the same reason it reads the equipped Angler there: the level is a claim
+ * of property and the account's own record is the only honest source.
+ *
+ * Sent once per mount and once per dismount, never per frame. The hull faces
+ * wherever its skipper faces, so the angle rides on `face` in the position
+ * stream that was already flowing — this adds nothing to the hot path.
+ */
+function onBoat(peer, msg) {
+  if (!peer.world) return;                 // pre-hello: nowhere to announce it
+
+  let next = 0;
+  if (msg && msg.on) {
+    try {
+      const st = saves.get(peer.userId);
+      const lvl = st && st.boatLvl;
+      if (Number.isInteger(lvl) && lvl > 0) next = Math.min(lvl, MAX_BOAT);
+    } catch (e) { console.error('[rt.boat]', e); return; }
+    if (!next) return;                     // no hull owned: nothing to show
+  }
+
+  if (peer.boat === next) return;
+  peer.boat = next;
+  roomSend(peer.world, { t: 'boat', id: peer.id, lvl: next });
+}
+
 function onHello(peer, msg, t) {
   if (t - peer.helloAt < HELLO_GAP) return;
   peer.helloAt = t;
 
-  const world = helloWorld(msg.world);
   peer.title = cleanTitle(msg.title);
   peer.wardrobe = cleanWardrobe(msg.wardrobe);
 
@@ -617,13 +650,30 @@ function onHello(peer, msg, t) {
      above are bounded numbers and cost nothing to fake, but this one is a claim
      of property, so it comes from the server's own records. */
   peer.charTokenId = 0;
+  let save = null;
   try {
-    const st = saves.get(peer.userId);
-    const id = st && st.charTokenId;
+    save = saves.get(peer.userId);
+    const id = save && save.charTokenId;
     if (Number.isInteger(id) && id > 0) peer.charTokenId = id;
   } catch (e) { console.error('[rt.char]', e); }
 
-  // A second hello means the player sailed: the old isle sees them leave.
+  /* An EXCLUSIVE isle's room is part of what it sells: being seen on Neon Shoals
+     is the point of Neon Shoals, so standing there is checked against the save's
+     charter list rather than taken from `msg`. The ordinary isles stay open on
+     the client's word — a room is only presence and chat, the loot is decided
+     from `state.world` in actions.js either way, and a player who has not paid
+     cannot even load one of those isles without the server saying so first.
+     Being turned away is not an error: a stale `reelfortune3d-world` already
+     lands on the starting isle, and this takes the same forgiving path. */
+  const asked = helloWorld(msg.world);
+  const gated = !!(WORLDS[asked] && WORLDS[asked].nft);
+  const owned = save && Array.isArray(save.worlds) ? save.worlds : [];
+  const world = !gated || owned.includes(asked) ? asked : DEFAULT_WORLD;
+
+  /* A second hello means the player sailed: the old isle sees them leave. The
+     boat does not come with them — the new isle has its own water, and they
+     will say so again if they are aboard there. */
+  peer.boat = 0;
   if (peer.world) leaveRoom(peer);
 
   const room = joinRoom(peer, world);
@@ -823,6 +873,7 @@ function onMessage(peer, data, isBinary) {
     switch (msg.t) {
       case 'hello':  onHello(peer, msg, t);  break;
       case 'pos':    onPos(peer, msg, t);    break;
+      case 'boat':   onBoat(peer, msg);      break;
       case 'chat':   onChat(peer, msg, t);   break;
       case 'mute':   onMute(peer, msg);      break;
       case 'unmute': onUnmute(peer, msg);    break;
@@ -993,6 +1044,7 @@ function onConnection(ws, req) {
     title: '',
     wardrobe: {},
     charTokenId: 0,
+    boat: 0,          // 0 = on foot; otherwise the hull level from THIS account's save
     x: 0, y: 0, z: 0, face: 0, act: '',
     dirty: false,
     gone: false,

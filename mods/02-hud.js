@@ -363,7 +363,8 @@ RF.mod('02-hud', function (RF) {
     const b = activeBait();
     if (b) out.push({ id: 'bait', tone: 'p', ic: pix('gem', 13), name: b.name,
       sub: b.min ? b.min + '+ only' : 'no floor, just luck', time: '×' + (S.bait[S.baitId] | 0), pct: 0, u: 600 });
-    if (F.isNight() && !RF.WORLD.cave) out.push({ id: 'night', tone: 'b', ic: pix('moon', 13), name: 'dark water',
+    // a world whose sky never moves would fly this pill forever — it says nothing there
+    if (F.isNight() && !RF.WORLD.cave && !RF.WORLD.night) out.push({ id: 'night', tone: 'b', ic: pix('moon', 13), name: 'dark water',
       sub: 'night species are up', time: '', pct: 0, u: 500 });
     guard('rail-derby', function () {
       const d = byId('derby');
@@ -667,7 +668,7 @@ RF.mod('02-hud', function (RF) {
      a few seconds and survives any future retuning of the day length. */
   let dayLen = 420, lastDayT = RF.dayT, dAcc = 0, tAcc = 0;
   const measureDay = function (dt) {
-    if (RF.WORLD.cave) return;
+    if (RF.WORLD.cave || RF.WORLD.night) return;   // dayT is pinned: there is no rate to measure
     const d = RF.dayT - lastDayT; lastDayT = RF.dayT;
     if (d > 0 && d < 0.02) { dAcc += d; tAcc += dt;
       if (tAcc > 4) { const est = tAcc / dAcc; if (est > 60 && est < 3000) dayLen = dayLen * 0.6 + est * 0.4; tAcc = 0; dAcc = 0; } }
@@ -688,9 +689,15 @@ RF.mod('02-hud', function (RF) {
   const paintCast = function () {
     if (!RF.running || !cfg.forecast) { castEl.classList.add('hd-off'); return; }
     castEl.classList.remove('hd-off');
-    if (RF.WORLD.cave) {
-      castEl.innerHTML = '<div class="hd-c1" style="color:#57b7ff">' + pix('moon', 13) + ' endless dark</div>'
-        + '<div class="hd-c2">no dawn reaches down here — every glow species is <b>always up</b>.</div>';
+    if (RF.WORLD.cave || RF.WORLD.night) {
+      /* Both kinds of eternal-night isle, but for opposite reasons: one is under the rock,
+         the other is a city the sun gave up on. Neither has a countdown to show. */
+      const deep = !!RF.WORLD.cave;
+      castEl.innerHTML = '<div class="hd-c1" style="color:#57b7ff">' + pix('moon', 13)
+          + (deep ? ' endless dark' : ' endless night') + '</div>'
+        + '<div class="hd-c2">' + (deep ? 'no dawn reaches down here' : 'the sun never comes back over this city')
+        + ' — every glow species is <b>always up</b>.'
+        + (deep ? '' : ' Watch the <b>rain</b> instead.') + '</div>';
       return;
     }
     const night = F.isNight(), dayT = RF.dayT;

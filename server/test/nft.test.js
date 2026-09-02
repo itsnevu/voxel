@@ -262,6 +262,97 @@ describe('nft', () => {
     });
   });
 
+  /* ------------------------------------------------ the exclusive isle ---- */
+
+  describe('an isle that only opens for Angler holders', () => {
+    let chain, server, owned;
+
+    before(async () => {
+      owned = [];
+      chain = await startFakeChain(() => ({
+        body: { jsonrpc: '2.0', id: 1, result: encodeUintArray(owned) },
+      }));
+      server = await startServer({
+        env: { NFT_RPC_URL: chain.url, NFT_CONTRACT: CONTRACT, NFT_CHAIN_ID: '31337' },
+      });
+    });
+    after(async () => {
+      await server.stop();
+      await chain.stop();
+    });
+
+    const travel = (token, world) =>
+      server.post('/api/action/travel', { token, body: { world } });
+
+    it('refuses the isle to an account with no wallet at all', async () => {
+      const user = await registerUser(server, { username: uniqueName('landlubber') });
+      const res = await travel(user.token, 'neon');
+      assert.equal(res.status, 403);
+      assert.equal(res.body.code, 'NO_WALLET');
+    });
+
+    it('closes the isle once the Angler has been sold', async () => {
+      const user = await walletUser(server);
+
+      /* Own one, wear it: this is the state actions.js reads, and on its own it
+         would let the unlock through for ever after. */
+      owned = [21];
+      assert.equal((await server.post('/api/nft/equip',
+        { token: user.token, body: { tokenId: 21 } })).status, 200);
+
+      // sold — the chain no longer lists it, but charTokenId still says 21
+      owned = [];
+      const me = await server.get('/api/state', { token: user.token });
+      assert.equal(me.body.state.charTokenId, 21,
+        'the stale record is the whole point of this test');
+
+      const res = await travel(user.token, 'neon');
+      assert.equal(res.status, 403);
+      assert.equal(res.body.code, 'NOT_OWNED');
+    });
+
+    it('ignores a client that simply claims it owns one', async () => {
+      /* actions.js reads body.anglerOwned, so the obvious attack is to send it.
+         The route deletes the field before the gate runs and only the gate may
+         set it — this is the test that says so. */
+      const user = await walletUser(server);
+      owned = [];
+      const res = await server.post('/api/action/travel',
+        { token: user.token, body: { world: 'neon', anglerOwned: true } });
+      assert.equal(res.status, 403);
+      assert.equal(res.body.code, 'NOT_OWNED');
+    });
+
+    it('opens for a holder who is wearing the default hero', async () => {
+      /* Owning and wearing are different facts. Someone who took the costume
+         off still holds the token, and the isle is gated on holding. */
+      const user = await walletUser(server);
+      owned = [33];
+      assert.equal((await server.post('/api/nft/equip',
+        { token: user.token, body: { tokenId: 33 } })).status, 200);
+      assert.equal((await server.post('/api/nft/equip',
+        { token: user.token, body: { tokenId: 0 } })).status, 200);   // take it off
+
+      const me = await server.get('/api/state', { token: user.token });
+      assert.equal(me.body.state.charTokenId, 0, 'wearing nothing');
+
+      const res = await travel(user.token, 'neon');
+      assert.notEqual(res.status, 403, `a holder must not be refused: ${res.text}`);
+    });
+
+    it('refuses rather than opens when the chain cannot be reached', async () => {
+      const user = await walletUser(server);
+      owned = [7];
+      await server.post('/api/nft/equip', { token: user.token, body: { tokenId: 7 } });
+
+      const stop = await chain.stop();          // the RPC goes dark
+      const res = await travel(user.token, 'neon');
+      assert.equal(res.status, 503, 'an unreachable chain must not open the door');
+      assert.equal(res.body.code, 'CHAIN_UNREACHABLE');
+      return stop;
+    });
+  });
+
   /* ------------------------------------------------- what others can see -- */
 
   describe('showing an Angler to the rest of the isle', () => {
