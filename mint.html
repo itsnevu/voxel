@@ -94,6 +94,10 @@ h1,h2,h3{font-family:var(--f-disp);font-weight:900;letter-spacing:-.02em;line-he
 
 /* ---- nav ----------------------------------------------------------------- */
 .nav{position:sticky;top:0;z-index:50;background:var(--ground);border-bottom:var(--edge) solid var(--ink)}
+/* The nav is sticky and 77px tall, so an in-page anchor lands underneath it
+   unless the scroll stops short. One rule covers every target on the page. */
+html{scroll-padding-top:92px;scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
 .nav-in{max-width:1220px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:14px}
 .brand{display:flex;align-items:center;gap:10px;text-decoration:none;
   font-family:var(--f-disp);font-weight:900;font-size:17px;letter-spacing:-.01em}
