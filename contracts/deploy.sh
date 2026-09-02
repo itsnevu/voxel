@@ -31,7 +31,7 @@
 #   RPC_URL         JSON-RPC endpoint            (default http://127.0.0.1:8545)
 #   PRIVATE_KEY     deployer key, 0x-prefixed    (REQUIRED) -> becomes owner()
 #   MAX_SUPPLY      collection size              (default 1000)
-#   MINT_PRICE_WEI  price per token in wei       (default 5000000000000000 = 0.005 ether)
+#   MINT_PRICE_WEI  price per token in wei       (default 420000000000000 = 0.00042 ether ≈ $1)
 #   MAX_PER_WALLET  public-mint cap per wallet   (default 5)
 #   BASE_URI        metadata prefix, WITH the trailing slash (REQUIRED)
 #                   e.g. https://reelfortune.example/nft/json/
@@ -59,7 +59,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 RPC_URL="${RPC_URL:-http://127.0.0.1:8545}"
 MAX_SUPPLY="${MAX_SUPPLY:-1000}"
-MINT_PRICE_WEI="${MINT_PRICE_WEI:-5000000000000000}"
+MINT_PRICE_WEI="${MINT_PRICE_WEI:-420000000000000}"
 MAX_PER_WALLET="${MAX_PER_WALLET:-5}"
 ACTIVATE="${ACTIVATE:-0}"
 

@@ -1800,6 +1800,9 @@ app.use(express.static(GAME_DIR, {
     // The HTML shell must never be cached or players get stale client code
     // after a deploy; hashed-free assets get a short revalidating window.
     if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+    // The minted collection is immutable: an angler's PNG and its metadata never
+    // change once generated, so they get the full year and skip revalidation.
+    else if (/[\\/]nft[\\/](images|json)[\\/]/.test(filePath)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     else res.setHeader('Cache-Control', 'public, max-age=300');
   }
 }));

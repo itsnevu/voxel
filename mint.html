@@ -201,6 +201,8 @@ h1 .gold{color:var(--gold);-webkit-text-stroke:3px var(--ink);paint-order:stroke
   text-transform:uppercase;opacity:.66;margin-bottom:3px}
 .row .val{font-family:var(--f-disp);font-weight:900;font-size:19px;line-height:1.1;
   word-break:break-all}
+.row .usd{display:block;font-family:var(--f-mono);font-size:10px;letter-spacing:.06em;
+  opacity:.55;margin-top:4px;min-height:12px}
 
 .stepper{display:flex;align-items:center;justify-content:space-between;gap:12px;
   background:var(--paper-2);border:2px solid var(--ink);border-radius:14px;padding:10px 13px;margin-bottom:13px}
@@ -410,10 +412,12 @@ a:focus-visible,button:focus-visible{outline:3px solid var(--ink);outline-offset
         <div class="row">
           <span class="lab">Price per angler</span>
           <span class="val"><span id="priceText">—</span> <span data-currency>ETH</span></span>
+          <span class="usd" id="priceUsd"></span>
         </div>
         <div class="row">
           <span class="lab">Total</span>
           <span class="val" id="totalText">—</span>
+          <span class="usd" id="totalUsd"></span>
         </div>
       </div>
 

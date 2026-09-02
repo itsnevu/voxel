@@ -353,7 +353,7 @@ forge inspect ReelFortuneAnglers abi --json > ReelFortuneAnglers.abi.json   # re
 | `RPC_URL` | `http://127.0.0.1:8545` | endpoint JSON-RPC |
 | `PRIVATE_KEY` | *(wajib)* | key deployer → jadi `owner()` |
 | `MAX_SUPPLY` | `1000` | ukuran koleksi |
-| `MINT_PRICE_WEI` | `5000000000000000` | 0.005 ether |
+| `MINT_PRICE_WEI` | `420000000000000` | 0.00042 ether (≈ $1 saat ETH $2.4k) |
 | `MAX_PER_WALLET` | `5` | cap per wallet untuk `mint()` |
 | `BASE_URI` | *(wajib)* | contoh `https://situs/nft/json/` — **pakai slash di akhir** |
 | `ACTIVATE=1` | off | langsung `setSaleActive(true)` |

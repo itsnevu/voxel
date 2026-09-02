@@ -22,7 +22,7 @@
     supply: null, maxSupply: null, price: null, maxPerWallet: null, saleActive: null,
     mintedBy: null, balance: null, tokens: [], qty: 1,
     rpcOk: null, status: 'idle', message: '', txHash: null, minted: [],
-    rarity: null, collection: null, seed: 0, strip: []
+    rarity: null, collection: null, seed: 0, strip: [], usdRate: null
   };
   var events = new EventTarget();
   function emit(type, detail) { try { events.dispatchEvent(new CustomEvent(type, { detail: detail })); } catch (e) { /* old engine */ } }
@@ -92,6 +92,25 @@
     document.querySelectorAll('[data-currency]').forEach(function (el) { el.textContent = SYM; });
   }
 
+  // ---- padanan USD (hiasan; halaman tetap jalan penuh kalau ini gagal) ----
+  // Hanya untuk chain yang gasnya ETH — kurs yang diambil kurs ETH.
+  function usdText(wei) {
+    if (wei == null || state.usdRate == null) return '';
+    var v = Number(wei) / 1e18 * state.usdRate;
+    return '\u2248 $' + v.toFixed(v < 100 ? 2 : 0);
+  }
+
+  function loadUsdRate() {
+    if (SYM !== 'ETH' || !window.fetch) return;
+    fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        var v = j && j.ethereum && j.ethereum.usd;
+        if (typeof v === 'number' && v > 0) { state.usdRate = v; renderSupply(); }
+      })
+      .catch(function () { /* offline / diblokir: baris USD dibiarkan kosong */ });
+  }
+
   function renderSupply() {
     var minted = state.supply == null ? null : Number(state.supply);
     var max = state.maxSupply == null ? SIZE : Number(state.maxSupply);
@@ -101,8 +120,10 @@
     var t = $('supplyText'); if (t) t.innerHTML = '<b>' + (minted == null ? '—' : minted.toLocaleString()) + '</b> / ' + max.toLocaleString() + ' minted';
     var p = $('supplyPct'); if (p) p.textContent = minted == null ? '' : (pct >= 99.95 && minted < max ? '99.9' : pct.toFixed(pct < 10 && pct > 0 ? 1 : 0)) + '%';
     var pr = $('priceText'); if (pr) pr.textContent = state.price == null ? '—' : E.formatEther(state.price, 5);
+    var pu = $('priceUsd'); if (pu) pu.textContent = usdText(state.price);
     var total = $('totalText');
     if (total) total.textContent = state.price == null ? '—' : E.formatEther(state.price * BigInt(state.qty), 5) + ' ' + SYM;
+    var tu = $('totalUsd'); if (tu) tu.textContent = state.price == null ? '' : usdText(state.price * BigInt(state.qty));
     var mx = $('qtyMax'); if (mx) mx.textContent = state.maxPerWallet == null ? '' : 'max ' + Number(state.maxPerWallet) + ' per wallet';
     var q = $('qtyVal'); if (q) q.textContent = String(state.qty);
     var soldOut = minted != null && minted >= max;
@@ -487,7 +508,7 @@
   }
 
   function boot() {
-    wire(); renderAll(); buildStrip();
+    wire(); renderAll(); buildStrip(); loadUsdRate();
     var t = $('titleChain'); if (t) t.textContent = chain.name;
     Promise.all([loadRarity(), readChain()]).then(function () { emit('ready', { rpcOk: state.rpcOk }); });
   }
