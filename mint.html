@@ -406,7 +406,9 @@ footer .lab{display:block;font-size:9.5px;letter-spacing:.13em;text-transform:up
 footer a{color:var(--gold)}
 footer .brand{color:var(--ground);margin-bottom:8px}
 footer code{word-break:break-all}
-.foot-in .right{text-align:right;max-width:42ch}
+.foot-in .right{text-align:right;max-width:54ch}
+/* the arrow is part of the label, never the end of a line without it */
+.foot-in .right a[href="index.html"]:not(.brand){white-space:nowrap}
 @media (max-width:700px){.foot-in .right{text-align:left}}
 
 /* ---- sale closed ----------------------------------------------------------
@@ -423,6 +425,66 @@ body.mint-closed #mintbox::before{content:"NOT OPEN YET";display:block;
 /* Focus must stay visible on every interactive thing — the hard shadows make a
    subtle ring impossible to see, so it is a solid offset outline instead. */
 a:focus-visible,button:focus-visible{outline:3px solid var(--ink);outline-offset:3px;border-radius:4px}
+
+/* ==========================================================================
+   DOCS — the long answers. Everything the four steps above leave out, in the
+   order somebody actually asks it: what this is, what it costs, what the
+   contract does, how to reach the chain, what the art is made of, and what
+   happens when something goes wrong.
+   ========================================================================== */
+.docs{display:grid;gap:22px}
+.doc{border:var(--edge) solid var(--ink);background:var(--paper);box-shadow:var(--shadow);padding:20px 22px}
+.doc>h3{font-family:var(--f-disp);font-weight:800;font-size:clamp(17px,2.4vw,22px);
+  letter-spacing:-.01em;margin:0 0 4px}
+.doc>.lead{font-family:var(--f-ui);font-size:14px;line-height:1.6;margin:0 0 16px;opacity:.82}
+.doc p{font-family:var(--f-ui);font-size:14px;line-height:1.65;margin:0 0 12px}
+.doc p:last-child{margin-bottom:0}
+.doc a{color:inherit;text-decoration-thickness:2px;text-underline-offset:3px}
+
+/* a fact table — label left, value right, monospace so digits line up */
+.facts{display:grid;gap:0;border-top:2px solid var(--ink)}
+.facts div{display:flex;justify-content:space-between;align-items:baseline;gap:14px;
+  padding:9px 2px;border-bottom:2px solid rgba(5,25,28,.14)}
+.facts dt,.facts .k{font-family:var(--f-ui);font-weight:700;font-size:13px;text-transform:uppercase;
+  letter-spacing:.04em;opacity:.62;flex:0 0 auto}
+.facts dd,.facts .v{font-family:var(--f-mono);font-size:13px;margin:0;text-align:right;
+  word-break:break-all;font-variant-numeric:tabular-nums}
+
+/* a copyable block: contract addresses, RPC urls, a tokenURI */
+.doc pre{font-family:var(--f-mono);font-size:12.5px;line-height:1.6;margin:0 0 12px;padding:12px 14px;
+  border:2px solid var(--ink);background:#05191c;color:#d9fff9;overflow-x:auto;
+  -webkit-overflow-scrolling:touch}
+.doc code{font-family:var(--f-mono);font-size:.94em;background:rgba(5,25,28,.08);padding:1px 5px;
+  border-radius:3px;word-break:break-word}
+.doc pre code{background:none;padding:0;color:inherit}
+
+/* trait ladder */
+.layers{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:8px;margin:0 0 14px}
+.layers span{font-family:var(--f-mono);font-size:12.5px;display:flex;justify-content:space-between;
+  gap:8px;border:2px solid var(--ink);padding:6px 9px;background:#fff}
+.layers b{font-weight:700}
+
+/* question and answer */
+.qa{border-top:2px solid var(--ink)}
+.qa details{border-bottom:2px solid rgba(5,25,28,.14)}
+.qa summary{font-family:var(--f-ui);font-weight:700;font-size:14px;padding:11px 2px;cursor:pointer;
+  list-style:none;display:flex;justify-content:space-between;gap:12px;align-items:center}
+.qa summary::-webkit-details-marker{display:none}
+.qa summary::after{content:"+";font-family:var(--f-mono);font-weight:700;font-size:17px;flex:0 0 auto}
+.qa details[open] summary::after{content:"\2212"}
+.qa summary:hover{text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:3px}
+.qa .a{padding:0 2px 14px;font-family:var(--f-ui);font-size:13.5px;line-height:1.65;opacity:.86}
+.qa .a p{font-size:inherit}
+
+/* the one box that is a warning, not a fact */
+.doc.warn{background:var(--gold)}
+.doc.warn .facts div{border-bottom-color:rgba(5,25,28,.22)}
+
+@media (max-width:620px){
+  .doc{padding:16px 15px}
+  .facts div{flex-direction:column;gap:2px}
+  .facts dd,.facts .v{text-align:left}
+}
 </style>
 </head>
 <body>
@@ -437,6 +499,7 @@ a:focus-visible,button:focus-visible{outline:3px solid var(--ink);outline-offset
       <a class="txt" href="#anglers">Anglers</a>
       <a class="txt" href="#traits">Traits</a>
       <a class="txt" href="#how">How it works</a>
+      <a class="txt" href="#docs">Docs</a>
       <a class="btn" href="index.html">▶ Play</a>
       <button class="btn solid" id="navConnect" type="button">Connect</button>
     </div>
@@ -602,6 +665,189 @@ a:focus-visible,button:focus-visible{outline:3px solid var(--ink);outline-offset
           <p>Sign in to Reel Fortune with the same wallet and your angler becomes your
              character. The server checks ownership on chain, so it is genuinely yours.</p>
         </div>
+      </div>
+    </div>
+  </section>
+
+
+  <section class="band" id="docs">
+    <div class="wrap">
+      <div class="sec-head">
+        <div>
+          <h2>Documentation</h2>
+          <p>The long answers. Every number here is read off the contract and the collection files, not written by hand.</p>
+        </div>
+        <span class="meta"><a href="#how" class="txt" style="text-decoration:underline">back to the four steps</a></span>
+      </div>
+
+      <div class="docs">
+
+        <div class="doc">
+          <h3>What an Angler is</h3>
+          <p class="lead">A cosmetic collectible, and nothing else.</p>
+          <p>Every Angler is the hero of <a href="index.html">Reel Fortune</a> re-rolled across thirteen
+             drawn layers — a different island behind them, a different hat, tool, outfit and companion.
+             The art is generated once, stored as a flat PNG, and never changes after minting.</p>
+          <p><b>It gives you no advantage in the game.</b> It does not raise your odds, your prices, your
+             yields or your luck. The game's economy has no idea the collection exists — an Angler cannot
+             be won by a catch, a spin, a dig or a drop, and nothing you own changes a single roll. It is
+             bought at the dock and worn, the way a hat is worn.</p>
+        </div>
+
+        <div class="doc">
+          <h3>The numbers</h3>
+          <p class="lead">All of it fixed in the contract at deploy time.</p>
+          <dl class="facts">
+            <div><dt>Collection</dt><dd>Reel Fortune Anglers (RFA)</dd></div>
+            <div><dt>Standard</dt><dd>ERC-721 + ERC-2981</dd></div>
+            <div><dt>Supply</dt><dd>1,000 — a hard cap, never raisable</dd></div>
+            <div><dt>Price</dt><dd id="docPrice">&#8212;</dd></div>
+            <div><dt>Per wallet</dt><dd id="docCap">&#8212;</dd></div>
+            <div><dt>Minted so far</dt><dd id="docMinted">&#8212;</dd></div>
+            <div><dt>Royalty</dt><dd>5% (500 bps), signalled by ERC-2981</dd></div>
+            <div><dt>Reveal delay</dt><dd>none — the token is its art the moment it lands</dd></div>
+          </dl>
+          <p style="margin-top:14px">Ids are handed out in order. Which Angler you get is whichever one that
+             id already is; nothing is shuffled or rerolled after the fact, and every image in the gallery
+             above is on this page before anybody has bought it.</p>
+        </div>
+
+        <div class="doc">
+          <h3>The contract</h3>
+          <p class="lead">Dependency-free, and short enough to read in one sitting.</p>
+          <dl class="facts">
+            <div><dt>Address</dt><dd id="docContract">&#8212;</dd></div>
+            <div><dt>Network</dt><dd id="docNetwork">&#8212;</dd></div>
+            <div><dt>Explorer</dt><dd><a id="docExplorer" href="#" rel="noopener">&#8212;</a></dd></div>
+          </dl>
+          <p style="margin-top:14px">The only payable function is <code>mint(uint256 quantity)</code>. It
+             checks that the sale is open, that the quantity is sane, that the supply and your wallet cap
+             both have room, and that the value sent is exactly price &times; quantity — then it mints, and
+             touches nothing else. Everything the owner can change is a named function
+             (<code>setSaleActive</code>, <code>setMintPrice</code>, <code>setMaxPerWallet</code>,
+             <code>setBaseURI</code>, <code>setRoyalty</code>) and none of them can mint to you, take from
+             you, or move a token you hold.</p>
+          <p>When a mint is refused, the reason comes back as a named error rather than a bare revert:
+             <code>SaleNotActive</code>, <code>InvalidQuantity</code>, <code>SoldOut</code>,
+             <code>WalletLimit</code>, <code>WrongPayment</code>. This page turns each of those into a
+             sentence instead of a hex string.</p>
+        </div>
+
+        <div class="doc" id="net-setup">
+          <h3>Getting on the network</h3>
+          <p class="lead">If your wallet has never seen this chain, the Connect button offers to add it. These are the same values, in case you would rather type them yourself.</p>
+          <dl class="facts">
+            <div><dt>Chain name</dt><dd id="docChainName">&#8212;</dd></div>
+            <div><dt>Chain id</dt><dd id="docChainId">&#8212;</dd></div>
+            <div><dt>Currency</dt><dd id="docCurrency">&#8212;</dd></div>
+            <div><dt>RPC</dt><dd id="docRpc">&#8212;</dd></div>
+          </dl>
+          <p style="margin-top:14px">This page only ever <em>reads</em> through that RPC — the supply
+             counter, the price, your balance. The mint transaction itself is built and signed by your
+             wallet, through whatever endpoint your wallet is configured to use.</p>
+        </div>
+
+        <div class="doc">
+          <h3>Traits &amp; rarity</h3>
+          <p class="lead">Thirteen layers, one hundred options between them.</p>
+          <div class="layers">
+            <span><b>Background</b> 12</span><span><b>Aura</b> 4</span>
+            <span><b>Back Gear</b> 5</span><span><b>Pants</b> 6</span>
+            <span><b>Outfit</b> 10</span><span><b>Skin</b> 6</span>
+            <span><b>Eyes</b> 8</span><span><b>Mouth</b> 6</span>
+            <span><b>Hair</b> 7</span><span><b>Neckwear</b> 7</span>
+            <span><b>Headwear</b> 12</span><span><b>Tool</b> 9</span>
+            <span><b>Companion</b> 8</span>
+          </div>
+          <p>Those multiply out to <b>175,575,859,200</b> possible anglers. One thousand were rolled, each
+             checked unique against every one before it. Rarity is not a grade anybody assigned — it is
+             simply how often a trait was drawn, and the
+             <a href="#traits">traits panel above</a> counts it straight out of the minted thousand.</p>
+          <p>An Angler with rare traits is not worth more <em>in the game</em>, because the game does not
+             read traits at all. What it is, is rarer.</p>
+        </div>
+
+        <div class="doc">
+          <h3>Metadata &amp; art</h3>
+          <p class="lead">Plain files on this domain, served as-is.</p>
+          <p>Every token's <code>tokenURI(id)</code> resolves to a JSON file with the shape below. Both the
+             JSON and the PNG it points at are static — no gateway, no indexer, no marketplace in the loop.</p>
+          <pre><code>GET /nft/json/1.json
+
+{
+  "name": "Reel Fortune Angler #1",
+  "description": "…",
+  "image": "https://reelfortune.xyz/nft/images/1.png",
+  "dna": "1c9dca47f6b26e81fed34f93338afde0b009dd9e",
+  "edition": 1,
+  "attributes": [ { "trait_type": "Background", "value": "…" }, … ]
+}</code></pre>
+          <p>Images are 1024&times;1024 PNGs with a transparent-composited voxel render. <code>dna</code> is
+             the hash of the trait combination that produced the edition, which is what made the uniqueness
+             check possible while the collection was being rolled.</p>
+        </div>
+
+        <div class="doc">
+          <h3>Wearing it in the game</h3>
+          <p class="lead">Optional, cosmetic, and checked on chain.</p>
+          <p>Sign in to <a href="index.html">Reel Fortune</a> with the same wallet and your Angler becomes
+             your character on the isle. The server reads ownership from the chain rather than trusting the
+             browser, so an Angler you do not hold cannot be worn — and one you sell stops being yours the
+             moment it moves.</p>
+          <p>The wallet sign-in is an <b>identity</b> only. It signs a plain-text message to prove an
+             address is yours. No transaction is built, no funds are touched, and nothing about your
+             balance is read.</p>
+        </div>
+
+        <div class="doc warn">
+          <h3>What this page will never do</h3>
+          <p class="lead">Worth knowing, so anything that does it is a fake.</p>
+          <p>It will never ask for your seed phrase or private key. It will never ask you to approve a
+             token, sign a blank message, or grant an allowance. The only transaction it will ever build is
+             a <code>mint</code> for a quantity you picked, at a price shown before you press the button.</p>
+          <p>There is no allowlist, no presale, no Discord role, no airdrop, and no marketplace link. If you
+             are reading otherwise anywhere, it did not come from here. The only address that matters is the
+             one printed in this page's footer.</p>
+        </div>
+
+        <div class="doc">
+          <h3>When something goes wrong</h3>
+          <p class="lead">The five refusals that actually happen.</p>
+          <div class="qa">
+            <details>
+              <summary>The button says the sale is not open</summary>
+              <div class="a"><p>Either the contract's <code>saleActive</code> is false, or this site's own
+                 switch is off. The second one is a server setting and closes the buy path while leaving the
+                 gallery, the traits and this documentation up. Nothing is for sale in that state, and no
+                 transaction can be built.</p></div>
+            </details>
+            <details>
+              <summary>My wallet is on the wrong network</summary>
+              <div class="a"><p>Connect will offer to switch, and to add the chain if your wallet has never
+                 seen it. If the prompt does not appear, add it by hand from the values in
+                 <a href="#net-setup">Getting on the network</a> above, then reconnect.</p></div>
+            </details>
+            <details>
+              <summary>The transaction was rejected or reverted</summary>
+              <div class="a"><p>A rejection is you declining in the wallet — nothing was sent and nothing was
+                 spent. A revert means the contract refused, and the page will name which of the five errors
+                 it was. The most common is simply not having enough for price plus gas.</p></div>
+            </details>
+            <details>
+              <summary>I hit the per-wallet limit</summary>
+              <div class="a"><p>The cap is counted per address across every mint that address has ever made,
+                 not per transaction. It cannot be reset by minting from a second wallet and moving them
+                 together afterwards — but that also means the cap only limits minting, never holding.</p></div>
+            </details>
+            <details>
+              <summary>I minted but I cannot see it</summary>
+              <div class="a"><p>Connect on this page and it appears under <a href="#yours">Your anglers</a>,
+                 read straight from the contract. Wallets and explorers that index NFTs may take longer, and
+                 some do not index this chain at all — that has no bearing on whether the token is yours.</p></div>
+            </details>
+          </div>
+        </div>
+
       </div>
     </div>
   </section>

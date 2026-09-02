@@ -90,6 +90,24 @@
     var fcn = $('footChain'); if (fcn) fcn.textContent = chain.name + ' · chain id ' + chainId;
     document.querySelectorAll('[data-chain-name]').forEach(function (el) { el.textContent = chain.name; });
     document.querySelectorAll('[data-currency]').forEach(function (el) { el.textContent = SYM; });
+
+    /* The documentation section prints the same values as facts rather than as
+       prose, so that nothing in it can go stale against the deployed contract. */
+    var dc = $('docContract');
+    if (dc) dc.textContent = state.contract || ('not deployed on ' + chain.name + ' yet');
+    var dn = $('docNetwork'); if (dn) dn.textContent = chain.name + ' · chain id ' + chainId;
+    var dx = $('docExplorer');
+    if (dx) {
+      var ex = state.contract ? explorerAddr(state.contract) : '';
+      if (ex) { dx.href = ex; dx.target = '_blank'; dx.textContent = 'view the contract \u2197'; }
+      else { dx.removeAttribute('href'); dx.textContent = 'no explorer for this network'; }
+    }
+    var dcn = $('docChainName'); if (dcn) dcn.textContent = chain.name;
+    var dci = $('docChainId'); if (dci) dci.textContent = String(chainId) + '  (0x' + Number(chainId).toString(16) + ')';
+    var dcu = $('docCurrency');
+    if (dcu) dcu.textContent = SYM + (chain.currency && chain.currency.name ? ' \u00b7 ' + chain.currency.name : '') + ' \u00b7 18 decimals';
+    var dr = $('docRpc');
+    if (dr) dr.textContent = (Array.isArray(chain.rpc) ? chain.rpc[0] : chain.rpc) || '\u2014';
   }
 
   // ---- padanan USD (hiasan; halaman tetap jalan penuh kalau ini gagal) ----
@@ -126,6 +144,15 @@
     var tu = $('totalUsd'); if (tu) tu.textContent = state.price == null ? '' : usdText(state.price * BigInt(state.qty));
     var mx = $('qtyMax'); if (mx) mx.textContent = state.maxPerWallet == null ? '' : 'max ' + Number(state.maxPerWallet) + ' per wallet';
     var q = $('qtyVal'); if (q) q.textContent = String(state.qty);
+
+    /* docs mirror */
+    var dp = $('docPrice');
+    if (dp) dp.textContent = state.price == null ? '\u2014'
+      : E.formatEther(state.price, 5) + ' ' + SYM + (usdText(state.price) ? '  ' + usdText(state.price) : '');
+    var dcap = $('docCap');
+    if (dcap) dcap.textContent = state.maxPerWallet == null ? '\u2014' : Number(state.maxPerWallet) + ' per address, all mints counted';
+    var dm = $('docMinted');
+    if (dm) dm.textContent = minted == null ? '\u2014' : minted.toLocaleString() + ' / ' + max.toLocaleString();
     var soldOut = minted != null && minted >= max;
     var pill = $('salePill');
     if (pill) {
