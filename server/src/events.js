@@ -12,9 +12,15 @@
        agree on the target without exchanging a byte. First claim per
        world+epoch takes the bounty.
 
-   All state is in-memory: a restart forfeits the running derby and re-opens
-   the current wanted claim, which is acceptable for 10-minute events. Every
-   entry point is defensive — malformed arguments are a safe no-op.
+   The derby is mirrored to a store when one is attached (see setDerbyStore):
+   memory stays the fast path and the only thing scoring reads, while the store
+   makes a restart mid-race survivable and keeps a permanent record of every
+   champion. With no store attached the module behaves exactly as it always
+   did — pure, in-memory, no I/O — which is how the tests run it.
+
+   The wanted claim is still memory-only: a restart re-opens the current
+   bounty, which is acceptable for a 3-minute epoch. Every entry point is
+   defensive — malformed arguments are a safe no-op.
    ============================================================================ */
 
 import { hash, WORLDS, TABLE } from './game/rules.js';
@@ -37,6 +43,57 @@ const worldOf = (k) => (typeof k === 'string' && has(WORLDS, k) ? WORLDS[k] : nu
 
 /* derbyId -> Map(world -> Map(String(userId) -> {userId, username, kg})) */
 const derbies = new Map();
+
+/* Optional durability. Null means "behave like a pure module" — no store call
+   is ever made, and every function below keeps its old signature and result.
+   A store that throws must never cost a player their catch, so every call
+   through it is wrapped: the tally in memory is what scoring trusts. */
+let store = null;
+
+const tell = (method, ...args) => {
+  if (!store || typeof store[method] !== 'function') return undefined;
+  try { return store[method](...args); } catch (err) {
+    if (typeof store.onError === 'function') { try { store.onError(method, err); } catch { /* last resort */ } }
+    return undefined;
+  }
+};
+
+/**
+ * Attach (or with null, detach) the persistence adapter. Called once at boot,
+ * before the first catch is reported. Replays whatever the store still holds
+ * for derbies that have not settled, so a restart in the middle of a race
+ * resumes it with every kilogram intact rather than from zero.
+ *
+ * The adapter is duck-typed on purpose — the tests hand it a plain object.
+ */
+export function setDerbyStore(next) {
+  store = next && typeof next === 'object' ? next : null;
+  if (!store) return 0;
+
+  const cur = derbyId(Date.now());
+  const rows = tell('scoresFrom', cur) || [];
+  let restored = 0;
+  for (const row of rows) {
+    if (!row) continue;
+    const id = Math.floor(+row.derby_id);
+    const kg = +row.kg;
+    if (!Number.isFinite(id) || id < cur || !Number.isFinite(kg) || kg <= 0) continue;
+    const w = String(row.world ?? '').slice(0, 32);
+    if (!w || row.user_id == null) continue;
+
+    let worlds = derbies.get(id);
+    if (!worlds) derbies.set(id, (worlds = new Map()));
+    let users = worlds.get(w);
+    if (!users) worlds.set(w, (users = new Map()));
+    users.set(String(row.user_id), {
+      userId: row.user_id,
+      username: typeof row.username === 'string' ? row.username : '',
+      kg
+    });
+    restored++;
+  }
+  return restored;
+}
 
 /**
  * Where the derby clock stands. When a derby is running the answer carries
@@ -77,6 +134,7 @@ export function recordCatch(world, userId, username, kg) {
   if (!rec) users.set(key, (rec = { userId, username: '', kg: 0 }));
   rec.kg += add;
   rec.username = typeof username === 'string' ? username.slice(0, 40) : String(username ?? '');
+  tell('bump', id, w, userId, rec.username, add);
 }
 
 /* Tie-break: the smaller userId wins. Ids are numeric in the db, but compare
@@ -116,6 +174,17 @@ export function sweepDerbies(payout) {
         }
       }
       if (!best || !(best.kg > 0)) continue;
+
+      /* Claim the settlement BEFORE paying it. crown() is INSERT OR IGNORE, so
+         it answers false when this derby+world was already crowned — by an
+         earlier sweep, or by the process that died before this one booted.
+         Ordered this way a crash between the two loses a payout; the other
+         order pays it twice, and the module has always preferred the former. */
+      if (store && tell('crown', {
+        derbyId: id, world, userId: best.userId,
+        username: best.username, kg: +best.kg.toFixed(1), pearls: DERBY_PEARLS
+      }) === false) continue;
+
       try {
         fn({
           userId: best.userId,
@@ -127,6 +196,7 @@ export function sweepDerbies(payout) {
       } catch { /* settled once, win or lose — see the docblock */ }
     }
     derbies.delete(id);
+    tell('clearScores', id);
   }
 }
 

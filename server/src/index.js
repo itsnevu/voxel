@@ -149,6 +149,25 @@ if (IS_PROD) {
 /* --------------------------------------------------------------- boot ----- */
 initSchema();
 
+// Hand events.js its durability. Must come after initSchema (the tables have
+// to exist) and before the first catch is scored. The return value is how many
+// live tallies were replayed — non-zero means this process restarted into a
+// derby that was already running, and nobody lost their kilograms.
+try {
+  const resumed = EV.setDerbyStore({
+    scoresFrom: (id) => DB.derbies.scoresFrom(id),
+    bump: (id, world, userId, username, kg) => DB.derbies.bump(id, world, userId, username, kg),
+    crown: (row) => DB.derbies.crown(row),
+    clearScores: (id) => DB.derbies.clearScores(id),
+    onError: (method, err) => log.error('derby store failed', { method, err })
+  });
+  if (resumed) log.info('derby resumed after restart', { entries: resumed });
+} catch (e) {
+  // A derby that cannot be persisted is still a derby: events.js keeps every
+  // score in memory whether or not this succeeded.
+  log.error('derby persistence unavailable', { err: e });
+}
+
 // Read once. The schema version cannot change while the process runs, and
 // /api/health has to stay cheap enough for an uptime probe every few seconds.
 let SCHEMA_VERSION = 0;
@@ -1492,6 +1511,26 @@ app.post('/api/crew/leave', requireAuth, requireNotBanned, (req, res) => {
 // sign-in, and the reply carries nothing but the wall clock.
 app.get('/api/derby', (req, res) => {
   res.json({ derby: EV.derbyInfo(), serverTime: nowMs() });
+});
+
+// The hall of fame. Also unauthenticated — past champions are public the same
+// way the leaderboard is, and the reply names only what the drama toast
+// already broadcast to every isle when the derby closed.
+app.get('/api/derby/history', (req, res) => {
+  const world = typeof req.query.world === 'string' && req.query.world
+    ? req.query.world.slice(0, 32) : null;
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+  let rows = [];
+  try { rows = DB.derbies.history({ world, limit }); }
+  catch (e) { log.error('derby history read failed', { err: e }); }
+  res.json({
+    world,
+    champions: rows.map((r) => ({
+      derbyId: r.derby_id, world: r.world, username: r.username,
+      kg: r.kg, pearls: r.pearls, at: r.settled_at
+    })),
+    serverTime: nowMs()
+  });
 });
 
 // Settle closed derbies every 30s: credit the champion's pearls and tell every

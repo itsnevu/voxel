@@ -377,6 +377,44 @@ const MIGRATIONS = [
                          AND username NOT LIKE 'guest\\_%' ESCAPE '\\'`);
     },
   },
+  {
+    v: 4,
+    name: 'derby-history',
+    up(database) {
+      // The derby used to live only in memory, so a deploy in the first ten
+      // minutes of an hour silently voided the race everybody was fishing.
+      // `derby_scores` is the running tally — rebuilt into memory on boot and
+      // cleared once its derby settles. `derby_results` is the permanent
+      // record: one champion per world per hour, and the only table the
+      // history endpoint reads.
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS derby_scores (
+          derby_id INTEGER NOT NULL,
+          world    TEXT    NOT NULL,
+          user_id  INTEGER NOT NULL,
+          username TEXT    NOT NULL DEFAULT '',
+          kg       REAL    NOT NULL DEFAULT 0,
+          PRIMARY KEY (derby_id, world, user_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS derby_results (
+          derby_id  INTEGER NOT NULL,
+          world     TEXT    NOT NULL,
+          user_id   INTEGER NOT NULL,
+          username  TEXT    NOT NULL DEFAULT '',
+          kg        REAL    NOT NULL DEFAULT 0,
+          pearls    INTEGER NOT NULL DEFAULT 0,
+          settled_at INTEGER NOT NULL,
+          PRIMARY KEY (derby_id, world)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_derby_results_at
+          ON derby_results (settled_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_derby_results_user
+          ON derby_results (user_id, settled_at DESC);
+      `);
+    },
+  },
 ];
 
 /**
@@ -964,5 +1002,64 @@ export const deedsRepo = {
     q('UPDATE deeds SET claim_addr = ?, claim_sig = ? WHERE user_id = ? AND deed_id = ?')
       .run(addr == null ? null : String(addr), sig == null ? null : String(sig),
            userId, String(deedId));
+  },
+};
+
+/* ============================================================================
+   DERBY — the hourly fishing race.
+   ----------------------------------------------------------------------------
+   Two tables, two lifetimes. `derby_scores` is scratch: it exists so a restart
+   mid-race does not void the race, and it is dropped the moment its derby
+   settles. `derby_results` is the record, and nothing ever deletes from it.
+   ========================================================================== */
+export const derbies = {
+  /** Add to a running tally. The username is refreshed on every catch so a
+   *  rename mid-derby lands on the scoreboard rather than the old name. */
+  bump(derbyId, world, userId, username, kg) {
+    q(`INSERT INTO derby_scores (derby_id, world, user_id, username, kg)
+         VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(derby_id, world, user_id) DO UPDATE SET
+         kg       = kg + excluded.kg,
+         username = excluded.username`)
+      .run(derbyId | 0, String(world), userId, String(username ?? ''), +kg || 0);
+  },
+
+  /** Every live tally at or after `sinceId` — what boot replays into memory. */
+  scoresFrom(sinceId) {
+    return q(`SELECT derby_id, world, user_id, username, kg
+                FROM derby_scores WHERE derby_id >= ?`).all(sinceId | 0);
+  },
+
+  /** Crown a champion. IGNORE, not REPLACE: a derby is settled exactly once,
+   *  and a double sweep must never overwrite a paid result. */
+  crown({ derbyId, world, userId, username, kg, pearls }) {
+    const info = q(`INSERT OR IGNORE INTO derby_results
+                      (derby_id, world, user_id, username, kg, pearls, settled_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(derbyId | 0, String(world), userId, String(username ?? ''),
+           +kg || 0, pearls | 0, Date.now());
+    return info.changes > 0;
+  },
+
+  /** Drop the scratch tallies for derbies that have settled. */
+  clearScores(throughId) {
+    q('DELETE FROM derby_scores WHERE derby_id <= ?').run(throughId | 0);
+  },
+
+  /** Recent champions, newest first. `world` narrows to one isle. */
+  history({ world = null, limit = 20 } = {}) {
+    const n = Math.min(Math.max(limit | 0, 1), 100);
+    return world
+      ? q(`SELECT * FROM derby_results WHERE world = ?
+             ORDER BY settled_at DESC LIMIT ?`).all(String(world), n)
+      : q(`SELECT * FROM derby_results
+             ORDER BY settled_at DESC LIMIT ?`).all(n);
+  },
+
+  /** How many derbies one angler has won, and their heaviest winning haul. */
+  recordFor(userId) {
+    return q(`SELECT COUNT(*) AS wins, COALESCE(MAX(kg), 0) AS bestKg
+                FROM derby_results WHERE user_id = ?`).get(userId)
+      || { wins: 0, bestKg: 0 };
   },
 };
