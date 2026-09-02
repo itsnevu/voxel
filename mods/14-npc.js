@@ -594,8 +594,19 @@ RF.mod('14-npc', function (RF) {
     if (!p) return;                          // an isle without this POI simply has no such person on it
     const built = c.build(c.pal), g = built.g;
     g.position.set(p.x, p.y, p.z); g.rotation.y = face; scene.add(g);
+    /* the nameplate, in the peers' own idiom (game.js addPeer) so a named
+       stranger reads the same everywhere — gold, though, because these five
+       are the isle's and not somebody's save. Hidden until the game runs and
+       faded with the actor, so Meg's name goes home when Meg does. */
+    let tag = null, sub = null;
+    try {
+      tag = F.makeLabel(c.name, '#ffcf5c', false); tag.scale.set(2.0, 0.5, 1);
+      tag.visible = false; scene.add(tag);
+      sub = F.makeLabel(c.role, '#7fdcff', false); sub.scale.set(1.55, 0.39, 1);
+      sub.visible = false; scene.add(sub);
+    } catch (e) { RF.err('npc:tag:' + c.id, e, 'warn'); }
     const mats = []; g.traverse(o => { if (o.material && mats.indexOf(o.material) < 0) mats.push(o.material); });
-    ACT.push({ c, g, r: built.r, extra: built, mats: mats, home: { x: p.x, y: p.y, z: p.z, face: face },
+    ACT.push({ c, g, r: built.r, extra: built, mats: mats, tag, sub, home: { x: p.x, y: p.y, z: p.z, face: face },
       ph: Math.random() * TAU, alpha: 1, want: 1, vis: true, onScr: true, near: 9e9,
       fidT: 6 + Math.random() * 10, fidP: -1, barkT: 14 + Math.random() * 30, reactT: 0,
       bub: null, walkP: 0, sat: 0, lastBark: -1, lastR: -1 }); }
@@ -938,6 +949,18 @@ RF.mod('14-npc', function (RF) {
         if (a.alpha !== a.want) { const r = (reduced ? 4 : 0.55) * step;
           setAlpha(a, a.want > a.alpha ? Math.min(a.want, a.alpha + r) : Math.max(a.want, a.alpha - r)); }
         a.vis = a.alpha > 0.35;
+        /* the plate lives and dies with the actor: same fade, same schedule,
+           gone on the title screen and in photo mode like core's own LABELS */
+        if (a.tag) {
+          const tOn = a.g.visible && RF.running && !RF.photoMode && a.alpha > 0.05;
+          a.tag.visible = tOn; if (a.sub) a.sub.visible = tOn;
+          if (tOn) {
+            const gx = a.g.position.x, gz = a.g.position.z, gy = a.home.y;
+            a.tag.position.set(gx, gy + 2.45, gz);
+            a.tag.material.opacity = a.alpha;
+            if (a.sub) { a.sub.position.set(gx, gy + 2.82, gz); a.sub.material.opacity = a.alpha * 0.9; }
+          }
+        }
         if (!a.g.visible) continue;
         a.onScr = a.near < 46 && onScreen(a);
         if (!a.onScr || paused) continue;

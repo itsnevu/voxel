@@ -4892,16 +4892,7 @@ document.getElementById('startBtn').onclick=start;
    doors, so this one has to exist somewhere or a player with no server (or no
    interest in one) has nothing to press. */
 { const off=document.getElementById('playOffline'); if(off)off.onclick=start; }
-/* Take the mint link away when the sale is closed. Asked of the server rather
-   than assumed, so opening and closing the door is an env change and a restart
-   — never a release. Failure leaves the link alone: a mint page that answers
-   503 is a far better outcome than a title screen that lost a button because a
-   fetch blipped. */
-(async()=>{ const a=document.getElementById('mintLink'); if(!a)return;
-  try{ if(!(window.RFNet&&RFNet.base))return;
-    const c=await RFNet.nftConfig();
-    if(c&&c.mintOpen===false)a.style.display='none';
-  }catch(e){} })();
+
 
 /* ========================================================================
    16. MULTIPLAYER — other anglers on the same isle
