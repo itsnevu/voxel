@@ -1585,6 +1585,104 @@ RF.mod('01-angler', function (RF) {
 
   /* read-only, like the rest of RF.api.angler: the aboard-state another mod
      or the presence payload can carry to other players */
+
+  /* ==========================================================================
+     WHAT THE RIG ACTUALLY DOES — printed at the Pearl Kiosk, before the sale.
+
+     The auto-rig is deliberately weak: it exists so an idle shore still pays a
+     little, not so anybody can farm one. Every number that makes it weak lived
+     only in the README, so the shape of the trade was this — plant it, walk
+     away, come back to a bucket of sardines, and conclude the game is broken.
+
+     Nothing here changes a single value. It reads AUTO and RIGS off the engine
+     and prints them, which means it cannot drift from the rules it describes.
+
+     It is a SIBLING of #kioskList, never a child: renderKiosk() rewrites that
+     list's innerHTML on every pearl that moves, and a child would be wiped.
+     ========================================================================== */
+  RF.css(`
+#rf-angler-rig{margin:.65em 0 .2em;padding:.7em .8em;border-radius:8px;
+  border:1px solid rgba(255,255,255,.09);background:rgba(255,255,255,.035);}
+#rf-angler-rig h4{margin:0 0 .5em;font:700 11px/1 "Chakra Petch",sans-serif;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--teal);}
+#rf-angler-rig table{width:100%;border-collapse:collapse;font-size:10.5px;}
+#rf-angler-rig th{text-align:right;font-weight:600;color:var(--faint);padding:.18em .3em;}
+#rf-angler-rig th:first-child{text-align:left;}
+#rf-angler-rig td{text-align:right;padding:.18em .3em;color:var(--muted);font-variant-numeric:tabular-nums;}
+#rf-angler-rig td:first-child{text-align:left;color:var(--faint);}
+#rf-angler-rig td.now{color:var(--gold);font-weight:700;}
+#rf-angler-rig .rod{color:#cfe;font-weight:700;}
+#rf-angler-rig .never{margin:.55em 0 0;font-size:10px;line-height:1.5;color:var(--faint);}
+`);
+
+  /* One row per thing the rig scales, read live off the engine's own tables. */
+  function rigRows() {
+    const A = RF.AUTO || {}, W = A.W || {}, rigs = RF.RIGS || [];
+    const tiers = [];
+    for (let i = 1; i < rigs.length; i++) if (rigs[i]) tiers.push({ lvl: i, r: rigs[i] });
+    if (!tiers.length) return null;
+
+    const pct = v => (v * 100 < 10 ? (v * 100).toFixed(1) : Math.round(v * 100)) + '%';
+    /* q lifts everything above common — the same rule autoWeight() applies. */
+    const scaled = (rar, q) => {
+      const w = W[rar] === undefined ? 1 : W[rar];
+      return rar === 'common' ? w : w * (q > 0 ? q : 1);
+    };
+
+    const rows = [];
+    for (const rar of ['uncommon', 'rare', 'epic', 'legendary']) {
+      rows.push({
+        label: rar + ' odds',
+        rod: '100%',
+        cells: tiers.map(t => pct(Math.min(1, scaled(rar, t.r.q))))
+      });
+    }
+    rows.push({ label: 'sale value', rod: '100%', cells: tiers.map(() => pct(A.val === undefined ? 1 : A.val)) });
+    rows.push({ label: 'shiny roll', rod: '100%', cells: tiers.map(() => pct(A.shiny === undefined ? 1 : A.shiny)) });
+    rows.push({ label: 'pearls', rod: '100%', cells: tiers.map(() => pct(A.pearls === undefined ? 1 : A.pearls)) });
+    rows.push({ label: 'a line every', rod: 'you decide', cells: tiers.map(t => (t.r.gapMs / 1000).toFixed(1) + 's') });
+    return { tiers, rows };
+  }
+
+  function rigPanelHTML() {
+    const data = rigRows();
+    if (!data) return '';
+    const lv = (RF.state && RF.state.rigLvl | 0) || 1;
+    const head = data.tiers.map(t => `<th${t.lvl === lv ? ' style="color:var(--gold)"' : ''}>${esc(t.r.name.replace(/ Rig$/, ''))}</th>`).join('');
+    const body = data.rows.map(r =>
+      `<tr><td>${esc(r.label)}</td><td class="rod">${esc(r.rod)}</td>` +
+      r.cells.map((c, i) => `<td${data.tiers[i].lvl === lv ? ' class="now"' : ''}>${esc(c)}</td>`).join('') +
+      `</tr>`).join('');
+    return `<div id="rf-angler-rig">
+      <h4>Rod in hand vs. the rig</h4>
+      <table><thead><tr><th>&nbsp;</th><th class="rod">held rod</th>${head}</tr></thead>
+      <tbody>${body}</tbody></table>
+      <p class="never">The rig also burns no bait, bottles no treasure maps, and scores nothing in the derby. It is an idle trickle, not a second angler.</p>
+    </div>`;
+  }
+
+  /* Draw it whenever the kiosk could be on screen. renderKiosk() runs on every
+     pearl change, so this re-checks rather than trusting one pass — but it only
+     rewrites when the markup would actually differ, so it never fights the DOM. */
+  let rigLast = '';
+  function paintRig() {
+    try {
+      const list = document.getElementById('kioskList');
+      if (!list || !list.parentNode) return;
+      const html = rigPanelHTML();
+      if (!html) return;
+      let host = document.getElementById('rf-angler-rig');
+      if (html === rigLast && host) return;
+      rigLast = html;
+      if (host) { host.outerHTML = html; return; }
+      list.insertAdjacentHTML('afterend', html);
+    } catch (e) { RF.err('angler:rig-panel', e); }
+  }
+
+  RF.on('panel', (name, open) => { if (open) setTimeout(paintRig, 0); });
+  RF.on('pearls', () => setTimeout(paintRig, 0));
+  RF.on('ready', () => setTimeout(paintRig, 0));
+
   if (RF.api && RF.api.angler) RF.api.angler.helm =
     () => ({ aboard: hAboard, lvl: hLvl(), yaw: +hHead.toFixed(2), range: hLeash() });
 });
