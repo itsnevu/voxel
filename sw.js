@@ -17,7 +17,7 @@
    ========================================================================== */
 'use strict';
 
-const CACHE = 'reelfortune-v1';
+const CACHE = 'reelfortune-v2';
 
 /* The whole shell. Listed rather than discovered because a service worker has no
    directory listing, and a mod that 404s must not take the install down with it —
